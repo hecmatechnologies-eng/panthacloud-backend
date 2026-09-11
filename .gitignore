@@ -17,6 +17,8 @@ downloads/
 eggs/
 .eggs/
 lib/
+# The Python-template `lib/` rule above must not swallow frontend source.
+!frontend/src/lib/
 lib64/
 parts/
 sdist/
@@ -52,6 +54,10 @@ coverage.xml
 *.db-journal
 *.db-wal
 *.db-shm
+
+# Runtime workspaces and uploads (thousands of per-run UUID directories)
+/data/
+/backend/data/
 
 # Node / Next.js
 node_modules/

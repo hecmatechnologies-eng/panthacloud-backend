@@ -1,0 +1,302 @@
+import logging
+import uuid
+from datetime import UTC, datetime
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.secrets import SecretStoreError, secret_store
+from app.models.assistant import Assistant
+from app.models.audit_event import AuditEvent
+from app.models.knowledge import KnowledgeBase
+from app.models.project import Project
+from app.models.website_integration import (
+    IntegrationRun,
+    IntegrationRunStatus,
+    WebsiteIntegration,
+    WebsiteIntegrationStatus,
+)
+from app.services.integration.artifacts import generate_artifacts
+from app.services.integration.github import get_git_provider
+from app.services.integration.planner import IntegrationPlanner
+from app.services.integration.sandbox import SandboxManager
+from app.services.integration.validation import StaticValidator
+
+logger = logging.getLogger("fussion.integration.pipeline")
+
+
+async def _record_audit(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    user_id: uuid.UUID | None,
+    event_type: str,
+    resource_id: uuid.UUID,
+    payload: dict[str, Any] | None = None,
+) -> None:
+    # Ensure secrets never leak into audit payload
+    clean_payload = dict(payload or {})
+    for key in ("token", "github_token", "encrypted_secrets", "secret", "password"):
+        clean_payload.pop(key, None)
+
+    event = AuditEvent(
+        organization_id=org_id,
+        project_id=project_id,
+        user_id=user_id,
+        event_type=event_type,
+        resource_type="website_integration",
+        resource_id=resource_id,
+        payload=clean_payload,
+    )
+    db.add(event)
+    await db.commit()
+
+
+class IntegrationPipeline:
+    def __init__(self, sandbox_manager: SandboxManager | None = None) -> None:
+        self.sandbox = sandbox_manager or SandboxManager()
+
+    async def execute(
+        self,
+        db: AsyncSession,
+        org_id: uuid.UUID,
+        project: Project,
+        integration: WebsiteIntegration,
+        user_id: uuid.UUID | None = None,
+    ) -> IntegrationRun:
+        # Decrypt credentials if present
+        raw_token: str | None = None
+        if integration.encrypted_secrets:
+            try:
+                decrypted = secret_store.decrypt(integration.encrypted_secrets)
+                raw_token = decrypted.get("github_token")
+            except SecretStoreError as exc:
+                logger.warning(f"Failed to decrypt stored credentials for integration {integration.id}: {exc}")
+
+        # Fetch assistant configuration
+        stmt_asst = select(Assistant).where(Assistant.project_id == project.id)
+        asst_result = await db.execute(stmt_asst)
+        assistant = asst_result.scalar_one_or_none()
+        asst_data: dict[str, Any] = {}
+        if assistant:
+            asst_data = {
+                "id": str(assistant.id),
+                "name": assistant.name,
+                "welcome_message": assistant.welcome_message,
+                "brand_color": assistant.brand_color,
+                "text_color": assistant.text_color,
+                "position": assistant.position.value if hasattr(assistant.position, "value") else str(assistant.position),
+                "avatar_url": assistant.avatar_url,
+                "starter_prompt": assistant.starter_prompt,
+                "is_enabled": assistant.is_enabled,
+            }
+
+        # Check knowledge base status
+        stmt_kb = select(KnowledgeBase).where(KnowledgeBase.project_id == project.id)
+        kb_result = await db.execute(stmt_kb)
+        kb = kb_result.scalar_one_or_none()
+        has_kb = bool(kb and len(kb.documents) > 0) if kb else False
+
+        # Generate deterministic plan
+        plan = IntegrationPlanner.generate_plan(
+            framework=integration.framework,
+            widget_target_path=integration.widget_target_path,
+            assistant_data=asst_data,
+            has_knowledge_base=has_kb,
+        )
+
+        run_id = uuid.uuid4()
+        short_run = run_id.hex[:8]
+        branch_name = f"fussion/integration/{short_run}"
+
+        # 1. Allocate sandbox
+        sandbox_path, sandbox_ref = self.sandbox.allocate(org_id, project.id, run_id)
+
+        # 2. Record initial IntegrationRun
+        run = IntegrationRun(
+            id=run_id,
+            integration_id=integration.id,
+            status=IntegrationRunStatus.RUNNING,
+            branch_name=branch_name,
+            sandbox_ref=sandbox_ref,
+            plan_summary=plan.model_dump(),
+            started_at=datetime.now(UTC),
+        )
+        db.add(run)
+        integration.status = WebsiteIntegrationStatus.GENERATING
+        await db.commit()
+        await db.refresh(run)
+
+        await _record_audit(
+            db,
+            org_id,
+            project.id,
+            user_id,
+            "integration.run.started",
+            run.id,
+            {"branch": branch_name, "framework": integration.framework.value},
+        )
+
+        git_provider = get_git_provider()
+
+        try:
+            # 3. Verify repository existence
+            await git_provider.get_repository(
+                integration.repository_owner,
+                integration.repository_name,
+                token=raw_token,
+            )
+
+            # 4. Generate deterministic artifacts
+            generated_files = generate_artifacts(
+                project_id=project.id,
+                assistant_data=asst_data,
+                framework=integration.framework,
+                widget_target_path=integration.widget_target_path,
+            )
+
+            # 5. Write files into sandbox
+            for rel_path, content in generated_files.items():
+                self.sandbox.write_file(sandbox_path, rel_path, content)
+
+            # 6. Static validation
+            integration.status = WebsiteIntegrationStatus.VALIDATING
+            await db.commit()
+
+            issues = StaticValidator.validate(integration.framework, plan, generated_files)
+            if issues:
+                raise RuntimeError(f"Static validation failed: {'; '.join(issues)}")
+
+            run.status = IntegrationRunStatus.VALIDATING
+            await db.commit()
+
+            await _record_audit(
+                db,
+                org_id,
+                project.id,
+                user_id,
+                "integration.run.validated",
+                run.id,
+                {"files_count": len(generated_files)},
+            )
+
+            # 7. Create integration branch
+            await git_provider.create_branch(
+                owner=integration.repository_owner,
+                repo=integration.repository_name,
+                base_branch=integration.default_branch,
+                new_branch=branch_name,
+                token=raw_token,
+            )
+
+            # 8. Commit changes
+            commit_message = f"feat(fussion): integrate assistant widget [run: {short_run}]"
+            commit_sha = await git_provider.commit_files(
+                owner=integration.repository_owner,
+                repo=integration.repository_name,
+                branch=branch_name,
+                commit_message=commit_message,
+                files=generated_files,
+                token=raw_token,
+            )
+
+            # 9. Create Pull Request
+            pr_title = "Integrate Fussion Assistant"
+            pr_body = f"""## Fussion Assistant Integration
+
+This automated Pull Request adds the Fussion storefront assistant integration for **{project.name}**.
+
+### Changes Summary
+- Framework: `{integration.framework.value}`
+- Files created: `{', '.join(plan.files_to_create)}`
+- Files modified: `{', '.join(plan.files_to_modify)}`
+
+### Assistant Blueprint
+- Name: **{asst_data.get('name', 'Fussion Assistant')}**
+- Position: `{asst_data.get('position', 'BOTTOM_RIGHT')}`
+- Knowledge Base: `{'Connected' if has_kb else 'Not connected (Empty)'}`
+
+### Security & Compliance
+- Sandbox validation: **PASSED** (all paths verified inside containment)
+- Direct production modification: **NONE** (created on dedicated branch `{branch_name}`)
+- External AI / LLM APIs: **NONE** (deterministic generation only)
+- Credentials committed: **NONE**
+
+---
+*Generated by Fussion Control Plane Phase 11. Human review and approval required before merge.*
+"""
+            pr_data = await git_provider.create_pull_request(
+                owner=integration.repository_owner,
+                repo=integration.repository_name,
+                title=pr_title,
+                body=pr_body,
+                head_branch=branch_name,
+                base_branch=integration.default_branch,
+                token=raw_token,
+            )
+
+            # 10. Update run & integration records to completion
+            now = datetime.now(UTC)
+            run.status = IntegrationRunStatus.PR_CREATED
+            run.commit_sha = commit_sha
+            run.pull_request_number = pr_data.get("number")
+            run.pull_request_url = pr_data.get("html_url")
+            run.generated_files_count = len(plan.files_to_create)
+            run.modified_files_count = len(plan.files_to_modify)
+            run.completed_at = now
+
+            integration.status = WebsiteIntegrationStatus.PR_CREATED
+            integration.integration_branch = branch_name
+            integration.last_error = None
+            integration.last_success_at = now
+            await db.commit()
+            await db.refresh(run)
+
+            await _record_audit(
+                db,
+                org_id,
+                project.id,
+                user_id,
+                "integration.pull_request.created",
+                run.id,
+                {
+                    "pr_number": run.pull_request_number,
+                    "pr_url": run.pull_request_url,
+                    "commit_sha": run.commit_sha,
+                },
+            )
+
+            return run
+
+        except Exception as exc:
+            now = datetime.now(UTC)
+            error_msg = str(exc)
+            logger.error(f"Integration pipeline run {run_id} failed: {error_msg}")
+
+            run.status = IntegrationRunStatus.FAILED
+            run.error_message = error_msg
+            run.completed_at = now
+
+            integration.status = WebsiteIntegrationStatus.FAILED
+            integration.last_error = error_msg
+            await db.commit()
+            await db.refresh(run)
+
+            await _record_audit(
+                db,
+                org_id,
+                project.id,
+                user_id,
+                "integration.run.failed",
+                run.id,
+                {"error": error_msg[:500]},
+            )
+            raise
+
+        finally:
+            # Clean up sandbox workspace files safely
+            self.sandbox.cleanup(sandbox_path)
+
+
+pipeline_service = IntegrationPipeline()

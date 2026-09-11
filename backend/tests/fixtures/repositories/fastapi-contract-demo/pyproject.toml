@@ -1,0 +1,9 @@
+[project]
+name = "fastapi-contract-demo"
+version = "0.1.0"
+dependencies = [
+    "fastapi>=0.100.0",
+    "uvicorn>=0.22.0",
+    "psycopg2-binary>=2.9.0",
+    "redis>=4.5.0",
+]

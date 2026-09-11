@@ -19,7 +19,7 @@ Fussion is an **AI Integration Engineer Platform**. Rather than providing a simp
 Fussion follows the approved system architecture designed in **Phases 1–27**:
 
 - [Reference Architecture](docs/architecture/REFERENCE-ARCHITECTURE.md) — Layered architecture across Control Plane, Orchestration, Agent Harness, Sandbox, and Data Plane.
-- [MVP Implementation Roadmap](docs/implementation/MVP-IMPLEMENTATION-ROADMAP.md) — The locked 9-phase MVP milestone sequence.
+- [MVP Implementation Roadmap](docs/implementation/MVP-IMPLEMENTATION-ROADMAP.md) — The locked 19-phase MVP milestone sequence.
 - [Antigravity Project Rules](docs/antigravity/ANTIGRAVITY-PROJECT-RULES.md) — Architectural boundaries, security rules, and engineering principles.
 
 ---

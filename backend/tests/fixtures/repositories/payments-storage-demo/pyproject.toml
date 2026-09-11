@@ -1,0 +1,10 @@
+[project]
+name = "payments-storage-demo"
+version = "0.1.0"
+dependencies = [
+    "fastapi>=0.115.0",
+    "stripe>=7.0.0",
+    "psycopg2-binary>=2.9.0",
+    "boto3>=1.28.0",
+    "redis>=5.0.0",
+]

@@ -1,26 +1,85 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Canvas & Grid (Light Mode Tokens) */
+  --canvas: #F4F7F5;
+  --canvas-grid: #D7E7DF;
+  --canvas-block: rgba(22, 163, 74, 0.05);
+  --canvas-block-border: rgba(22, 163, 74, 0.12);
+  --canvas-marker: rgba(22, 163, 74, 0.35);
+
+  /* Surface & Borders */
+  --surface: #FFFFFF;
+  --surface-elevated: #F8FAF9;
+  --border: #E5E7EB;
+  --border-subtle: rgba(229, 231, 235, 0.7);
+
+  /* Typography */
+  --text-primary: #0F172A;
+  --text-secondary: #64748B;
+  --text-muted: #94A3B8;
+
+  /* Brand & Status */
+  --color-purple: #7C3AED;
+  --color-purple-hover: #6D28D9;
+  --color-success: #16A34A;
+  --color-danger: #EF4444;
+
+  /* Legacy mappings */
+  --background: var(--canvas);
+  --foreground: var(--text-primary);
+}
+
+.dark {
+  /* Canvas & Grid (Dark Mode Tokens) */
+  --canvas: #06100D;
+  --canvas-grid: #0F2A20;
+  --canvas-block: rgba(34, 197, 94, 0.04);
+  --canvas-block-border: rgba(34, 197, 94, 0.1);
+  --canvas-marker: rgba(34, 197, 94, 0.3);
+
+  /* Surface & Borders */
+  --surface: #101816;
+  --surface-elevated: #151F1B;
+  --border: #1F3A31;
+  --border-subtle: rgba(31, 58, 49, 0.7);
+
+  /* Typography */
+  --text-primary: #F8FAF9;
+  --text-secondary: #94A3A0;
+  --text-muted: #62726E;
+
+  /* Brand & Status */
+  --color-purple: #7C3AED;
+  --color-purple-hover: #8B5CF6;
+  --color-success: #22C55E;
+  --color-danger: #F87171;
+
+  /* Legacy mappings */
+  --background: var(--canvas);
+  --foreground: var(--text-primary);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-canvas: var(--canvas);
+  --color-canvas-grid: var(--canvas-grid);
+  --color-surface: var(--surface);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-border: var(--border);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-brand-purple: var(--color-purple);
+  --color-status-success: var(--color-success);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: var(--canvas);
+  color: var(--text-primary);
+  font-family: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
+  transition: background-color 150ms ease, color 150ms ease;
 }

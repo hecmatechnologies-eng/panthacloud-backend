@@ -16,14 +16,16 @@ def create_error_response(
     details: Any | None = None,
 ) -> JSONResponse:
     content: dict[str, Any] = {
+        "detail": message,
         "error": {
             "code": code,
             "message": message,
-        }
+        },
     }
     if details is not None:
         content["error"]["details"] = details
     return JSONResponse(status_code=status_code, content=content)
+
 
 
 def register_error_handlers(app: FastAPI) -> None:
@@ -35,7 +37,7 @@ def register_error_handlers(app: FastAPI) -> None:
             status.HTTP_401_UNAUTHORIZED: "UNAUTHORIZED",
             status.HTTP_403_FORBIDDEN: "FORBIDDEN",
             status.HTTP_405_METHOD_NOT_ALLOWED: "METHOD_NOT_ALLOWED",
-            status.HTTP_422_UNPROCESSABLE_ENTITY: "UNPROCESSABLE_ENTITY",
+            status.HTTP_422_UNPROCESSABLE_CONTENT: "UNPROCESSABLE_CONTENT",
             status.HTTP_500_INTERNAL_SERVER_ERROR: "INTERNAL_SERVER_ERROR",
         }
         error_code = code_map.get(exc.status_code, "HTTP_ERROR")
@@ -48,7 +50,7 @@ def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
         return create_error_response(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code="VALIDATION_ERROR",
             message="Request validation failed",
             details=exc.errors(),
