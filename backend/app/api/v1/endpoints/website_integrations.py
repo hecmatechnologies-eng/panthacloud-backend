@@ -17,7 +17,6 @@ from app.core.database import get_db
 from app.core.permissions import Permission
 from app.core.secrets import SecretStoreError, secret_store
 from app.models.assistant import Assistant
-from app.models.audit_event import AuditEvent
 from app.models.knowledge import KnowledgeBase
 from app.models.membership import Membership, RoleEnum
 from app.models.organization import Organization
@@ -41,6 +40,7 @@ from app.schemas.website_integration import (
     WebsiteIntegrationRead,
     WebsiteIntegrationUpdate,
 )
+from app.services.audit import record_audit
 from app.services.integration.artifacts import generate_artifacts
 from app.services.integration.github import (
     GitHubAPIError,
@@ -80,37 +80,12 @@ def to_website_integration_read(integration: WebsiteIntegration) -> WebsiteInteg
         widget_target_path=integration.widget_target_path,
         status=integration.status,
         has_credentials=bool(integration.encrypted_secrets),
+        public_key=integration.public_key,
         last_error=integration.last_error,
         last_success_at=integration.last_success_at,
         created_at=integration.created_at,
         updated_at=integration.updated_at,
     )
-
-
-async def _record_audit(
-    db: AsyncSession,
-    org_id: uuid.UUID,
-    project_id: uuid.UUID,
-    user_id: uuid.UUID | None,
-    event_type: str,
-    resource_id: uuid.UUID,
-    payload: dict[str, Any] | None = None,
-) -> None:
-    clean_payload = dict(payload or {})
-    for key in ("token", "github_token", "encrypted_secrets", "secret", "password"):
-        clean_payload.pop(key, None)
-
-    event = AuditEvent(
-        organization_id=org_id,
-        project_id=project_id,
-        user_id=user_id,
-        event_type=event_type,
-        resource_type="website_integration",
-        resource_id=resource_id,
-        payload=clean_payload,
-    )
-    db.add(event)
-    await db.commit()
 
 
 @router.get(
@@ -173,7 +148,7 @@ async def create_website_integration(
     await db.commit()
     await db.refresh(integration)
 
-    await _record_audit(
+    await record_audit(
         db,
         project.organization_id,
         project.id,
@@ -228,7 +203,7 @@ async def update_website_integration(
     await db.commit()
     await db.refresh(integration)
 
-    await _record_audit(
+    await record_audit(
         db,
         tenant[0].id,
         integration.project_id,
@@ -262,7 +237,7 @@ async def delete_website_integration(
             detail="You do not have permission to delete this integration.",
         )
 
-    await _record_audit(
+    await record_audit(
         db,
         tenant[0].id,
         integration.project_id,
@@ -512,7 +487,7 @@ async def cancel_integration_run(
         await db.commit()
         await db.refresh(run)
 
-        await _record_audit(
+        await record_audit(
             db,
             tenant[0].id,
             integration.project_id,

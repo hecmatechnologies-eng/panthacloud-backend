@@ -937,3 +937,131 @@ Checked against the approved plan and the original prompt:
 - Frontend (untouched): `pnpm test` 108/108 passed (9 files); `pnpm build` exit 0.
 - Evals: none exist yet.
 
+---
+
+## Step B (FEASIBILITY §3) · Slice B1 — public key + allowed origins
+
+**Naming collision, deliberately spelled out:** this is slice **B1** of *step B* in
+`docs/FEASIBILITY.md` §3, per `docs/implementation/STEP-B-SLICES.md`. It is **not** "Phase B.1"
+in the table above, which is the completed frontend-authentication work. Nothing is added to that
+table: it uses the phase numbering that `CLAUDE.md` §3.4 says must not be cited until the two
+roadmaps are reconciled. Resolving this collision belongs to the roadmap-reconciliation slice.
+
+**Rigour tier: 2 — Standard** (CLAUDE.md §9.0), declared before work started and unchanged. The
+slice changes control-plane behaviour with no customer-repo, credential or cross-tenant path, and
+nothing resolves tenancy from these fields until B2.
+
+**Status: REVIEWED — fussion-reviewer PASS WITH FINDINGS, no BLOCKING finding; committed on
+branch `feat/b1-public-key-origins`, not merged. Not COMPLETED** until merged. Branch point
+`fb7d5b4` (cut from `fix/layout-overwrite`, which is itself unmerged — `main` is still at
+Phase 01).
+
+### Objective
+FR-107: each website integration has a public client key and a set of registered allowed origins.
+Store and manage both. **No behaviour:** nothing reads the key or checks an origin until the
+tenant resolver in B2.
+
+### Completed Work
+- **Public key.** `website_integrations.public_key`, unique and indexed, generated server-side as
+  `fussion_pk_` + `secrets.token_urlsafe(24)` (192 bits, so an unknown key cannot be enumerated).
+  It is not a secret — it ships in the customer's page — so it is stored in plaintext for an
+  indexed lookup in B2, and exposed read-only on `WebsiteIntegrationRead`. No create or update
+  schema accepts it; tested.
+- **`AllowedOrigin`** (`app/models/allowed_origin.py`): one row per registered origin, unique per
+  `(integration_id, origin)`, ORM cascade from the integration (SQLite runs without
+  `PRAGMA foreign_keys`, so the ORM relationship is what actually deletes them). Capped at 20 per
+  integration. The same origin may be registered under two integrations: tenancy comes from the
+  key, and the origin only validates it.
+- **`app/core/origins.py` — `normalize_origin`.** One canonical form, `scheme://host[:port]`, so
+  a stored origin and a browser's `Origin` header meet as exact strings. B2's resolver must use
+  this same function. Rejects paths, queries, fragments, userinfo, wildcards, `null`, non-http(s)
+  schemes, missing hosts and bad ports; requires https except for loopback hosts.
+- **Endpoints** `GET/POST/DELETE .../website-integrations/origins`, scoped through the existing
+  dependency chain, so every cross-tenant and cross-project id returns 404, not 403.
+- **Migration 0012**: nullable add → per-row backfill → NOT NULL + unique index, then the
+  `allowed_origins` table. The backfill reads each `id` and binds it straight back with no type
+  coercion, so it does not depend on how a dialect renders a UUID.
+- **Tests** (`tests/test_allowed_origins.py`, 51): written red-first — 45 failed and 1 passed
+  before the code existed. The one that passed,
+  `test_origins_require_an_integration`, passed vacuously (no route yet → 404) and is meaningful
+  only now; it is kept because it pins the missing-integration case.
+
+### Architectural & Technology Decisions
+1. `normalize_origin` lives in `app/core/`, not `app/services/integration/`: that package's
+   `__init__` imports the pipeline, which imports the schemas, so a schema importing from it is a
+   circular import. `app/core/` is also the honest home for something the control plane and the
+   future `app/runtime/` resolver both use.
+2. `idna.encode(uts46=True, transitional=False)` rather than the stdlib `"idna"` codec — see
+   review finding 1 below. `idna` is now a declared dependency; it was previously present only
+   transitively through `httpx`, which is a **dev** dependency.
+3. Audit recording moved to `app/services/audit.py` as a public `record_audit`. Three other
+   modules still hold private `_record_audit` copies; consolidating all four is its own change.
+4. No key rotation, no wildcard subdomains, no per-origin enable/disable (YAGNI). See Deferred.
+
+### Review history
+One round (Tier 2 gate), fresh reviewer — **PASS WITH FINDINGS**, no BLOCKING finding. Tier 2
+confirmed; no finding showed Tier 1 reach. Findings 1–5 were defects in what this slice built, so
+per §9.0 they were fixed in-slice and re-verified:
+1. **IDNA mismatch (the significant one).** The stdlib codec is IDNA2003 and maps ß→ss, so
+   `https://faß.example` was stored as `https://fass.example` — an origin the real site never
+   sends, and one an unrelated `fass.example` would have matched once B2 compares headers. Now
+   UTS-46 non-transitional, matching browsers. Regression tests added for all three hosts.
+2. **Length checked before punycode expansion**, so a 228-character input could produce a
+   270-character value for a `String(255)` column. Invisible on SQLite (VARCHAR unenforced) and a
+   500 on Postgres (`DataError`, not `IntegrityError`). The check now runs on the canonical value;
+   a test case covers it.
+3. `String(255)` duplicated `MAX_ORIGIN_LENGTH` across a module boundary — the mechanism that hid
+   finding 2. The model now imports the constant.
+4. `allowed_origins.py` imported the private `_record_audit` from `website_integrations.py`;
+   renaming it would have broken API start-up. Fixed by decision 3 above.
+5. The "origin removed" audit event was written after the delete committed. It now records first,
+   matching `delete_website_integration`.
+
+Also fixed, from CONSIDER, because it concerns a credential in a response body: the 422 handler
+rendered each error's `input`, so an over-length `github_token` was echoed back. `input` is now
+stripped, with a test. (The handler needed touching regardless: it json-dumped `exc.errors()`
+raw, which crashes on any `field_validator` ValueError — B1 added the app's first one.)
+
+### Deviations
+Checked against the approved plan, item by item:
+- **Module moved.** The plan put `normalize_origin` in `app/services/integration/origins.py`; it
+  is in `app/core/origins.py` (decision 1). Found while running the tests, not by inspection.
+- **Two files the plan did not name** were changed: `app/core/errors.py` (the 422 handler, which
+  B1's first `field_validator` made reachable) and `pyproject.toml`/`uv.lock` (the `idna`
+  dependency). `app/services/audit.py` is new, and `website_integrations.py` changed by more than
+  the planned one line, both from review finding 4.
+- **Rotation endpoint**: planned as deferred, and still deferred — now also raised by the
+  reviewer. See Deferred.
+- Everything else matches: tier, branch, endpoints, status codes, the 20-origin cap, schema
+  names, migration shape, and frontend untouched.
+
+### Blockers / Deferred
+Logged, not fixed — none is a defect in what this slice built:
+- **No Postgres verification of migration 0012.** Verified only on a throwaway SQLite database.
+  `backend/.env` points at the real dev `fussion_db`, which this slice did not touch; a Postgres
+  pass needs a scratch database. The dialect differences that matter are VARCHAR(255) enforcement
+  (the source of finding 2, now fixed), native ENUM types, and `ALTER` vs. table-recreate.
+- **`batch_alter_table` on SQLite recreates `website_integrations` from reflection**, and whether
+  the three `sa.Enum` CHECK constraints survive depends on SQLAlchemy's SQLite CHECK reflection.
+  Dev/test only; Postgres does a direct `ALTER ... SET NOT NULL`.
+- **No `public_key` rotation path.** Deleting the integration is the only way to change the key,
+  and that cascades away every registered origin. Once B8 embeds the key in customer pages, "the
+  key leaked into a public repo" has no remedy. Cheapest to add before B2–B8 harden around it.
+- **The origin cap is read-then-write**, so concurrent POSTs can land 21 rows. The unique
+  constraint still prevents duplicates.
+- **`public_key` has no `server_default`**, unlike the other defaulted columns in 0011: an insert
+  bypassing the ORM would violate NOT NULL.
+- **`/website-integration/origins` (singular alias) 404s.** The integrations router is mounted
+  under both spellings; the origins router only under the plural.
+- Three modules still carry private `_record_audit` copies (decision 3).
+
+### Verification (2026-09-12, after the review fixes)
+- Ruff: `All checks passed!`
+- Backend, from the repository root: **223 passed** (172 pre-existing + 51 new).
+- Frontend (untouched): `pnpm test` 108/108; `pnpm build` exit 0.
+- Migration: `upgrade → downgrade → upgrade` on a throwaway SQLite database seeded with two
+  pre-existing `website_integrations` rows — both backfilled with distinct non-null keys, NOT
+  NULL and the unique index both enforced, rows intact after downgrade. Repeated after the review
+  fixes.
+- Evals: none exist yet.
+

@@ -1,3 +1,4 @@
+from app.models.allowed_origin import AllowedOrigin
 from app.models.assistant import Assistant, AssistantPosition
 from app.models.audit_event import AuditEvent
 from app.models.base import BaseModel
@@ -30,6 +31,7 @@ from app.models.website_integration import (
 __all__ = [
     "AdapterStatus",
     "AdapterType",
+    "AllowedOrigin",
     "ApiContract",
     "ApiOperation",
     "Assistant",

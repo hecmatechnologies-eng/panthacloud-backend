@@ -99,9 +99,11 @@ and that is gated by §3 "Blockers on wiring `GitHubProvider` in".
 
 - **No LLM anywhere.** No model SDK, no provider, no gateway, no API key handling.
 - **No agents, no harness, no orchestrator, no tool registry.**
-- **No runtime plane.** No public integration key, no allowed origins, no tenant
-  resolver, no visitor session, no `Conversation`/`Message`, no streaming chat,
-  no rate limiting. Every route today sits behind `/organizations/{org_id}/...` auth.
+- **No runtime plane.** A website integration now *has* a public key and registered
+  allowed origins (step B1), and both are managed through the authenticated control
+  plane — but **nothing reads or enforces either yet**. No tenant resolver, no visitor
+  session, no `Conversation`/`Message`, no streaming chat, no rate limiting. Every route
+  today still sits behind `/organizations/{org_id}/...` auth.
 - **No real sandbox.** `SandboxManager` is a path-checked directory. It provides no
   process, filesystem, or network isolation. Nothing executes customer code today.
 - **No pgvector, no Redis, no object storage, no job queue, no workers.**

@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
+    allowed_origins,
     assistant,
     auth,
     contracts,
@@ -40,6 +41,10 @@ api_v1_router.include_router(assistant.router)
 api_v1_router.include_router(
     website_integrations.router,
     prefix="/organizations/{org_id}/projects/{project_id}/website-integrations",
+)
+api_v1_router.include_router(
+    allowed_origins.router,
+    prefix="/organizations/{org_id}/projects/{project_id}/website-integrations/origins",
 )
 api_v1_router.include_router(
     website_integrations.router,

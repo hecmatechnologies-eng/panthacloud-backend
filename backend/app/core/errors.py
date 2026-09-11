@@ -2,6 +2,7 @@ import logging
 from typing import Any
 
 from fastapi import FastAPI, Request, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -53,7 +54,13 @@ def register_error_handlers(app: FastAPI) -> None:
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code="VALIDATION_ERROR",
             message="Request validation failed",
-            details=exc.errors(),
+            # A field_validator's ValueError sits in each error's ctx; encode it as FastAPI does.
+            # "input" is dropped: it echoes back what the caller sent, which for a rejected
+            # github_token would put a credential in the response body.
+            details=[
+                {key: value for key, value in error.items() if key != "input"}
+                for error in jsonable_encoder(exc.errors())
+            ],
         )
 
     @app.exception_handler(Exception)

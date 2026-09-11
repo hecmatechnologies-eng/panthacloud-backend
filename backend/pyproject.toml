@@ -20,6 +20,9 @@ dependencies = [
     "pyyaml>=6.0.0",
     "pypdf>=5.0.0",
     "python-multipart>=0.0.12",
+    # UTS-46 host canonicalisation for allowed origins; the stdlib codec is IDNA2003 and
+    # disagrees with browsers (app/core/origins.py).
+    "idna>=3.7",
 ]
 
 [project.optional-dependencies]

@@ -2,8 +2,9 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.core.origins import MAX_ORIGIN_LENGTH, normalize_origin
 from app.models.website_integration import (
     IntegrationRunStatus,
     WebsiteFramework,
@@ -26,6 +27,7 @@ class WebsiteIntegrationRead(BaseModel):
     widget_target_path: str
     status: WebsiteIntegrationStatus
     has_credentials: bool = False
+    public_key: str
     last_error: str | None = None
     last_success_at: datetime | None = None
     created_at: datetime
@@ -50,6 +52,24 @@ class WebsiteIntegrationUpdate(BaseModel):
     website_root_dir: str | None = Field(None, max_length=255)
     widget_target_path: str | None = Field(None, max_length=255)
     github_token: str | None = Field(None, max_length=500)
+
+
+class AllowedOriginCreate(BaseModel):
+    # Bounds the raw input; normalize_origin enforces the stored length after trimming.
+    origin: str = Field(..., max_length=2 * MAX_ORIGIN_LENGTH)
+
+    @field_validator("origin")
+    @classmethod
+    def _normalize(cls, value: str) -> str:
+        return normalize_origin(value)
+
+
+class AllowedOriginRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    origin: str
+    created_at: datetime
 
 
 # Whether the widget target file was confirmed in the repository before planning.

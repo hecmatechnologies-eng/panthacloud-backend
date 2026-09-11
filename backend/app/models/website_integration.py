@@ -1,4 +1,5 @@
 import enum
+import secrets
 import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -11,7 +12,19 @@ from sqlalchemy.types import JSON, UUID
 from app.models.base import BaseModel
 
 if TYPE_CHECKING:
+    from app.models.allowed_origin import AllowedOrigin
     from app.models.project import Project
+
+PUBLIC_KEY_PREFIX = "fussion_pk_"
+
+
+def generate_public_key() -> str:
+    """A widget's public client key (FR-107). Not a secret: it ships in the customer's page.
+
+    192 random bits, so an unknown key cannot be guessed; the prefix tells it apart from a
+    credential at a glance and to secret scanners.
+    """
+    return PUBLIC_KEY_PREFIX + secrets.token_urlsafe(24)
 
 
 class WebsiteIntegrationStatus(str, enum.Enum):
@@ -105,6 +118,14 @@ class WebsiteIntegration(BaseModel):
         DateTime(timezone=True),
         nullable=True,
     )
+    # Server-issued only; no create or update schema accepts it.
+    public_key: Mapped[str] = mapped_column(
+        String(64),
+        default=generate_public_key,
+        nullable=False,
+        unique=True,
+        index=True,
+    )
 
     project: Mapped["Project"] = relationship(
         "Project",
@@ -115,6 +136,12 @@ class WebsiteIntegration(BaseModel):
         back_populates="website_integration",
         cascade="all, delete-orphan",
         order_by="IntegrationRun.started_at.desc()",
+    )
+    allowed_origins: Mapped[list["AllowedOrigin"]] = relationship(
+        "AllowedOrigin",
+        back_populates="website_integration",
+        cascade="all, delete-orphan",
+        order_by="AllowedOrigin.created_at",
     )
 
 
