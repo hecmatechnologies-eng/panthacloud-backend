@@ -10,6 +10,21 @@ Agent layer decision: `docs/architecture/ADR-001-agent-layer.md`
 **What is actually realistic: `docs/FEASIBILITY.md` — read this before planning work**
 How to work here: `docs/DEVELOPMENT-WORKFLOW.md` · Tooling: `docs/CLAUDE-CODE-SETUP.md`
 
+### Conditional reads — this file is a summary, not the whole contract
+
+Only `CLAUDE.md` loads automatically. The documents below carry detail this file does not.
+**Read the named document in full, before planning, when a slice touches its area:**
+
+| Touching | Read first |
+|---|---|
+| `app/agents/` `app/harness/` `app/tools/` `app/llm/` `app/runtime/` `skills/` | `docs/architecture/AGENT-ARCHITECTURE.md` — agent contracts, budgets, memory tiers, tool standards, skill spec |
+| anything introducing a model call or provider | `docs/architecture/ADR-001-agent-layer.md` |
+| new scope, or an abstraction you cannot tie to an existing requirement | `docs/requirements/MVP-REQUIREMENTS-V2.md` — including the Part D YAGNI register |
+| planning a phase or estimating effort | `docs/FEASIBILITY.md` |
+
+§5 names the boundaries; it does not contain the contracts. Do not write an agent, tool,
+skill or runtime module from this file alone.
+
 ---
 
 ## ⚠ Terminology — two different things are called "agent" here
@@ -57,17 +72,30 @@ builder that hands the user an embed script, it is moving in the wrong direction
 
 Verify before you build on any of it.
 
+**Every Studio integration run currently ends in HTTP 422 "Integration refused". This is
+intended — failing closed. Do not "fix" it.** The running app uses `MockGitProvider`
+(see below), which contains no repository files, so the widget target is never found and
+the pipeline refuses rather than write a file it has not read (§4.8); `GET /plan` reports
+the target as `missing` for the same reason. Restoring a stub or default layout to make
+runs succeed would reintroduce §3.1. Runs complete only once a real provider is wired in,
+and that is gated by §3 "Blockers on wiring `GitHubProvider` in".
+
 **Built and working**
 
 - Control plane: users, organizations, memberships, RBAC, JWT auth
 - Projects, integrations, repositories, repository snapshots
 - Knowledge base: upload, extract (PDF/MD/TXT), chunk, embed, retrieve
 - Assistant configuration + widget preview
-- Website integration → branch → commit → pull request pipeline
 - Studio frontend: stage model, navigation, theming, SSE activity feed
-- 81 backend tests, Ruff clean
+- Backend tests, Ruff clean — but see §8: the suite does not run from `backend/` on a
+  machine whose `backend/.env` points at Postgres
 
 **NOT built — do not write code that assumes these exist**
+
+- **No real GitHub connection.** `GitHubProvider` is implemented but never wired in —
+  nothing calls `set_git_provider(GitHubProvider())`, so the running app always talks to
+  `MockGitProvider`. The integration → branch → commit → pull request pipeline has only
+  ever run against the mock.
 
 - **No LLM anywhere.** No model SDK, no provider, no gateway, no API key handling.
 - **No agents, no harness, no orchestrator, no tool registry.**
@@ -92,14 +120,30 @@ before any real question-answering ships.
 
 ## 3. Known hazards — fix before building on top
 
-1. **`pipeline.py` overwrites customer files.** `generate_artifacts()` accepts
-   `existing_target_content` and the pipeline never passes it, so the PR replaces the
-   customer's `app/layout.tsx` (or `index.html`) with a hardcoded stub. `github.py` has
-   no `get_file_contents`. `StaticValidator` cannot catch it because the stub contains
-   the expected markers. **This is the highest-priority defect in the repository.**
+1. **Resolved (branch `fix/layout-overwrite`) — `pipeline.py` overwrote customer files.**
+   What now holds, and its limits:
+   - The pipeline pins the default branch's head SHA, reads the real widget target *at that
+     SHA*, and creates the integration branch *from that SHA* (recorded as
+     `plan_summary.base_sha`). A customer commit landing mid-run is never silently
+     reverted: git merges it cleanly if it does not overlap Fussion's change, and the PR
+     conflicts if it does.
+   - A missing target is refused (`IntegrationRefusedError`, HTTP 422), never created.
+   - `StaticValidator` requires every modified file's original, and rejects insertions,
+     deletions and in-line rewrites of content outside Fussion-managed blocks — **unless the
+     edit is itself wrapped in Fussion marker text**, which the validator currently treats
+     as a managed block wherever it appears (see the blockers below).
+   - Whitespace is ignored when comparing, and whitespace can change meaning: `return (` →
+     `return\n(` makes the layout return `undefined` and render a blank page, and
+     `"admin hidden"` → `"adminhidden"` silently drops a class. Neither is detected.
+   - `generate_artifacts` has no stub fallback; it cannot build a customer file without the
+     real content.
 
-2. **`SECRET_DEV_ENCRYPTION_KEY` is hardcoded in `app/core/config.py` and committed.**
-   In development it is the actual key protecting stored GitHub tokens.
+2. **`SECRET_DEV_ENCRYPTION_KEY` is hardcoded in `app/core/config.py`.** In development
+   it is the actual key protecting stored GitHub tokens. It (and `JWT_DEV_SECRET`) entered
+   git history in the baseline commit `f4027e0` (2026-09-11). **Hard blocker on first
+   push:** before adding any remote, either rewrite history to remove them, or treat both as
+   compromised — rotate them and re-encrypt stored tokens. Moving them out of source alone
+   does not fix this.
 
 3. **Generated import paths assume repo root.** Files are committed to `components/` and
    `lib/` while the component imports `@/components/...`. Any repo using a `src/` layout
@@ -116,6 +160,42 @@ before any real question-answering ships.
 
 6. **SSE leak.** `studio_events.py` holds an `AsyncSession` open for the life of each
    connection while polling every second. It will exhaust the pool.
+
+7. **`GET /runs/{id}/diff` is deliberately broken.** `get_run_diff` in
+   `website_integrations.py` re-derived the diff from the *current* assistant config and a
+   hardcoded stub layout, so the Studio showed a file the PR never contained. The stub is
+   gone and `generate_artifacts` now requires the real content, so the endpoint raises
+   `TypeError` (500) — left that way on purpose rather than papered over. Fix: persist the
+   generated change set on the `IntegrationRun` and serve that; do not re-derive it.
+
+### Blockers on wiring `GitHubProvider` in
+
+**This list is the gate. Nothing goes near a real repository until it is empty.**
+
+Each item was found in review of the §3.1 fix and logged rather than fixed under §9.0's
+stopping rule: none can damage a repository as the code currently runs, because the only
+provider is the file-less `MockGitProvider` (§2) and the only generator is the
+deterministic patcher. Wiring a real provider — or adding the step-D CodingAgent — makes
+every one of them reachable.
+
+- **FR-096 protected paths are not enforced.** `widget_target_path =
+  ".github/workflows/deploy.yml"` passes `StaticValidator`, and the PR would prepend a JS
+  import to the workflow file. This breaks the protected-paths control (AGENT-ARCHITECTURE
+  §11 control 3, §9.1 "Protected paths untouched"). Self-inflicted rather than
+  cross-tenant.
+- **Marker-pair discipline.** The validator strips any Fussion marker pair wherever it
+  appears, so an edit wrapped in markers bypasses it, and a customer region that merely
+  looks like a managed block can be deleted by the patcher. Required: accept only the
+  file's framework marker family, no more pairs than the patcher emits, each marker alone
+  on its line (the HTML patcher needs a newline before its block). Required before the
+  step-D CodingAgent, since today only the deterministic patcher writes files.
+- **`GET /plan` reports private-repo, wrong-branch and bad-token 404s as "file missing"**
+  and tells the user to fix the widget path. Resolve the branch head first, then read the
+  file at that SHA. (The run itself is unaffected: it resolves repo and branch first.)
+- **`create_branch(..., base_sha=None)` has a default.** A future caller that omits it
+  silently re-resolves the moving head and reintroduces the §3.1 race. Make it required.
+- **FR-097 generated-code security scan does not exist.** Managed-block content is
+  unchecked by design, so the scan is the only gate on what ships inside those blocks.
 
 ---
 
@@ -288,9 +368,38 @@ pnpm dev
 `pnpm` is the only package manager for the frontend. `uv` manages the backend
 environment.
 
+**Test database caveat.** Settings load `.env` from the working directory. Running pytest
+from `backend/` picks up `backend/.env`; if its `DATABASE_URL` is Postgres, every test
+errors at setup (psycopg async cannot use Windows' Proactor event loop). Until the test
+config stops inheriting `.env`, run from the repository root:
+`backend/.venv/Scripts/pytest backend/tests`.
+
 ---
 
 ## 9. Definition of done
+
+### 9.0 Rigour tier — decide this before starting, state it in the plan
+
+Verification scales with **blast radius**, not with how interesting the problem is. Applying
+maximum rigour everywhere is not caution; it is a different way of failing to ship —
+see `docs/FEASIBILITY.md` §3 for the budget this has to fit inside.
+
+| Tier | Applies when the change can | Gate |
+|---|---|---|
+| **1 — Maximum** | write to a customer repository · resolve tenancy · handle credentials · generate code that ships to a customer site · touch an agent, prompt, skill or model | red-first test, reviewer, iterate until the reviewer reports no defect reachable by the code as it runs |
+| **2 — Standard** | change backend behaviour with no customer-repo, credential or cross-tenant path | tests + ruff + **one** reviewer pass; findings logged, fixed in-slice only if they are defects in what this slice built |
+| **3 — Light** | only touch docs, tracker, fixtures, or the frontend | tests + ruff; no reviewer round |
+
+**Stopping rule for Tier 1.** Commit when no finding describes a defect reachable by the
+code as it currently runs. Findings that require a component which does not exist yet are
+logged as gates on the component that would make them reachable — not fixed now. A
+reviewer asked to find problems will always find problems; without this rule a slice never
+lands.
+
+**Tier 2 does not escalate to Tier 1 because the reviewer found something.** It escalates
+only if a finding shows the change actually has Tier 1 reach.
+
+### 9.1 Checklist
 
 **Always**
 

@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -52,6 +52,10 @@ class WebsiteIntegrationUpdate(BaseModel):
     github_token: str | None = Field(None, max_length=500)
 
 
+# Whether the widget target file was confirmed in the repository before planning.
+TargetStatus = Literal["exists", "missing", "unknown"]
+
+
 class IntegrationPlanPayload(BaseModel):
     framework: WebsiteFramework
     files_to_create: list[str]
@@ -59,6 +63,7 @@ class IntegrationPlanPayload(BaseModel):
     files_to_delete: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     summary: str | None = None
+    target_status: TargetStatus = "unknown"
 
 
 class IntegrationRunRead(BaseModel):

@@ -1,6 +1,7 @@
 import json
 import re
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 from app.models.website_integration import WebsiteFramework
@@ -13,6 +14,21 @@ REACT_END_JSX = "{/* FUSSION-ASSISTANT:END-WIDGET */}"
 
 HTML_BEGIN = "<!-- FUSSION-ASSISTANT:BEGIN -->"
 HTML_END = "<!-- FUSSION-ASSISTANT:END -->"
+
+# Regions of a customer file that Fussion owns; everything outside them belongs to the customer.
+MANAGED_BLOCKS = (
+    (REACT_BEGIN_IMPORT, REACT_END_IMPORT),
+    (REACT_BEGIN_JSX, REACT_END_JSX),
+    (HTML_BEGIN, HTML_END),
+)
+
+
+def _patch_preserving_line_endings(patch: Callable[[str], str], content: str) -> str:
+    """Patch LF-normalised content, then restore the file's dominant line ending."""
+    crlf = content.count("\r\n")
+    line_ending = "\r\n" if crlf > content.count("\n") - crlf else "\n"
+    patched = patch(content.replace("\r\n", "\n"))
+    return patched.replace("\n", line_ending) if line_ending != "\n" else patched
 
 
 def generate_react_widget_component(assistant_data: dict[str, Any]) -> str:
@@ -177,37 +193,29 @@ def generate_artifacts(
     project_id: uuid.UUID | str,
     assistant_data: dict[str, Any],
     framework: WebsiteFramework,
-    widget_target_path: str = "app/layout.tsx",
-    existing_target_content: str | None = None,
+    widget_target_path: str,
+    existing_target_content: str,
 ) -> dict[str, str]:
     """
     Generates all required files for website integration deterministically.
     Returns a mapping of relative file paths to their string contents.
+    The widget target is always patched from its real contents, which the caller must have read.
     """
     files: dict[str, str] = {}
 
     if framework == WebsiteFramework.REACT_NEXTJS:
         files["components/fussion/FussionAssistant.tsx"] = generate_react_widget_component(assistant_data)
         files["lib/fussion-assistant.ts"] = generate_react_config_ts(project_id, assistant_data)
-
-        base_content = existing_target_content or (
-            "export default function RootLayout({ children }: { children: React.ReactNode }) {\n"
-            "  return (\n"
-            "    <html lang=\"en\">\n"
-            "      <body>{children}</body>\n"
-            "    </html>\n"
-            "  );\n"
-            "}\n"
+        files[widget_target_path] = _patch_preserving_line_endings(
+            patch_react_layout, existing_target_content
         )
-        files[widget_target_path] = patch_react_layout(base_content)
 
     elif framework == WebsiteFramework.GENERIC_HTML:
         files["fussion-assistant.js"] = generate_html_widget_script(project_id, assistant_data)
 
         target_html_path = widget_target_path if widget_target_path.endswith(".html") else "index.html"
-        base_html = existing_target_content or (
-            "<!DOCTYPE html>\n<html>\n<head>\n  <title>Website</title>\n</head>\n<body>\n  <h1>Welcome</h1>\n</body>\n</html>"
+        files[target_html_path] = _patch_preserving_line_endings(
+            patch_html_index, existing_target_content
         )
-        files[target_html_path] = patch_html_index(base_html)
 
     return files

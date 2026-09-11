@@ -1,6 +1,11 @@
+import base64
+import json
 import tempfile
 import uuid
+from collections.abc import Callable
+from pathlib import Path
 
+import httpx
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
@@ -21,9 +26,31 @@ from app.services.integration.artifacts import (
     patch_html_index,
     patch_react_layout,
 )
-from app.services.integration.github import MockGitProvider, set_git_provider
+from app.services.integration.git_provider import GitProvider
+from app.services.integration.github import (
+    GitHubAPIError,
+    GitHubProvider,
+    GitHubUnavailableError,
+    MockGitProvider,
+    set_git_provider,
+)
 from app.services.integration.sandbox import SandboxManager, SandboxSecurityError
 from app.services.integration.validation import StaticValidationError, StaticValidator
+
+DISTINCTIVE_REPO = Path(__file__).parent / "fixtures" / "repositories" / "nextjs-distinctive-layout"
+
+
+def read_fixture(rel_path: str) -> str:
+    # Bytes, not read_text(): keep the on-disk line endings, as GitHub would return them.
+    return (DISTINCTIVE_REPO / rel_path).read_bytes().decode("utf-8")
+
+
+def load_distinctive_repo(mock_git: MockGitProvider, owner: str, repo: str) -> None:
+    mock_git.add_repository(owner, repo)
+    for file in DISTINCTIVE_REPO.rglob("*"):
+        if file.is_file():
+            rel_path = file.relative_to(DISTINCTIVE_REPO).as_posix()
+            mock_git.add_file(owner, repo, rel_path, read_fixture(rel_path))
 
 
 async def register_user(client: AsyncClient, email: str, name: str) -> tuple[str, str, str]:
@@ -436,6 +463,18 @@ def test_sandbox_isolation_between_runs() -> None:
         assert p2.exists()
 
 
+def test_sandbox_keeps_line_endings_exactly() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        sbx = SandboxManager(base_dir=tmpdir)
+        path, _ = sbx.allocate(uuid.uuid4(), uuid.uuid4(), uuid.uuid4())
+        content = "line one\r\nline two\nline three\r\n"
+
+        written = sbx.write_file(path, "app/layout.tsx", content)
+
+        assert written.read_bytes() == content.encode("utf-8")  # no \r\r\n on Windows
+        assert sbx.read_file(path, "app/layout.tsx") == content
+
+
 # ============================================================
 # 6. DETERMINISTIC ARTIFACT GENERATION & IDEMPOTENCY
 # ============================================================
@@ -461,6 +500,7 @@ def test_deterministic_react_artifacts() -> None:
         assistant_data=asst_data,
         framework=WebsiteFramework.REACT_NEXTJS,
         widget_target_path="app/layout.tsx",
+        existing_target_content=read_fixture("app/layout.tsx"),
     )
 
     # Generate twice with identical inputs
@@ -469,6 +509,7 @@ def test_deterministic_react_artifacts() -> None:
         assistant_data=asst_data,
         framework=WebsiteFramework.REACT_NEXTJS,
         widget_target_path="app/layout.tsx",
+        existing_target_content=read_fixture("app/layout.tsx"),
     )
 
     # Determinism: generate(A) == generate(A)
@@ -528,6 +569,7 @@ def test_deterministic_html_artifacts_and_idempotency() -> None:
         assistant_data=asst_data,
         framework=WebsiteFramework.GENERIC_HTML,
         widget_target_path="index.html",
+        existing_target_content="<!DOCTYPE html>\n<html>\n<body>\n  <h1>Shop</h1>\n</body>\n</html>\n",
     )
 
     assert "fussion-assistant.js" in art
@@ -556,43 +598,202 @@ def test_static_validator_success_and_failures() -> None:
         files_to_modify=["app/layout.tsx"],
     )
 
+    original_layout = "export default function Layout({ children }) {\n  return <body>{children}</body>;\n}\n"
+    originals = {"app/layout.tsx": original_layout}
     valid_files = {
         "components/fussion/FussionAssistant.tsx": "export function FussionAssistant() { return null; }",
         "lib/fussion-assistant.ts": 'export const fussionAssistantConfig = { "projectId": "p1", "assistantId": "a1", "brandColor": "#000", "position": "BOTTOM_RIGHT" };',
-        "app/layout.tsx": "/* FUSSION-ASSISTANT:BEGIN */\nimport { FussionAssistant } from '@/components/fussion/FussionAssistant';\n/* FUSSION-ASSISTANT:END */",
+        "app/layout.tsx": patch_react_layout(original_layout),
     }
 
     # 1. Valid files pass
-    issues = StaticValidator.validate(WebsiteFramework.REACT_NEXTJS, plan, valid_files)
+    issues = StaticValidator.validate(WebsiteFramework.REACT_NEXTJS, plan, valid_files, originals)
     assert len(issues) == 0
 
     # 2. Forbidden unexpected file modification rejected
     forbidden_files = dict(valid_files)
     forbidden_files["package.json"] = '{"name": "hacked"}'
     with pytest.raises(StaticValidationError) as exc_info:
-        StaticValidator.validate(WebsiteFramework.REACT_NEXTJS, plan, forbidden_files)
+        StaticValidator.validate(WebsiteFramework.REACT_NEXTJS, plan, forbidden_files, originals)
     assert "Forbidden files generated" in str(exc_info.value)
 
     # 3. Secret pattern in file rejected
     secret_files = dict(valid_files)
     secret_files["lib/fussion-assistant.ts"] += '\nconst token = "ghp_12345678901234567890123456789012";'
     with pytest.raises(StaticValidationError) as exc_info:
-        StaticValidator.validate(WebsiteFramework.REACT_NEXTJS, plan, secret_files)
+        StaticValidator.validate(WebsiteFramework.REACT_NEXTJS, plan, secret_files, originals)
     assert "secret" in str(exc_info.value).lower()
 
     # 4. Absolute system path rejected
     system_path_files = dict(valid_files)
     system_path_files["lib/fussion-assistant.ts"] += '\nconst p = "C:\\Windows\\System32";'
     with pytest.raises(StaticValidationError) as exc_info:
-        StaticValidator.validate(WebsiteFramework.REACT_NEXTJS, plan, system_path_files)
+        StaticValidator.validate(WebsiteFramework.REACT_NEXTJS, plan, system_path_files, originals)
     assert "path" in str(exc_info.value).lower()
 
     # 5. Missing markers in modified file rejected
     missing_marker_files = dict(valid_files)
-    missing_marker_files["app/layout.tsx"] = "export default function Layout() { return null; }"
+    missing_marker_files["app/layout.tsx"] = original_layout
     with pytest.raises(StaticValidationError) as exc_info:
-        StaticValidator.validate(WebsiteFramework.REACT_NEXTJS, plan, missing_marker_files)
+        StaticValidator.validate(WebsiteFramework.REACT_NEXTJS, plan, missing_marker_files, originals)
     assert "markers missing" in str(exc_info.value).lower()
+
+
+# ============================================================
+# 7b. PRESERVATION RULE — MODIFIED FILES KEEP THEIR CONTENT
+# ============================================================
+
+NEXTJS_PLAN = IntegrationPlanPayload(
+    framework=WebsiteFramework.REACT_NEXTJS,
+    files_to_create=["components/fussion/FussionAssistant.tsx", "lib/fussion-assistant.ts"],
+    files_to_modify=["app/layout.tsx"],
+)
+
+
+# The hardcoded layout the defective pipeline used to write over customer files.
+STUB_LAYOUT = (
+    "export default function RootLayout({ children }: { children: React.ReactNode }) {\n"
+    "  return (\n"
+    '    <html lang="en">\n'
+    "      <body>{children}</body>\n"
+    "    </html>\n"
+    "  );\n"
+    "}\n"
+)
+ONE_LINE_LAYOUT = (
+    "export default function RootLayout({ children }: { children: React.ReactNode }) "
+    '{ return <html lang="en"><body>{children}</body></html>; }\n'
+)
+ADMIN_LAYOUT = (
+    "export default function RootLayout({ children, user }) {\n"
+    "  return (\n"
+    "    <body>\n"
+    "      {user.isAdmin && <AdminBar />}\n"
+    "      {children}\n"
+    "    </body>\n"
+    "  );\n"
+    "}\n"
+)
+
+
+def nextjs_artifacts(existing_layout: str) -> dict[str, str]:
+    return generate_artifacts(
+        project_id="proj-1",
+        assistant_data={"id": "asst-1", "name": "Bot"},
+        framework=WebsiteFramework.REACT_NEXTJS,
+        widget_target_path="app/layout.tsx",
+        existing_target_content=existing_layout,
+    )
+
+
+def validate_layout(files: dict[str, str], original_layout: str) -> list[str]:
+    return StaticValidator.validate(
+        WebsiteFramework.REACT_NEXTJS, NEXTJS_PLAN, files, {"app/layout.tsx": original_layout}
+    )
+
+
+def test_preservation_accepts_patch_of_real_layout() -> None:
+    original = read_fixture("app/layout.tsx")
+    assert validate_layout(nextjs_artifacts(original), original) == []
+
+
+def test_preservation_rejects_stub_overwrite() -> None:
+    # The CLAUDE.md §3.1 defect: the stub shares boilerplate lines with the real layout
+    # (`return (`, `</html>`, `);`, `}`), so a "shares a fragment" rule would pass it.
+    original = read_fixture("app/layout.tsx")
+    with pytest.raises(StaticValidationError) as exc_info:
+        validate_layout(nextjs_artifacts(STUB_LAYOUT), original)
+    assert "outside Fussion-managed blocks at original line 1" in str(exc_info.value)
+
+
+def test_preservation_rejects_deleted_line_and_reports_line_number() -> None:
+    original = read_fixture("app/layout.tsx").replace("\r\n", "\n")
+    analytics = '        <Analytics siteId="rr-storefront" />\n'
+    files = nextjs_artifacts(original)
+    files["app/layout.tsx"] = files["app/layout.tsx"].replace(analytics, "")
+    expected_line = original.splitlines().index(analytics.rstrip("\n")) + 1
+
+    with pytest.raises(StaticValidationError) as exc_info:
+        validate_layout(files, original)
+    message = str(exc_info.value)
+    assert f"outside Fussion-managed blocks at original line {expected_line}" in message
+    assert "rr-storefront" not in message  # never quote customer source
+
+
+def test_preservation_requires_original_for_modified_file() -> None:
+    files = nextjs_artifacts(read_fixture("app/layout.tsx"))
+    with pytest.raises(StaticValidationError) as exc_info:
+        StaticValidator.validate(WebsiteFramework.REACT_NEXTJS, NEXTJS_PLAN, files, {})
+    assert "original content was not read" in str(exc_info.value)
+
+
+def test_preservation_accepts_repatch_of_already_integrated_layout() -> None:
+    once = nextjs_artifacts(read_fixture("app/layout.tsx"))["app/layout.tsx"]
+    twice = nextjs_artifacts(once)
+    assert twice["app/layout.tsx"] == once
+    assert validate_layout(twice, once) == []
+
+
+def test_crlf_layout_keeps_crlf_and_passes_preservation() -> None:
+    original = read_fixture("app/layout.tsx").replace("\r\n", "\n").replace("\n", "\r\n")
+    files = nextjs_artifacts(original)
+    patched = files["app/layout.tsx"]
+
+    assert patched.count("\n") == patched.count("\r\n")  # no bare LF introduced
+    assert validate_layout(files, original) == []
+
+
+@pytest.mark.parametrize(
+    ("original", "tamper", "expected_line"),
+    [
+        # A rewrite inside a customer line: every original character survives, in order.
+        (ADMIN_LAYOUT, lambda s: s.replace("{user.isAdmin", "{!user.isAdmin"), 4),
+        # A foreign script smuggled into an existing element.
+        (
+            read_fixture("app/layout.tsx"),
+            lambda s: s.replace('siteId="rr-storefront" />', 'siteId="rr-storefront" src="https://evil.example/x.js" />'),
+            27,
+        ),
+        # Content added outside Fussion-managed blocks.
+        (
+            ADMIN_LAYOUT,
+            lambda s: s.replace("    </body>", '      <script src="https://evil.example/x.js"></script>\n    </body>'),
+            6,
+        ),
+        # A small real layout overwritten by the stub: its characters all appear in the stub.
+        (ONE_LINE_LAYOUT, lambda s: patch_react_layout(STUB_LAYOUT), 1),
+    ],
+    ids=["in-line-rewrite", "attribute-injection", "added-outside-blocks", "one-line-stub-overwrite"],
+)
+def test_preservation_rejects_changes_outside_managed_blocks(
+    original: str, tamper: Callable[[str], str], expected_line: int
+) -> None:
+    files = nextjs_artifacts(original)
+    files["app/layout.tsx"] = tamper(files["app/layout.tsx"])
+    with pytest.raises(StaticValidationError) as exc_info:
+        validate_layout(files, original)
+    assert f"outside Fussion-managed blocks at original line {expected_line}" in str(exc_info.value)
+
+
+def test_preservation_accepts_patch_of_one_line_layout() -> None:
+    assert validate_layout(nextjs_artifacts(ONE_LINE_LAYOUT), ONE_LINE_LAYOUT) == []
+
+
+def test_preservation_accepts_repatch_when_managed_block_content_changed() -> None:
+    # A layout integrated by an older Fussion version: its managed block differs from today's.
+    stale = patch_react_layout(ADMIN_LAYOUT).replace(
+        "@/components/fussion/FussionAssistant", "@/components/fussion/OldAssistant"
+    )
+    files = nextjs_artifacts(stale)
+    assert "OldAssistant" not in files["app/layout.tsx"]
+    assert validate_layout(files, stale) == []
+
+
+def test_preservation_ignores_line_endings_and_trailing_whitespace() -> None:
+    original = read_fixture("app/layout.tsx").replace("\r\n", "\n")
+    crlf_with_trailing_spaces = original.replace("\n", "  \r\n")
+    files = nextjs_artifacts(original)  # LF output
+    assert validate_layout(files, crlf_with_trailing_spaces) == []
 
 
 # ============================================================
@@ -607,6 +808,7 @@ async def test_pipeline_execution_commit_and_pr(client: AsyncClient) -> None:
     proj_id = await create_project(client, token, org_id, "Pipe Proj", "pipe-proj")
 
     mock_git = MockGitProvider()
+    mock_git.add_file("fussion-org", "storefront", "app/layout.tsx", read_fixture("app/layout.tsx"))
     set_git_provider(mock_git)
 
     # 1. Configure website integration
@@ -632,6 +834,7 @@ async def test_pipeline_execution_commit_and_pr(client: AsyncClient) -> None:
     plan_data = plan_resp.json()
     assert "components/fussion/FussionAssistant.tsx" in plan_data["files_to_create"]
     assert "app/layout.tsx" in plan_data["files_to_modify"]
+    assert plan_data["target_status"] == "exists"
 
     # 3. Trigger integration run
     run_resp = await client.post(
@@ -671,14 +874,13 @@ async def test_pipeline_execution_commit_and_pr(client: AsyncClient) -> None:
     assert run_detail.status_code == 200
     assert run_detail.json()["id"] == run_id
 
-    # 7. Get run diff
-    diff_resp = await client.get(
-        f"/api/v1/organizations/{org_id}/projects/{proj_id}/website-integrations/runs/{run_id}/diff",
-        headers=hdr,
-    )
-    assert diff_resp.status_code == 200
-    diff_data = diff_resp.json()
-    assert len(diff_data["files"]) >= 3
+    # 7. Run diff: deliberately broken until CLAUDE.md §3.7 persists the change set. It used to
+    # re-derive the diff from a stub layout; generate_artifacts now requires the real content.
+    with pytest.raises(TypeError, match="existing_target_content"):
+        await client.get(
+            f"/api/v1/organizations/{org_id}/projects/{proj_id}/website-integrations/runs/{run_id}/diff",
+            headers=hdr,
+        )
 
     # 8. Get PR info
     pr_resp = await client.get(
@@ -702,6 +904,360 @@ async def test_pipeline_execution_commit_and_pr(client: AsyncClient) -> None:
             # Assure no tokens or passwords in payload
             assert "ghp_" not in str(ev.payload)
             assert "encrypted_secrets" not in ev.payload
+
+
+@pytest.mark.asyncio
+async def test_pipeline_preserves_existing_layout_content(client: AsyncClient) -> None:
+    token, _, org_id = await register_user(client, "preserve_owner@example.com", "PreserveOwner")
+    hdr = {"Authorization": f"Bearer {token}"}
+    proj_id = await create_project(client, token, org_id, "Preserve Proj", "preserve-proj")
+
+    mock_git = MockGitProvider()
+    load_distinctive_repo(mock_git, "rwenzori", "storefront")
+    set_git_provider(mock_git)
+
+    await client.post(
+        f"/api/v1/organizations/{org_id}/projects/{proj_id}/website-integrations",
+        headers=hdr,
+        json={
+            "repository_owner": "rwenzori",
+            "repository_name": "storefront",
+            "framework": "REACT_NEXTJS",
+            "widget_target_path": "app/layout.tsx",
+        },
+    )
+
+    run_resp = await client.post(
+        f"/api/v1/organizations/{org_id}/projects/{proj_id}/website-integrations/runs",
+        headers=hdr,
+    )
+    assert run_resp.status_code == 201, run_resp.text
+    run_data = run_resp.json()
+    assert run_data["plan_summary"]["files_to_modify"] == ["app/layout.tsx"]
+
+    committed = mock_git.committed_files[("rwenzori", "storefront", run_data["branch_name"])]["app/layout.tsx"]
+
+    # The customer's distinctive layout survives...
+    for sentinel in (
+        "FIXTURE-SENTINEL: Rwenzori Roasters root layout",
+        'title: "Rwenzori Roasters | Single-origin coffee from Fort Portal"',
+        '<CartProvider currency="UGX">',
+        '<Analytics siteId="rr-storefront" />',
+    ):
+        assert sentinel in committed, f"customer content lost: {sentinel!r}"
+    committed_lines = {line.rstrip() for line in committed.splitlines()}
+    lost = [line for line in read_fixture("app/layout.tsx").splitlines() if line.rstrip() not in committed_lines]
+    assert lost == []
+
+    # ...and the widget is added to it.
+    assert "<FussionAssistant />" in committed
+
+
+@pytest.mark.asyncio
+async def test_missing_target_is_refused_not_created(client: AsyncClient) -> None:
+    token, _, org_id = await register_user(client, "refuse_owner@example.com", "RefuseOwner")
+    hdr = {"Authorization": f"Bearer {token}"}
+    proj_id = await create_project(client, token, org_id, "Refuse Proj", "refuse-proj")
+    base = f"/api/v1/organizations/{org_id}/projects/{proj_id}/website-integrations"
+
+    mock_git = MockGitProvider()
+    load_distinctive_repo(mock_git, "rwenzori", "storefront")
+    set_git_provider(mock_git)
+
+    # The repo keeps its layout at app/layout.tsx; the user typed a src/ path that does not exist.
+    await client.post(
+        base,
+        headers=hdr,
+        json={
+            "repository_owner": "rwenzori",
+            "repository_name": "storefront",
+            "framework": "REACT_NEXTJS",
+            "widget_target_path": "src/app/layout.tsx",
+        },
+    )
+
+    # The preview is where the wrong path is discovered.
+    plan_data = (await client.get(f"{base}/plan", headers=hdr)).json()
+    assert plan_data["target_status"] == "missing"
+    assert "src/app/layout.tsx" in plan_data["files_to_modify"]
+    assert "src/app/layout.tsx" not in plan_data["files_to_create"]
+    assert any("was not found" in w for w in plan_data["warnings"])
+
+    # The run is refused — distinct from a crash — before any branch or commit exists.
+    run_resp = await client.post(f"{base}/runs", headers=hdr)
+    assert run_resp.status_code == 422
+    detail = run_resp.json()["detail"]
+    assert detail.startswith("Integration refused:")
+    assert "was not found on branch 'main'" in detail
+    assert not any(b.startswith("fussion/") for (o, r, b) in mock_git.branches if o == "rwenzori")
+    assert mock_git.committed_files == {}
+
+    runs = (await client.get(f"{base}/runs", headers=hdr)).json()
+    assert runs[0]["status"] == "FAILED"
+    assert runs[0]["plan_summary"]["target_status"] == "missing"
+    assert runs[0]["plan_summary"]["base_sha"] == mock_git.branches[("rwenzori", "storefront", "main")]
+
+    async with get_session_factory()() as db:
+        stmt = select(AuditEvent.event_type).where(AuditEvent.project_id == uuid.UUID(proj_id))
+        event_types = (await db.execute(stmt)).scalars().all()
+    assert "integration.run.refused" in event_types
+    assert "integration.run.failed" not in event_types
+
+
+class ConcurrentCommitGitProvider(MockGitProvider):
+    """A customer commit lands on the default branch after Fussion read the target."""
+
+    async def create_branch(
+        self,
+        owner: str,
+        repo: str,
+        base_branch: str,
+        new_branch: str,
+        token: str | None = None,
+        **kwargs: object,
+    ) -> dict:
+        head = self.branches[(owner, repo, base_branch)]
+        customer_sha = "commit_customer_edit_during_run"
+        self.trees[(owner, repo, customer_sha)] = {
+            **self.trees[(owner, repo, head)],
+            "app/layout.tsx": "// customer edit made while Fussion was running\n",
+        }
+        self.parents[customer_sha] = head
+        self.branches[(owner, repo, base_branch)] = customer_sha
+        return await super().create_branch(owner, repo, base_branch, new_branch, token, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_pr_is_built_on_the_commit_that_was_read(client: AsyncClient) -> None:
+    token, _, org_id = await register_user(client, "race_owner@example.com", "RaceOwner")
+    hdr = {"Authorization": f"Bearer {token}"}
+    proj_id = await create_project(client, token, org_id, "Race Proj", "race-proj")
+    base = f"/api/v1/organizations/{org_id}/projects/{proj_id}/website-integrations"
+
+    mock_git = ConcurrentCommitGitProvider()
+    load_distinctive_repo(mock_git, "rwenzori", "storefront")
+    read_sha = mock_git.branches[("rwenzori", "storefront", "main")]
+    set_git_provider(mock_git)
+    await client.post(
+        base,
+        headers=hdr,
+        json={"repository_owner": "rwenzori", "repository_name": "storefront"},
+    )
+
+    run_resp = await client.post(f"{base}/runs", headers=hdr)
+    assert run_resp.status_code == 201, run_resp.text
+    run_data = run_resp.json()
+
+    # The integration commit's parent is the commit whose layout was read and patched, so the
+    # customer's concurrent edit shows up as a merge conflict in the PR, not a silent revert.
+    integration_head = mock_git.branches[("rwenzori", "storefront", run_data["branch_name"])]
+    assert mock_git.parents[integration_head] == read_sha
+    assert run_data["plan_summary"]["base_sha"] == read_sha
+
+
+class FailingReadGitProvider(MockGitProvider):
+    def __init__(self, error: Exception) -> None:
+        super().__init__()
+        self.error = error
+
+    async def get_file_contents(self, *args: object, **kwargs: object) -> str | None:
+        raise self.error
+
+
+async def plan_preview_with(client: AsyncClient, provider: MockGitProvider, **integration: str) -> httpx.Response:
+    token, _, org_id = await register_user(client, "preview_owner@example.com", "PreviewOwner")
+    hdr = {"Authorization": f"Bearer {token}"}
+    proj_id = await create_project(client, token, org_id, "Preview Proj", "preview-proj")
+    base = f"/api/v1/organizations/{org_id}/projects/{proj_id}/website-integrations"
+
+    set_git_provider(provider)
+    await client.post(
+        base,
+        headers=hdr,
+        json={"repository_owner": "fussion-org", "repository_name": "storefront", **integration},
+    )
+    return await client.get(f"{base}/plan", headers=hdr)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        GitHubUnavailableError("Could not reach GitHub while reading 'app/layout.tsx'", 503),
+        GitHubUnavailableError("GitHub rate limit reached while reading 'app/layout.tsx'", 403),
+    ],
+    ids=["unreachable", "rate-limited"],
+)
+async def test_plan_preview_degrades_when_github_is_unavailable(
+    client: AsyncClient, error: Exception
+) -> None:
+    plan_resp = await plan_preview_with(client, FailingReadGitProvider(error))
+
+    assert plan_resp.status_code == 200
+    plan_data = plan_resp.json()
+    assert plan_data["target_status"] == "unknown"
+    assert plan_data["files_to_modify"] == ["app/layout.tsx"]
+    assert any("Could not confirm" in w for w in plan_data["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_plan_preview_reports_configuration_errors(client: AsyncClient) -> None:
+    error = GitHubAPIError("GitHub authentication error while reading 'app/layout.tsx': Bad credentials", 401)
+    plan_resp = await plan_preview_with(client, FailingReadGitProvider(error))
+
+    assert plan_resp.status_code == 400
+    assert "Bad credentials" in plan_resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_plan_preview_reports_an_invalid_path(client: AsyncClient) -> None:
+    # A configuration error, not "unreachable": the preview names the real cause.
+    plan_resp = await plan_preview_with(client, MockGitProvider(), widget_target_path="/app/layout.tsx")
+
+    assert plan_resp.status_code == 400
+    assert "Invalid repository file path '/app/layout.tsx'" in plan_resp.json()["detail"]
+
+
+# ============================================================
+# 8b. GIT PROVIDER — READING FILE CONTENTS
+# ============================================================
+
+
+def github_with(handler: Callable[[httpx.Request], httpx.Response]) -> GitHubProvider:
+    return GitHubProvider(base_url="https://api.github.test", transport=httpx.MockTransport(handler))
+
+
+@pytest.mark.asyncio
+async def test_github_get_file_contents_decodes_file_at_ref() -> None:
+    seen: dict[str, str] = {}
+    raw = b"export default function Layout() {}\r\n// \xc3\xa9t\xc3\xa9\r\n"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["ref"] = request.url.params["ref"]
+        seen["auth"] = request.headers["Authorization"]
+        # GitHub wraps base64 content at 60 characters.
+        body = {"type": "file", "encoding": "base64", "content": base64.encodebytes(raw).decode()}
+        return httpx.Response(200, json=body)
+
+    content = await github_with(handler).get_file_contents(
+        "acme", "site", "app/layout.tsx", ref="release/2026", token="tok"
+    )
+
+    assert content == raw.decode("utf-8")  # CRLF and non-ASCII preserved exactly
+    assert seen == {
+        "path": "/repos/acme/site/contents/app/layout.tsx",
+        "ref": "release/2026",
+        "auth": "Bearer tok",
+    }
+
+
+def respond(status: int, body: object = None, headers: dict[str, str] | None = None) -> Callable:
+    return lambda request: httpx.Response(status, json=body, headers=headers)
+
+
+def unreachable(request: httpx.Request) -> httpx.Response:
+    raise httpx.ConnectError("connection refused", request=request)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("handler", "message", "transient"),
+    [
+        # Configuration problems the user must fix: reported as-is, never retried.
+        (respond(200, [{"type": "file", "name": "layout.tsx"}]), "not a regular file", False),
+        (respond(200, {"type": "file", "encoding": "none", "content": ""}), "too large", False),
+        (respond(200, {"type": "file", "encoding": "base64", "content": "//79"}), "not a UTF-8", False),
+        (respond(401, {"message": "Bad credentials"}), "authentication error", False),
+        (respond(403, {"message": "Resource not accessible"}), "authentication error", False),
+        # Transient: GitHub cannot answer right now.
+        (respond(403, {"message": "API rate limit exceeded"}, {"x-ratelimit-remaining": "0"}), "rate limit", True),
+        (respond(403, {"message": "secondary limit"}, {"retry-after": "60"}), "rate limit", True),
+        (respond(429, {"message": "Too many requests"}), "rate limit", True),
+        (respond(502, {"message": "Bad gateway"}), "unavailable", True),
+        (lambda request: httpx.Response(200, text="<html>proxy</html>"), "unreadable response", True),
+        (unreachable, "Could not reach GitHub", True),
+    ],
+    ids=[
+        "directory", "over-1mb", "binary", "unauthorized", "forbidden",
+        "rate-limit-403", "secondary-rate-limit", "429", "5xx", "non-json", "network",
+    ],
+)
+async def test_github_get_file_contents_classifies_errors(
+    handler: Callable, message: str, transient: bool
+) -> None:
+    with pytest.raises(GitHubAPIError) as exc_info:
+        await github_with(handler).get_file_contents("acme", "site", "app/layout.tsx", ref="main")
+    assert message in str(exc_info.value)
+    assert isinstance(exc_info.value, GitHubUnavailableError) is transient
+
+
+@pytest.mark.asyncio
+async def test_github_branch_head_and_create_branch_at_pinned_sha() -> None:
+    requests: list[tuple[str, str, dict]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.read()) if request.read() else {}
+        requests.append((request.method, request.url.path, body))
+        if request.method == "GET":
+            return httpx.Response(200, json={"object": {"sha": "sha_current_head"}})
+        return httpx.Response(201, json={"ref": "refs/heads/fussion/x"})
+
+    provider = github_with(handler)
+    assert await provider.get_branch_head("acme", "site", "release/2026") == "sha_current_head"
+    assert requests[-1][:2] == ("GET", "/repos/acme/site/git/ref/heads/release/2026")
+
+    # With a pinned SHA the branch is created there, without re-resolving the moving head.
+    requests.clear()
+    await provider.create_branch("acme", "site", "main", "fussion/x", base_sha="sha_read_earlier")
+    assert requests == [
+        ("POST", "/repos/acme/site/git/refs", {"ref": "refs/heads/fussion/x", "sha": "sha_read_earlier"})
+    ]
+
+
+def providers_for_contract() -> list[object]:
+    mock = MockGitProvider()
+    mock.add_repository("acme", "site")
+    return [github_with(lambda request: httpx.Response(404, json={"message": "Not Found"})), mock]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", providers_for_contract(), ids=["github", "mock"])
+async def test_get_file_contents_missing_file_is_none(provider: GitProvider) -> None:
+    assert await provider.get_file_contents("acme", "site", "app/layout.tsx", ref="main") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", providers_for_contract(), ids=["github", "mock"])
+async def test_get_branch_head_missing_branch_raises(provider: GitProvider) -> None:
+    with pytest.raises(GitHubAPIError) as exc_info:
+        await provider.get_branch_head("acme", "site", "no-such-branch")
+    assert "Branch 'no-such-branch' not found" in str(exc_info.value)
+    assert not isinstance(exc_info.value, GitHubUnavailableError)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", providers_for_contract(), ids=["github", "mock"])
+@pytest.mark.parametrize(
+    "path", ["", "../secrets.txt", "app/../../x", "/app/layout.tsx", "app\\layout.tsx", "app//x"]
+)
+async def test_get_file_contents_rejects_unsafe_paths(provider: GitProvider, path: str) -> None:
+    with pytest.raises(GitHubAPIError) as exc_info:
+        await provider.get_file_contents("acme", "site", path, ref="main")
+    assert "Invalid repository file path" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_github_unsafe_path_makes_no_request() -> None:
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={})
+
+    with pytest.raises(GitHubAPIError):
+        await github_with(handler).get_file_contents("acme", "site", "../../user", ref="main")
+    assert calls == []
 
 
 # ============================================================
@@ -758,6 +1314,7 @@ async def test_project_cascade_deletion(client: AsyncClient) -> None:
     proj_id = await create_project(client, token, org_id, "Casc Proj", "casc-proj")
 
     mock_git = MockGitProvider()
+    mock_git.add_file("fussion-org", "storefront", "app/layout.tsx", read_fixture("app/layout.tsx"))
     set_git_provider(mock_git)
 
     # 1. Create integration & run

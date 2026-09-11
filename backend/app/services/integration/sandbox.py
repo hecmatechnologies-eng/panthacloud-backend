@@ -114,14 +114,16 @@ class SandboxManager:
             raise SandboxLimitExceededError("File size exceeds 10MB limit.")
 
         resolved.parent.mkdir(parents=True, exist_ok=True)
-        resolved.write_text(content, encoding="utf-8")
+        # newline="": write the exact line endings, so a CRLF file does not become \r\r\n.
+        resolved.write_text(content, encoding="utf-8", newline="")
         return resolved
 
     def read_file(self, sandbox_path: Path, rel_path: str) -> str:
         resolved = self.assert_path_contained(sandbox_path, rel_path)
         if not resolved.exists() or not resolved.is_file():
             raise FileNotFoundError(f"File '{rel_path}' not found in sandbox.")
-        return resolved.read_text(encoding="utf-8")
+        with resolved.open(encoding="utf-8", newline="") as handle:
+            return handle.read()
 
     def create_file(self, sandbox_path: Path, rel_path: str, content: str) -> Path:
         return self.write_file(sandbox_path, rel_path, content)

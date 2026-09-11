@@ -1,6 +1,8 @@
+import base64
 import hashlib
 import logging
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -15,14 +17,68 @@ class GitHubAPIError(Exception):
         self.status_code = status_code
 
 
+class GitHubUnavailableError(GitHubAPIError):
+    """GitHub could not answer right now (network, rate limit, 5xx); a later retry may succeed."""
+
+
+def _is_rate_limited(resp: httpx.Response) -> bool:
+    return resp.status_code == 429 or (
+        resp.status_code == 403
+        and (
+            resp.headers.get("x-ratelimit-remaining") == "0"
+            or "retry-after" in resp.headers
+            or "rate limit" in resp.text.lower()
+        )
+    )
+
+
+def _raise_for_status(resp: httpx.Response, action: str) -> None:
+    """Raise for a failed response; transient failures raise GitHubUnavailableError."""
+    if resp.status_code < 400:
+        return
+    if _is_rate_limited(resp):
+        raise GitHubUnavailableError(
+            f"GitHub rate limit reached while {action}; try again later.", resp.status_code
+        )
+    if resp.status_code >= 500:
+        raise GitHubUnavailableError(
+            f"GitHub is unavailable ({resp.status_code}) while {action}.", resp.status_code
+        )
+    if resp.status_code in (401, 403):
+        raise GitHubAPIError(
+            f"GitHub authentication error while {action}: {resp.text}", resp.status_code
+        )
+    raise GitHubAPIError(f"GitHub API error while {action}: {resp.text}", resp.status_code)
+
+
+def assert_safe_repo_path(path: str) -> None:
+    """Reject any path that could address something other than one file inside the repository."""
+    if (
+        not path
+        or "\\" in path
+        or "\0" in path
+        or any(segment in ("", ".", "..") for segment in path.split("/"))
+    ):
+        raise GitHubAPIError(
+            f"Invalid repository file path '{path}'. "
+            "Use a relative path such as 'app/layout.tsx'.",
+            400,
+        )
+
+
 class GitHubProvider(GitProvider):
     """
     Production GitHub REST API provider.
     Operates strictly as data via HTTP; never clones or executes repository code.
     """
 
-    def __init__(self, base_url: str = "https://api.github.com") -> None:
+    def __init__(
+        self,
+        base_url: str = "https://api.github.com",
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
+        self._transport = transport
 
     def _headers(self, token: str | None = None) -> dict[str, str]:
         headers = {
@@ -34,19 +90,85 @@ class GitHubProvider(GitProvider):
             headers["Authorization"] = f"Bearer {token}"
         return headers
 
+    async def _get(
+        self,
+        url: str,
+        token: str | None,
+        action: str,
+        params: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        """GET that reports network failures as GitHubUnavailableError, not transport errors."""
+        try:
+            async with httpx.AsyncClient(transport=self._transport) as client:
+                return await client.get(
+                    url, headers=self._headers(token), params=params, timeout=15.0
+                )
+        except httpx.TransportError as exc:
+            raise GitHubUnavailableError(f"Could not reach GitHub while {action}: {exc}", 503) from exc
+
+    @staticmethod
+    def _json(resp: httpx.Response, action: str) -> Any:
+        try:
+            return resp.json()
+        except ValueError as exc:
+            raise GitHubUnavailableError(
+                f"GitHub returned an unreadable response while {action}.", 502
+            ) from exc
+
     async def get_repository(
         self, owner: str, repo: str, token: str | None = None
     ) -> dict[str, Any]:
-        url = f"{self.base_url}/repos/{owner}/{repo}"
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(url, headers=self._headers(token), timeout=15.0)
-            if resp.status_code == 404:
-                raise GitHubAPIError(f"Repository {owner}/{repo} not found on GitHub.", 404)
-            if resp.status_code == 401 or resp.status_code == 403:
-                raise GitHubAPIError(f"GitHub authentication error: {resp.text}", resp.status_code)
-            if resp.status_code >= 400:
-                raise GitHubAPIError(f"GitHub API error: {resp.text}", resp.status_code)
-            return resp.json()
+        action = f"reading repository {owner}/{repo}"
+        resp = await self._get(f"{self.base_url}/repos/{owner}/{repo}", token, action)
+        if resp.status_code == 404:
+            raise GitHubAPIError(f"Repository {owner}/{repo} not found on GitHub.", 404)
+        _raise_for_status(resp, action)
+        return self._json(resp, action)
+
+    async def get_branch_head(
+        self, owner: str, repo: str, branch: str, token: str | None = None
+    ) -> str:
+        action = f"resolving branch '{branch}'"
+        url = f"{self.base_url}/repos/{owner}/{repo}/git/ref/heads/{quote(branch)}"
+        resp = await self._get(url, token, action)
+        if resp.status_code == 404:
+            raise GitHubAPIError(f"Branch '{branch}' not found in {owner}/{repo}.", 404)
+        _raise_for_status(resp, action)
+        data = self._json(resp, action)
+        try:
+            return data["object"]["sha"]
+        except (KeyError, TypeError) as exc:
+            raise GitHubUnavailableError(
+                f"GitHub returned an unreadable response while {action}.", 502
+            ) from exc
+
+    async def get_file_contents(
+        self,
+        owner: str,
+        repo: str,
+        path: str,
+        ref: str,
+        token: str | None = None,
+    ) -> str | None:
+        assert_safe_repo_path(path)
+        action = f"reading '{path}'"
+        url = f"{self.base_url}/repos/{owner}/{repo}/contents/{quote(path)}"
+        resp = await self._get(url, token, action, params={"ref": ref})
+        # GitHub also answers 404 for an unknown ref; callers treat both as "not there".
+        if resp.status_code == 404:
+            return None
+        _raise_for_status(resp, action)
+
+        data = self._json(resp, action)
+        if not isinstance(data, dict) or data.get("type") != "file":
+            raise GitHubAPIError(f"'{path}' is not a regular file in {owner}/{repo}@{ref}.", 400)
+        if data.get("encoding") != "base64":
+            # The contents API omits the body of files larger than 1 MB.
+            raise GitHubAPIError(f"'{path}' is too large to read (over 1 MB).", 400)
+        try:
+            return base64.b64decode(data["content"]).decode("utf-8")
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise GitHubAPIError(f"'{path}' is not a UTF-8 text file.", 400) from exc
 
     async def create_branch(
         self,
@@ -55,17 +177,13 @@ class GitHubProvider(GitProvider):
         base_branch: str,
         new_branch: str,
         token: str | None = None,
+        base_sha: str | None = None,
     ) -> dict[str, Any]:
-        async with httpx.AsyncClient() as client:
-            # 1. Fetch base branch SHA
-            ref_url = f"{self.base_url}/repos/{owner}/{repo}/git/ref/heads/{base_branch}"
-            resp = await client.get(ref_url, headers=self._headers(token), timeout=15.0)
-            if resp.status_code != 200:
-                raise GitHubAPIError(
-                    f"Base branch '{base_branch}' not found in {owner}/{repo}.", resp.status_code
-                )
-            base_sha = resp.json()["object"]["sha"]
+        # 1. Branch from the pinned commit, or from the base branch's current head
+        if base_sha is None:
+            base_sha = await self.get_branch_head(owner, repo, base_branch, token)
 
+        async with httpx.AsyncClient(transport=self._transport) as client:
             # 2. Create new reference
             create_url = f"{self.base_url}/repos/{owner}/{repo}/git/refs"
             body = {"ref": f"refs/heads/{new_branch}", "sha": base_sha}
@@ -88,7 +206,7 @@ class GitHubProvider(GitProvider):
         files: dict[str, str],
         token: str | None = None,
     ) -> str:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(transport=self._transport) as client:
             headers = self._headers(token)
             # 1. Get branch commit SHA
             ref_url = f"{self.base_url}/repos/{owner}/{repo}/git/ref/heads/{branch}"
@@ -167,7 +285,7 @@ class GitHubProvider(GitProvider):
             "head": head_branch,
             "base": base_branch,
         }
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(transport=self._transport) as client:
             resp = await client.post(url, headers=self._headers(token), json=payload, timeout=15.0)
             if resp.status_code not in (200, 201):
                 raise GitHubAPIError(f"Failed to create pull request: {resp.text}", resp.status_code)
@@ -181,7 +299,7 @@ class GitHubProvider(GitProvider):
         token: str | None = None,
     ) -> dict[str, Any]:
         url = f"{self.base_url}/repos/{owner}/{repo}/pulls/{pr_number}"
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(transport=self._transport) as client:
             resp = await client.get(url, headers=self._headers(token), timeout=15.0)
             if resp.status_code == 404:
                 raise GitHubAPIError(f"Pull request #{pr_number} not found.", 404)
@@ -222,6 +340,10 @@ class MockGitProvider(GitProvider):
         self.pr_counter = 100
         # Recorded commits: (owner, repo, branch) -> list of files committed
         self.committed_files: dict[tuple[str, str, str], dict[str, str]] = {}
+        # Repository contents per commit: (owner, repo, commit_sha) -> {path: content}
+        self.trees: dict[tuple[str, str, str], dict[str, str]] = {}
+        # Commit graph: commit_sha -> parent commit_sha
+        self.parents: dict[str, str] = {}
 
     def add_repository(self, owner: str, repo: str, default_branch: str = "main") -> None:
         self.repositories[(owner, repo)] = {
@@ -232,6 +354,13 @@ class MockGitProvider(GitProvider):
         }
         self.branches[(owner, repo, default_branch)] = f"commit_{owner}_{repo}_init"
 
+    def add_file(
+        self, owner: str, repo: str, path: str, content: str, branch: str | None = None
+    ) -> None:
+        branch = branch or self.repositories[(owner, repo)]["default_branch"]
+        head = self.branches[(owner, repo, branch)]
+        self.trees.setdefault((owner, repo, head), {})[path] = content
+
     async def get_repository(
         self, owner: str, repo: str, token: str | None = None
     ) -> dict[str, Any]:
@@ -240,6 +369,26 @@ class MockGitProvider(GitProvider):
             raise GitHubAPIError(f"Repository '{owner}/{repo}' not found.", 404)
         return self.repositories[key]
 
+    async def get_file_contents(
+        self,
+        owner: str,
+        repo: str,
+        path: str,
+        ref: str,
+        token: str | None = None,
+    ) -> str | None:
+        assert_safe_repo_path(path)
+        commit_sha = self.branches.get((owner, repo, ref), ref)  # ref: branch name or SHA
+        return self.trees.get((owner, repo, commit_sha), {}).get(path)
+
+    async def get_branch_head(
+        self, owner: str, repo: str, branch: str, token: str | None = None
+    ) -> str:
+        key = (owner, repo, branch)
+        if key not in self.branches:
+            raise GitHubAPIError(f"Branch '{branch}' not found in {owner}/{repo}.", 404)
+        return self.branches[key]
+
     async def create_branch(
         self,
         owner: str,
@@ -247,11 +396,12 @@ class MockGitProvider(GitProvider):
         base_branch: str,
         new_branch: str,
         token: str | None = None,
+        base_sha: str | None = None,
     ) -> dict[str, Any]:
         base_key = (owner, repo, base_branch)
         if base_key not in self.branches:
             raise GitHubAPIError(f"Base branch '{base_branch}' not found.", 404)
-        base_sha = self.branches[base_key]
+        base_sha = base_sha or self.branches[base_key]
         self.branches[(owner, repo, new_branch)] = base_sha
         return {
             "ref": f"refs/heads/{new_branch}",
@@ -278,13 +428,16 @@ class MockGitProvider(GitProvider):
         if branch_key not in self.branches:
             raise GitHubAPIError(f"Branch '{branch}' not found.", 404)
 
-        # Generate deterministic commit SHA from file contents
+        # Generate deterministic commit SHA from the parent and file contents
+        parent_sha = self.branches[branch_key]
         content_hash = hashlib.sha256(
-            "".join(sorted(f"{k}:{v}" for k, v in files.items())).encode("utf-8")
+            (parent_sha + "".join(sorted(f"{k}:{v}" for k, v in files.items()))).encode("utf-8")
         ).hexdigest()
         new_sha = f"commit_{content_hash[:16]}"
         self.branches[branch_key] = new_sha
         self.committed_files[branch_key] = files.copy()
+        self.trees[(owner, repo, new_sha)] = {**self.trees.get((owner, repo, parent_sha), {}), **files}
+        self.parents[new_sha] = parent_sha
         return new_sha
 
     async def create_pull_request(

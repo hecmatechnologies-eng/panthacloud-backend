@@ -804,3 +804,135 @@ None.
 `Phase 11 — Sandbox Integration & GitHub Pull Request`
 *(Halted: Strictly awaiting user instruction before starting Phase 11)*.
 
+---
+
+## Phase 11 Log — Remediation: customer-file overwrite (CLAUDE.md §3.1)
+
+**Rigour tier: 1 — Maximum** (CLAUDE.md §9.0: writes to a customer repository), declared
+at the start and unchanged throughout.
+
+**Status: REVIEWED — fussion-reviewer round 2 PASS WITH FINDINGS; committed on branch
+`fix/layout-overwrite`, not merged. Not COMPLETED** until merged. Phase 11 code was already
+running (the table above still says PENDING; reconciling the table and the two roadmaps is
+its own step-A slice, not this one). Baseline commit `f4027e0`.
+
+### Objective
+FEASIBILITY.md step A, one slice: stop the integration pipeline replacing or corrupting
+the customer's widget target (`app/layout.tsx` / `index.html`).
+
+### Completed Work
+- **Read at a pinned commit, branch from the same commit.** New Protocol methods
+  `get_file_contents(owner, repo, path, ref)` and `get_branch_head(owner, repo, branch)`;
+  `create_branch` takes `base_sha`. The pipeline resolves the default branch's head once,
+  reads the target at that SHA, records it as `plan_summary.base_sha`, and branches from it,
+  so a customer commit landing mid-run is never silently reverted (it merges cleanly if it
+  does not overlap Fussion's change, and conflicts if it does).
+- **Missing target is refused**, not created: `IntegrationRefusedError` → HTTP 422
+  "Integration refused: …", audit event `integration.run.refused`, before any branch or
+  commit exists. (Creating a root `app/layout.tsx` in a `src/app` repo hijacks Next.js
+  routing.) The full FR-100 failure taxonomy stays deferred to step D.
+- **Validator — only Fussion-managed blocks may change.** Every file in `files_to_modify`
+  must have its original supplied; outside managed blocks, the original and generated
+  files must be identical after removing whitespace. Insertions, deletions and in-line
+  rewrites are rejected with a line number (never customer source). Known limits: an edit
+  wrapped in Fussion marker text bypasses the check (a gate on wiring `GitHubProvider` in,
+  below), and whitespace changes are not detected even where they change meaning
+  (`return (` → `return\n(` renders a blank page; `"admin hidden"` → `"adminhidden"` drops
+  a class).
+- **No stub fallback.** `generate_artifacts` requires `widget_target_path` and
+  `existing_target_content`; both hardcoded stubs are deleted. `get_run_diff` now raises
+  (CLAUDE.md §3.7), deliberately.
+- **Line endings.** Patched targets keep the original's dominant line ending; the sandbox
+  writes and reads with `newline=""` (no `\r\r\n` on Windows).
+- **GitHub error classification.** `GitHubUnavailableError` (subclass of `GitHubAPIError`)
+  for network failures, 429, rate-limit 403s, 5xx and unreadable responses; 401/other 403s,
+  directories, >1 MB, non-UTF-8 and invalid paths stay `GitHubAPIError`. Unsafe paths
+  (`..`, leading `/`, `\`, empty segments) are rejected before any request.
+- **`GET /plan`** reads the target and reports `target_status` (`exists` / `missing` /
+  `unknown`); only `GitHubUnavailableError` degrades to `unknown`, anything else is a 400
+  naming the cause. The planner declares exactly the path that is read (no defaulting).
+- **Tests.** Red first, twice. Round 1: the preservation pipeline test failed on the
+  unfixed pipeline (committed layout was the stub). Round 2: in-line rewrite, attribute
+  injection and outside-block insertion were accepted by the round-1 validator, and the
+  race test showed the integration commit parented on the customer's mid-run commit; all
+  pass now. Provider-contract tests run against both `GitHubProvider`
+  (`httpx.MockTransport`) and the mock. Fixture:
+  `backend/tests/fixtures/repositories/nextjs-distinctive-layout/`.
+
+### Architectural & Technology Decisions
+1. Only-managed-blocks-change, not "recognisable fragment" or "characters in order": the
+   stub shares `return (`, `</html>`, `);`, `}` with real layouts, and an in-order check
+   accepts `isAdmin` → `!isAdmin` (MVP-REQUIREMENTS-V2 Part C #6).
+2. The widget target is always a modification, never a create; `target_status` is a
+   required keyword on `IntegrationPlanner.generate_plan`.
+3. New types, each for a named need: `GitHubUnavailableError` (transient vs configuration
+   failure, decision 3), `IntegrationRefusedError` (refused vs crashed, FR-100 subset).
+   `GitHubProvider` gained an optional `transport` for tests only.
+
+### Review history
+- Round 1 — **BLOCKED**: read-then-branch race (§4.8); in-order validator accepted
+  in-line rewrites; stub fallback still reachable; preview hid configuration errors as
+  "unreachable"; docs overclaimed. All addressed in round 2.
+- Round 2 (fresh reviewer, no round-1 context) — **PASS WITH FINDINGS**. All five round-1
+  findings independently verified resolved; no BLOCKING finding. New findings: marker
+  text bypasses the validator; `/plan` misreports repo/branch/token 404s as "missing"; docs
+  omitted that every Studio run now fails closed; plus considers (whitespace can change
+  meaning, "PR conflict" overclaimed, `base_sha` default, mixed line endings normalised,
+  every `</body>` patched). FR-096 and FR-097 flagged as unmet and unlogged. Under §9.0's
+  stopping rule none is reachable by the code as it runs, so all were logged — docs only,
+  no code change after the review, so the reviewed diff is the committed diff.
+
+### Deviations
+Checked against the approved plan and the original prompt:
+- The prompt's "fragment" rule and "missing target = create" were both replaced (approved).
+- Round 2 widened the slice to close every round-1 finding (approved): `create_branch`
+  signature, `get_branch_head`, error classification, sandbox `newline=""`, planner no
+  longer defaults an empty path, `get_run_diff` left broken.
+- Baseline commit also fixed `.gitignore`: the Python `lib/` rule was silently excluding
+  `frontend/src/lib/`; `data/` and `backend/data/` (~25k workspace files) now ignored.
+- Installed `.claude/agents/fussion-reviewer.md` and `.claude/commands/done.md`.
+- CLAUDE.md §8 gained a test-database caveat (not requested; kept by owner).
+- Round-2 findings were logged, not fixed (owner chose docs-only, so the reviewed diff is
+  the committed diff); the `base_sha` default in particular stays for the next slice.
+
+### Blockers / Deferred
+- **Every Studio integration run now ends in HTTP 422 "Integration refused" — intended.**
+  The running app uses the file-less `MockGitProvider`, so the target is never found and
+  the pipeline fails closed instead of writing a file it has not read. This is not a bug;
+  restoring a stub or default layout would reintroduce §3.1. CLAUDE.md §2.
+- **Blockers on wiring `GitHubProvider` in** — the gate; canonical list in CLAUDE.md §3.
+  Nothing goes near a real repository until it is empty. Logged under §9.0's stopping rule
+  (not reachable by the code as it runs):
+  - FR-096 protected paths not enforced (`.github/workflows/deploy.yml` passes validation)
+  - marker-pair discipline (framework match, pair count, own-line) — required before the
+    step-D CodingAgent
+  - `/plan` reports private-repo, wrong-branch and bad-token 404s as "file missing"
+  - `create_branch`'s `base_sha=None` default lets a future caller reintroduce the race
+  - FR-097 generated-code security scan does not exist
+- **Hard blocker on first push:** the baseline commit `f4027e0` put the real dev
+  `SECRET_DEV_ENCRYPTION_KEY` (and `JWT_DEV_SECRET`) into git history. Before adding a
+  remote: rewrite history, or treat both as compromised and rotate. CLAUDE.md §3.2.
+- **`GET /runs/{id}/diff` raises** until the change set is persisted — CLAUDE.md §3.7.
+- PR body still claims "Sandbox validation: PASSED".
+- Pre-existing patcher behaviour: every `</body>` is patched (including one inside a string
+  literal), and a mixed-line-ending file is normalised to its dominant ending, rewriting
+  every minority-ending line in the PR.
+- `GENERIC_HTML` with a non-`.html` target always fails validation (pre-existing; fails closed).
+- **Test environment (logged, not fixed):**
+  - conftest should force the test DB URL regardless of `backend/.env`, and set
+    `WindowsSelectorEventLoopPolicy` for psycopg async on Windows. Until then the suite
+    only runs from the repository root.
+  - The suite is not reproducible from a fresh clone: the fixture
+    `backend/tests/fixtures/repositories/fastapi-nextjs-demo/.env` is gitignored, and
+    fixture/workspace paths depend on the working directory (a clean checkout of `f4027e0`
+    had 39 failures). Needs `!backend/tests/fixtures/**/.env` and cwd-independent paths.
+    CI would fail today.
+  - `test_adapter_unknown_classification` (Phases 05–08) failed once under load and
+    passes in isolation and in clean runs — flaky; that subsystem may be deleted.
+
+### Verification (2026-09-11, round 2)
+- Ruff: `All checks passed!`
+- Backend, run from the repository root: **172 passed** (121 pre-existing + 51 new).
+- Frontend (untouched): `pnpm test` 108/108 passed (9 files); `pnpm build` exit 0.
+- Evals: none exist yet.
+

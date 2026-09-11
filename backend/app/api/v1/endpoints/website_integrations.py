@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Annotated, Any
@@ -34,19 +35,35 @@ from app.schemas.website_integration import (
     IntegrationRunRead,
     PullRequestInfo,
     RunDiffPayload,
+    TargetStatus,
     ValidationResultPayload,
     WebsiteIntegrationCreate,
     WebsiteIntegrationRead,
     WebsiteIntegrationUpdate,
 )
 from app.services.integration.artifacts import generate_artifacts
-from app.services.integration.github import GitHubAPIError, get_git_provider
-from app.services.integration.pipeline import pipeline_service
+from app.services.integration.github import (
+    GitHubAPIError,
+    GitHubUnavailableError,
+    get_git_provider,
+)
+from app.services.integration.pipeline import IntegrationRefusedError, pipeline_service
 from app.services.integration.planner import IntegrationPlanner
+
+logger = logging.getLogger("fussion.integration.api")
 
 router = APIRouter(
     tags=["Website Integrations"],
 )
+
+
+def _decrypt_github_token(integration: WebsiteIntegration) -> str | None:
+    if not integration.encrypted_secrets:
+        return None
+    try:
+        return secret_store.decrypt(integration.encrypted_secrets).get("github_token")
+    except SecretStoreError:
+        return None
 
 
 def to_website_integration_read(integration: WebsiteIntegration) -> WebsiteIntegrationRead:
@@ -273,13 +290,7 @@ async def validate_connection(
     ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ValidationResultPayload:
-    raw_token: str | None = None
-    if integration.encrypted_secrets:
-        try:
-            decrypted = secret_store.decrypt(integration.encrypted_secrets)
-            raw_token = decrypted.get("github_token")
-        except SecretStoreError:
-            raw_token = None
+    raw_token = _decrypt_github_token(integration)
 
     issues: list[str] = []
     repo_ok = False
@@ -349,11 +360,33 @@ async def get_integration_plan(
     kb = (await db.execute(stmt_kb)).scalar_one_or_none()
     has_kb = bool(kb and len(kb.documents) > 0)
 
+    # A transient GitHub failure (unreachable, rate-limited) degrades the preview to "unknown";
+    # the run re-checks before modifying anything. Any other failure is a configuration problem
+    # the user must fix, so it is reported with its cause.
+    target_status: TargetStatus = "unknown"
+    try:
+        target_content = await get_git_provider().get_file_contents(
+            integration.repository_owner,
+            integration.repository_name,
+            integration.widget_target_path,
+            ref=integration.default_branch,
+            token=_decrypt_github_token(integration),
+        )
+        target_status = "exists" if target_content is not None else "missing"
+    except GitHubUnavailableError as exc:
+        logger.warning(f"Could not verify widget target for integration {integration.id}: {exc}")
+    except GitHubAPIError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot read the widget target: {exc}",
+        ) from exc
+
     return IntegrationPlanner.generate_plan(
         framework=integration.framework,
         widget_target_path=integration.widget_target_path,
         assistant_data=asst_data,
         has_knowledge_base=has_kb,
+        target_status=target_status,
     )
 
 
@@ -382,6 +415,11 @@ async def start_integration_run(
             user_id=user.id,
         )
         return IntegrationRunRead.model_validate(run)
+    except IntegrationRefusedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Integration refused: {exc}",
+        ) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

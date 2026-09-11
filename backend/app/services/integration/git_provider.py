@@ -8,6 +8,23 @@ class GitProvider(Protocol):
         """Fetch repository metadata."""
         ...
 
+    async def get_file_contents(
+        self,
+        owner: str,
+        repo: str,
+        path: str,
+        ref: str,
+        token: str | None = None,
+    ) -> str | None:
+        """Return the text of the file at `path` on `ref`, or None if it does not exist."""
+        ...
+
+    async def get_branch_head(
+        self, owner: str, repo: str, branch: str, token: str | None = None
+    ) -> str:
+        """Return the commit SHA the branch currently points at."""
+        ...
+
     async def create_branch(
         self,
         owner: str,
@@ -15,8 +32,9 @@ class GitProvider(Protocol):
         base_branch: str,
         new_branch: str,
         token: str | None = None,
+        base_sha: str | None = None,
     ) -> dict[str, Any]:
-        """Create a new branch from a base branch."""
+        """Create new_branch at base_sha, or at base_branch's current head if base_sha is None."""
         ...
 
     async def commit_files(

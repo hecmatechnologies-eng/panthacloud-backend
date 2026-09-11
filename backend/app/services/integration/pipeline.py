@@ -26,6 +26,10 @@ from app.services.integration.validation import StaticValidator
 logger = logging.getLogger("fussion.integration.pipeline")
 
 
+class IntegrationRefusedError(Exception):
+    """The integration was declined because its configuration cannot be applied safely."""
+
+
 async def _record_audit(
     db: AsyncSession,
     org_id: uuid.UUID,
@@ -98,14 +102,6 @@ class IntegrationPipeline:
         kb = kb_result.scalar_one_or_none()
         has_kb = bool(kb and len(kb.documents) > 0) if kb else False
 
-        # Generate deterministic plan
-        plan = IntegrationPlanner.generate_plan(
-            framework=integration.framework,
-            widget_target_path=integration.widget_target_path,
-            assistant_data=asst_data,
-            has_knowledge_base=has_kb,
-        )
-
         run_id = uuid.uuid4()
         short_run = run_id.hex[:8]
         branch_name = f"fussion/integration/{short_run}"
@@ -113,14 +109,13 @@ class IntegrationPipeline:
         # 1. Allocate sandbox
         sandbox_path, sandbox_ref = self.sandbox.allocate(org_id, project.id, run_id)
 
-        # 2. Record initial IntegrationRun
+        # 2. Record initial IntegrationRun (the plan is recorded once the target has been read)
         run = IntegrationRun(
             id=run_id,
             integration_id=integration.id,
             status=IntegrationRunStatus.RUNNING,
             branch_name=branch_name,
             sandbox_ref=sandbox_ref,
-            plan_summary=plan.model_dump(),
             started_at=datetime.now(UTC),
         )
         db.add(run)
@@ -148,23 +143,66 @@ class IntegrationPipeline:
                 token=raw_token,
             )
 
-            # 4. Generate deterministic artifacts
+            # 4. Pin the commit to build on, and read the real target at exactly that commit
+            # (CLAUDE.md §4.8). The branch is later created from the same commit, so a customer
+            # commit landing meanwhile surfaces as a PR conflict instead of a silent revert.
+            base_sha = await git_provider.get_branch_head(
+                integration.repository_owner,
+                integration.repository_name,
+                integration.default_branch,
+                token=raw_token,
+            )
+            target_path = integration.widget_target_path
+            original_target = await git_provider.get_file_contents(
+                integration.repository_owner,
+                integration.repository_name,
+                target_path,
+                ref=base_sha,
+                token=raw_token,
+            )
+
+            # 5. Generate deterministic plan
+            plan = IntegrationPlanner.generate_plan(
+                framework=integration.framework,
+                widget_target_path=target_path,
+                assistant_data=asst_data,
+                has_knowledge_base=has_kb,
+                target_status="exists" if original_target is not None else "missing",
+            )
+            run.plan_summary = {**plan.model_dump(), "base_sha": base_sha}
+            await db.commit()
+
+            # A missing target is a configuration error, never an invitation to create one.
+            if original_target is None:
+                raise IntegrationRefusedError(
+                    f"Widget target '{target_path}' was not found on branch "
+                    f"'{integration.default_branch}' at commit {base_sha[:12]}. Fussion only "
+                    "modifies an existing file; check the widget target path and default branch."
+                )
+
+            # 6. Generate deterministic artifacts from the real file contents
             generated_files = generate_artifacts(
                 project_id=project.id,
                 assistant_data=asst_data,
                 framework=integration.framework,
-                widget_target_path=integration.widget_target_path,
+                widget_target_path=target_path,
+                existing_target_content=original_target,
             )
 
-            # 5. Write files into sandbox
+            # 7. Write files into sandbox
             for rel_path, content in generated_files.items():
                 self.sandbox.write_file(sandbox_path, rel_path, content)
 
-            # 6. Static validation
+            # 8. Static validation
             integration.status = WebsiteIntegrationStatus.VALIDATING
             await db.commit()
 
-            issues = StaticValidator.validate(integration.framework, plan, generated_files)
+            issues = StaticValidator.validate(
+                integration.framework,
+                plan,
+                generated_files,
+                original_files={target_path: original_target},
+            )
             if issues:
                 raise RuntimeError(f"Static validation failed: {'; '.join(issues)}")
 
@@ -181,16 +219,17 @@ class IntegrationPipeline:
                 {"files_count": len(generated_files)},
             )
 
-            # 7. Create integration branch
+            # 9. Create integration branch
             await git_provider.create_branch(
                 owner=integration.repository_owner,
                 repo=integration.repository_name,
                 base_branch=integration.default_branch,
                 new_branch=branch_name,
                 token=raw_token,
+                base_sha=base_sha,
             )
 
-            # 8. Commit changes
+            # 10. Commit changes
             commit_message = f"feat(fussion): integrate assistant widget [run: {short_run}]"
             commit_sha = await git_provider.commit_files(
                 owner=integration.repository_owner,
@@ -201,7 +240,7 @@ class IntegrationPipeline:
                 token=raw_token,
             )
 
-            # 9. Create Pull Request
+            # 11. Create Pull Request
             pr_title = "Integrate Fussion Assistant"
             pr_body = f"""## Fussion Assistant Integration
 
@@ -236,7 +275,7 @@ This automated Pull Request adds the Fussion storefront assistant integration fo
                 token=raw_token,
             )
 
-            # 10. Update run & integration records to completion
+            # 12. Update run & integration records to completion
             now = datetime.now(UTC)
             run.status = IntegrationRunStatus.PR_CREATED
             run.commit_sha = commit_sha
@@ -272,7 +311,11 @@ This automated Pull Request adds the Fussion storefront assistant integration fo
         except Exception as exc:
             now = datetime.now(UTC)
             error_msg = str(exc)
-            logger.error(f"Integration pipeline run {run_id} failed: {error_msg}")
+            refused = isinstance(exc, IntegrationRefusedError)
+            if refused:
+                logger.warning(f"Integration pipeline run {run_id} refused: {error_msg}")
+            else:
+                logger.error(f"Integration pipeline run {run_id} failed: {error_msg}")
 
             run.status = IntegrationRunStatus.FAILED
             run.error_message = error_msg
@@ -288,7 +331,7 @@ This automated Pull Request adds the Fussion storefront assistant integration fo
                 org_id,
                 project.id,
                 user_id,
-                "integration.run.failed",
+                "integration.run.refused" if refused else "integration.run.failed",
                 run.id,
                 {"error": error_msg[:500]},
             )
