@@ -62,6 +62,12 @@ carries stale assumptions from work already committed.
 
 4. One slice per session. /clear between slices.
 
+5. **Branch per slice, merged to `main` as soon as the reviewer passes and I approve. No
+   stacked branches.** `main` always reflects verified work. A long-lived feature branch buys
+   a solo developer nothing here — the review gate runs before the commit, so the branch adds
+   ceremony without protection — while a stack gets more expensive to unwind with every slice
+   and leaves `main` misrepresenting the project. Delete the branch once it is merged.
+
 ---
 
 ## 3. Context hygiene
@@ -140,7 +146,8 @@ written to do, not that it should do that.** That is what review is for.
 
 ## 7. Git discipline
 
-- **Branch per slice**, merged after review passes.
+- **Branch per slice**, merged to `main` as soon as review passes and the owner approves (§2.5).
+  No stacked branches; delete the branch after merging.
 - **Small commits.** A commit touching migrations, endpoints, services and frontend is
   four commits.
 - **Never commit `.env`, `*.db`, or `backend/data/workspaces/`.** Check the last one —

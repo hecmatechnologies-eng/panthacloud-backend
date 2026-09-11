@@ -147,6 +147,11 @@ before any real question-answering ships.
    compromised — rotate them and re-encrypt stored tokens. Moving them out of source alone
    does not fix this.
 
+   `f4027e0` is now in `main`'s history (merged 2026-09-12), and **every commit added on top
+   makes the rewrite larger** — a rebase-and-rewrite has to replay all of them. This does not
+   change the decision above (still a blocker on the first push, not on local work); it does
+   mean the key-removal slice gets more expensive the longer it waits.
+
 3. **Generated import paths assume repo root.** Files are committed to `components/` and
    `lib/` while the component imports `@/components/...`. Any repo using a `src/` layout
    gets a build failure.
@@ -415,7 +420,11 @@ only if a finding shows the change actually has Tier 1 reach.
 - [ ] New capability is removable by deleting a folder and one registry line
 - [ ] No new `if framework ==` branch in core code
 - [ ] Tenancy derived from `ExecutionContext`, never from a model-supplied value
-- [ ] Alembic migration verified `upgrade → downgrade → upgrade`
+- [ ] Alembic migration verified `upgrade → downgrade → upgrade` on **both** SQLite **and** a
+      scratch Postgres database the check creates and drops — never `fussion_db`. SQLite is
+      permissive about precisely what Postgres enforces: B1 shipped a value that overflowed a
+      `String(255)` column, invisible on SQLite and a 500 on Postgres. Production is Postgres by
+      contract (`config.py` refuses SQLite there), and pgvector will be Postgres-only.
 - [ ] Cross-tenant access returns 404, not 403 (anti-enumeration)
 - [ ] No secret in code, logs, prompts, commits, or browser storage
 - [ ] `ANTIGRAVITY-PHASE-TRACKER.md` updated in the same commit as the work

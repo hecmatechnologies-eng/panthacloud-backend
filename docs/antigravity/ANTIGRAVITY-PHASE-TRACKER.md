@@ -811,10 +811,10 @@ None.
 **Rigour tier: 1 — Maximum** (CLAUDE.md §9.0: writes to a customer repository), declared
 at the start and unchanged throughout.
 
-**Status: REVIEWED — fussion-reviewer round 2 PASS WITH FINDINGS; committed on branch
-`fix/layout-overwrite`, not merged. Not COMPLETED** until merged. Phase 11 code was already
-running (the table above still says PENDING; reconciling the table and the two roadmaps is
-its own step-A slice, not this one). Baseline commit `f4027e0`.
+**Status: COMPLETED** — fussion-reviewer round 2 PASS WITH FINDINGS; committed as `415d5e3` and
+merged to `main` on 2026-09-12 (fast-forward). Phase 11 code was already running (the table above
+still says PENDING; reconciling the table and the two roadmaps is its own step-A slice, and is
+the next one). Baseline commit `f4027e0`.
 
 ### Objective
 FEASIBILITY.md step A, one slice: stop the integration pipeline replacing or corrupting
@@ -951,10 +951,12 @@ roadmaps are reconciled. Resolving this collision belongs to the roadmap-reconci
 slice changes control-plane behaviour with no customer-repo, credential or cross-tenant path, and
 nothing resolves tenancy from these fields until B2.
 
-**Status: REVIEWED — fussion-reviewer PASS WITH FINDINGS, no BLOCKING finding; committed on
-branch `feat/b1-public-key-origins`, not merged. Not COMPLETED** until merged. Branch point
-`fb7d5b4` (cut from `fix/layout-overwrite`, which is itself unmerged — `main` is still at
-Phase 01).
+**Status: COMPLETED** — fussion-reviewer PASS WITH FINDINGS, no BLOCKING finding; committed as
+`f8cc086` and merged to `main` on 2026-09-12, along with `fix/layout-overwrite` (the §3.1 fix),
+which had been sitting unmerged. Both were fast-forwards; both branches are deleted. `main` had
+been stuck at Phase 01 while two branches stacked on top of it. From now on a slice merges to
+`main` as soon as the reviewer passes and the owner approves — `docs/DEVELOPMENT-WORKFLOW.md`
+§2.5.
 
 ### Objective
 FR-107: each website integration has a public client key and a set of registered allowed origins.
@@ -1037,10 +1039,15 @@ Checked against the approved plan, item by item:
 
 ### Blockers / Deferred
 Logged, not fixed — none is a defect in what this slice built:
-- **No Postgres verification of migration 0012.** Verified only on a throwaway SQLite database.
-  `backend/.env` points at the real dev `fussion_db`, which this slice did not touch; a Postgres
-  pass needs a scratch database. The dialect differences that matter are VARCHAR(255) enforcement
+- **No Postgres verification of migration 0012** *at the time of this commit*. Verified only on a
+  throwaway SQLite database. The dialect differences that matter are VARCHAR(255) enforcement
   (the source of finding 2, now fixed), native ENUM types, and `ALTER` vs. table-recreate.
+  Now a standing requirement: `CLAUDE.md` §9.1 requires every migration to be verified on both
+  SQLite and a scratch Postgres database that the check creates and drops.
+- **Later slice, not now: the test suite cannot run against Postgres.** `tests/conftest.py`
+  forces SQLite. It should accept a Postgres test-database URL by environment variable, so the
+  full suite can run against the production dialect in CI. Until then, "223 passed" is evidence
+  about SQLite only — which is exactly how B1's length bug stayed invisible.
 - **`batch_alter_table` on SQLite recreates `website_integrations` from reflection**, and whether
   the three `sa.Enum` CHECK constraints survive depends on SQLAlchemy's SQLite CHECK reflection.
   Dev/test only; Postgres does a direct `ALTER ... SET NOT NULL`.
