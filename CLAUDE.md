@@ -178,10 +178,10 @@ provider is the file-less `MockGitProvider` (§2) and the only generator is the
 deterministic patcher. Wiring a real provider — or adding the step-D CodingAgent — makes
 every one of them reachable.
 
-- **FR-096 protected paths are not enforced.** `widget_target_path =
-  ".github/workflows/deploy.yml"` passes `StaticValidator`, and the PR would prepend a JS
-  import to the workflow file. This breaks the protected-paths control (AGENT-ARCHITECTURE
-  §11 control 3, §9.1 "Protected paths untouched"). Self-inflicted rather than
+- **FR-096 protected paths are not enforced — violates invariant §4.9.**
+  `widget_target_path = ".github/workflows/deploy.yml"` passes `StaticValidator`, and the
+  PR would prepend a JS import to the workflow file. Also breaks AGENT-ARCHITECTURE §11
+  control 3 and §9.1 "Protected paths untouched". Self-inflicted rather than
   cross-tenant.
 - **Marker-pair discipline.** The validator strips any Fussion marker pair wherever it
   appears, so an edit wrapped in markers bypasses it, and a customer region that merely
@@ -229,6 +229,11 @@ Violating any of these is a blocking review failure, regardless of test results.
    approval.
 
 8. **Never modify a customer file without first reading its real contents.**
+
+9. **Protected paths are absolute.** No approved plan, configuration, or user-supplied
+   path may cause a write to `.env*`, `credentials/`, `.github/workflows/`,
+   `infrastructure/`, deployment configuration, authentication, payment, or database
+   schema files. (Phase 7 §7.13, AGENT-ARCHITECTURE §11 control 3, FR-096.)
 
 ---
 

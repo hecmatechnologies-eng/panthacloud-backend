@@ -49,7 +49,22 @@ carries stale assumptions from work already committed.
 
 ---
 
-## 2. Context hygiene
+## 2. Phased execution
+
+1. Before starting any step from FEASIBILITY §3, propose the slice breakdown first and
+   wait for my approval. Do not start implementing.
+
+2. Slice sizing rule: a slice is the smallest change that leaves the repo coherent,
+   tested and shippable — not smaller. Don't split a change into a commit that contains
+   untested dead code.
+
+3. Every slice declares its §9.0 rigour tier in the plan, before work starts.
+
+4. One slice per session. /clear between slices.
+
+---
+
+## 3. Context hygiene
 
 The agent's context is a resource with a cost. Treat it like one.
 
@@ -65,7 +80,7 @@ The agent's context is a resource with a cost. Treat it like one.
 
 ---
 
-## 3. Prompt patterns that work on this repository
+## 4. Prompt patterns that work on this repository
 
 **Start of a slice**
 
@@ -95,7 +110,7 @@ The agent's context is a resource with a cost. Treat it like one.
 
 ---
 
-## 4. Anti-patterns — each of these already happened here
+## 5. Anti-patterns — each of these already happened here
 
 | Anti-pattern | What it produced |
 |---|---|
@@ -112,7 +127,7 @@ written to do, not that it should do that.** That is what review is for.
 
 ---
 
-## 5. When to stop and think rather than prompt again
+## 6. When to stop and think rather than prompt again
 
 - The same fix has failed twice → the problem is upstream of what you're editing
 - The agent proposes touching a subsystem you didn't mention → the boundary is wrong, or
@@ -123,7 +138,7 @@ written to do, not that it should do that.** That is what review is for.
 
 ---
 
-## 6. Git discipline
+## 7. Git discipline
 
 - **Branch per slice**, merged after review passes.
 - **Small commits.** A commit touching migrations, endpoints, services and frontend is
@@ -134,7 +149,7 @@ written to do, not that it should do that.** That is what review is for.
 
 ---
 
-## 7. Definition of a good session
+## 8. Definition of a good session
 
 You can answer all of these afterwards:
 

@@ -904,6 +904,7 @@ Checked against the approved plan and the original prompt:
   Nothing goes near a real repository until it is empty. Logged under §9.0's stopping rule
   (not reachable by the code as it runs):
   - FR-096 protected paths not enforced (`.github/workflows/deploy.yml` passes validation)
+    — violates CLAUDE.md invariant §4.9, added after this slice's review
   - marker-pair discipline (framework match, pair count, own-line) — required before the
     step-D CodingAgent
   - `/plan` reports private-repo, wrong-branch and bad-token 404s as "file missing"
