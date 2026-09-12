@@ -874,13 +874,22 @@ async def test_pipeline_execution_commit_and_pr(client: AsyncClient) -> None:
     assert run_detail.status_code == 200
     assert run_detail.json()["id"] == run_id
 
-    # 7. Run diff: deliberately broken until CLAUDE.md §3.7 persists the change set. It used to
-    # re-derive the diff from a stub layout; generate_artifacts now requires the real content.
-    with pytest.raises(TypeError, match="existing_target_content"):
-        await client.get(
-            f"/api/v1/organizations/{org_id}/projects/{proj_id}/website-integrations/runs/{run_id}/diff",
-            headers=hdr,
-        )
+    # 7. Run diff: served from what the run recorded, never re-derived. Content is not persisted
+    # yet (CLAUDE.md §3.7), so the paths and actions are reported and the pull request carries the
+    # content. Re-deriving raised TypeError — a 500 on every successful run once the provider
+    # became real — and before that it showed a file the pull request never contained (§3.1).
+    diff_resp = await client.get(
+        f"/api/v1/organizations/{org_id}/projects/{proj_id}/website-integrations/runs/{run_id}/diff",
+        headers=hdr,
+    )
+    assert diff_resp.status_code == 200
+    diff_data = diff_resp.json()
+    by_path = {item["path"]: item for item in diff_data["files"]}
+    assert by_path["app/layout.tsx"]["action"] == "modify"
+    assert by_path["components/fussion/FussionAssistant.tsx"]["action"] == "create"
+    # Not the file's content: nothing here may be re-derived from the current configuration.
+    assert "FussionAssistant" not in by_path["components/fussion/FussionAssistant.tsx"]["diff"]
+    assert "pull request" in by_path["app/layout.tsx"]["diff"].lower()
 
     # 8. Get PR info
     pr_resp = await client.get(
@@ -1013,8 +1022,8 @@ class ConcurrentCommitGitProvider(MockGitProvider):
         repo: str,
         base_branch: str,
         new_branch: str,
+        base_sha: str,
         token: str | None = None,
-        **kwargs: object,
     ) -> dict:
         head = self.branches[(owner, repo, base_branch)]
         customer_sha = "commit_customer_edit_during_run"
@@ -1024,7 +1033,8 @@ class ConcurrentCommitGitProvider(MockGitProvider):
         }
         self.parents[customer_sha] = head
         self.branches[(owner, repo, base_branch)] = customer_sha
-        return await super().create_branch(owner, repo, base_branch, new_branch, token, **kwargs)
+        # base_sha is what Fussion read; the branch must come from it, not from the moving head.
+        return await super().create_branch(owner, repo, base_branch, new_branch, base_sha, token)
 
 
 @pytest.mark.asyncio

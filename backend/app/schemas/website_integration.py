@@ -5,6 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.origins import MAX_ORIGIN_LENGTH, normalize_origin
+from app.core.protected_paths import protected_reason
 from app.models.website_integration import (
     IntegrationRunStatus,
     WebsiteFramework,
@@ -34,6 +35,24 @@ class WebsiteIntegrationRead(BaseModel):
     updated_at: datetime
 
 
+def _reject_protected_target(path: str | None) -> str | None:
+    """Refuse a protected widget target at configuration time (FR-096, CLAUDE.md §4.9).
+
+    The pipeline and the validator both refuse it later. This is the earliest gate: without it the
+    user saves a configuration, `GET /plan` renders a plan promising to modify
+    `.github/workflows/deploy.yml`, and only the run — at the end — says no.
+    """
+    if path is None:
+        return None
+    reason = protected_reason(path)
+    if reason:
+        raise ValueError(
+            f"'{path}' is a protected path ({reason}). Fussion never writes there; point the "
+            "widget target at the application shell, such as app/layout.tsx or index.html."
+        )
+    return path
+
+
 class WebsiteIntegrationCreate(BaseModel):
     repository_owner: str = Field(..., min_length=1, max_length=255)
     repository_name: str = Field(..., min_length=1, max_length=255)
@@ -42,6 +61,8 @@ class WebsiteIntegrationCreate(BaseModel):
     website_root_dir: str = Field("/", max_length=255)
     widget_target_path: str = Field("app/layout.tsx", max_length=255)
     github_token: str | None = Field(None, max_length=500)
+
+    _check_target = field_validator("widget_target_path")(_reject_protected_target)
 
 
 class WebsiteIntegrationUpdate(BaseModel):
@@ -52,6 +73,8 @@ class WebsiteIntegrationUpdate(BaseModel):
     website_root_dir: str | None = Field(None, max_length=255)
     widget_target_path: str | None = Field(None, max_length=255)
     github_token: str | None = Field(None, max_length=500)
+
+    _check_target = field_validator("widget_target_path")(_reject_protected_target)
 
 
 class AllowedOriginCreate(BaseModel):

@@ -1,7 +1,13 @@
+import posixpath
 from typing import Any
 
 from app.models.website_integration import WebsiteFramework
 from app.schemas.website_integration import IntegrationPlanPayload, TargetStatus
+from app.services.integration.artifacts import (
+    HTML_SUFFIXES,
+    WidgetInjectionError,
+    source_root_for,
+)
 
 
 class IntegrationPlanner:
@@ -27,16 +33,31 @@ class IntegrationPlanner:
         target_path = widget_target_path
 
         if framework == WebsiteFramework.REACT_NEXTJS:
+            # The same derivation the generator uses, so the plan declares the paths that are
+            # actually written. A root-relative guess put generated files outside the plan on any
+            # src/ layout, which validation correctly refuses.
+            try:
+                root = source_root_for(target_path)
+            except WidgetInjectionError as exc:
+                root = ""
+                warnings.append(str(exc))
             files_to_create = [
-                "components/fussion/FussionAssistant.tsx",
-                "lib/fussion-assistant.ts",
+                f"{root}components/fussion/FussionAssistant.tsx",
+                f"{root}lib/fussion-assistant.ts",
             ]
             files_to_modify = [target_path]
         elif framework == WebsiteFramework.GENERIC_HTML:
+            # Beside the page, as the generator writes it: an absolute /fussion-assistant.js 404s
+            # whenever the page is not served from the repository root.
             files_to_create = [
-                "fussion-assistant.js",
+                posixpath.join(posixpath.dirname(target_path), "fussion-assistant.js"),
             ]
             files_to_modify = [target_path]
+            if not target_path.lower().endswith(HTML_SUFFIXES):
+                warnings.append(
+                    f"'{target_path}' is not an HTML file. For a static site the widget target "
+                    "must be the page that carries the assistant, such as index.html."
+                )
 
         # Invariant checks & warnings
         # The widget target is always a modification: Fussion never creates an application shell.

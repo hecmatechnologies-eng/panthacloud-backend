@@ -6,6 +6,7 @@ from urllib.parse import quote
 
 import httpx
 
+from app.core.config import settings
 from app.services.integration.git_provider import GitProvider
 
 logger = logging.getLogger("fussion.integration.github")
@@ -49,6 +50,29 @@ def _raise_for_status(resp: httpx.Response, action: str) -> None:
             f"GitHub authentication error while {action}: {resp.text}", resp.status_code
         )
     raise GitHubAPIError(f"GitHub API error while {action}: {resp.text}", resp.status_code)
+
+
+def _json_field(resp: httpx.Response, keys: tuple[str, ...], what: str) -> str:
+    """Read a nested field from a GitHub response, classifying the failure rather than KeyError-ing.
+
+    The write path used to index straight into `.json()`, so a 403 or a 422 surfaced to the user as
+    `Integration pipeline execution failed: 'sha'`, naming nothing and suggesting nothing.
+    """
+    _raise_for_status(resp, f"reading the {what}")
+    value: object = resp.json()
+    for key in keys:
+        if not isinstance(value, dict) or key not in value:
+            raise GitHubAPIError(
+                f"GitHub returned an unexpected response for the {what}: '{key}' is missing.",
+                resp.status_code,
+            )
+        value = value[key]
+    if not isinstance(value, str):
+        raise GitHubAPIError(
+            f"GitHub returned an unexpected {what}: expected a string, got {type(value).__name__}.",
+            resp.status_code,
+        )
+    return value
 
 
 def assert_safe_repo_path(path: str) -> None:
@@ -176,12 +200,11 @@ class GitHubProvider(GitProvider):
         repo: str,
         base_branch: str,
         new_branch: str,
+        base_sha: str,
         token: str | None = None,
-        base_sha: str | None = None,
     ) -> dict[str, Any]:
-        # 1. Branch from the pinned commit, or from the base branch's current head
-        if base_sha is None:
-            base_sha = await self.get_branch_head(owner, repo, base_branch, token)
+        # Branch from the commit the caller read. Required, never re-resolved here: that is the
+        # read-then-branch race of CLAUDE.md §3.1.
 
         async with httpx.AsyncClient(transport=self._transport) as client:
             # 2. Create new reference
@@ -206,19 +229,42 @@ class GitHubProvider(GitProvider):
         files: dict[str, str],
         token: str | None = None,
     ) -> str:
+        for path in files:
+            # Every path goes through the same containment check as a read. Today these are the
+            # validated target plus Fussion's own files; a step-D ChangeSet arrives here too.
+            assert_safe_repo_path(path)
+
         async with httpx.AsyncClient(transport=self._transport) as client:
             headers = self._headers(token)
+
+            # 0. Never commit to the repository's default branch (CLAUDE.md §4.7). The mock has
+            # always refused this; the real provider did not, which made the fake stricter than
+            # the thing it stands in for, so no test could catch a caller that got it wrong.
+            repo_resp = await client.get(
+                f"{self.base_url}/repos/{owner}/{repo}", headers=headers, timeout=15.0
+            )
+            # Fail closed: if the default branch cannot be read, the guard cannot be satisfied.
+            # `MockGitProvider` refuses unconditionally, so skipping the check on a non-200 would
+            # leave the fake stricter than the real provider on exactly the failure path.
+            _raise_for_status(repo_resp, "reading the repository's default branch")
+            if repo_resp.json().get("default_branch") == branch:
+                raise GitHubAPIError(
+                    f"Refusing to commit directly to the default branch '{branch}'. Fussion "
+                    "commits to an integration branch and opens a pull request.",
+                    422,
+                )
+
             # 1. Get branch commit SHA
             ref_url = f"{self.base_url}/repos/{owner}/{repo}/git/ref/heads/{branch}"
             ref_resp = await client.get(ref_url, headers=headers, timeout=15.0)
             if ref_resp.status_code != 200:
                 raise GitHubAPIError(f"Branch '{branch}' not found: {ref_resp.text}", ref_resp.status_code)
-            latest_commit_sha = ref_resp.json()["object"]["sha"]
+            latest_commit_sha = _json_field(ref_resp, ("object", "sha"), "branch reference")
 
             # 2. Get latest commit to find base tree
             commit_url = f"{self.base_url}/repos/{owner}/{repo}/git/commits/{latest_commit_sha}"
             commit_resp = await client.get(commit_url, headers=headers, timeout=15.0)
-            base_tree_sha = commit_resp.json()["tree"]["sha"]
+            base_tree_sha = _json_field(commit_resp, ("tree", "sha"), "base commit")
 
             # 3. Create blobs & tree items
             tree_items = []
@@ -229,7 +275,7 @@ class GitHubProvider(GitProvider):
                     json={"content": content, "encoding": "utf-8"},
                     timeout=15.0,
                 )
-                blob_sha = blob_resp.json()["sha"]
+                blob_sha = _json_field(blob_resp, ("sha",), f"blob for '{path}'")
                 tree_items.append(
                     {"path": path, "mode": "100644", "type": "blob", "sha": blob_sha}
                 )
@@ -241,7 +287,7 @@ class GitHubProvider(GitProvider):
                 json={"base_tree": base_tree_sha, "tree": tree_items},
                 timeout=15.0,
             )
-            new_tree_sha = tree_resp.json()["sha"]
+            new_tree_sha = _json_field(tree_resp, ("sha",), "tree")
 
             # 5. Create new commit
             new_commit_resp = await client.post(
@@ -254,7 +300,7 @@ class GitHubProvider(GitProvider):
                 },
                 timeout=15.0,
             )
-            new_commit_sha = new_commit_resp.json()["sha"]
+            new_commit_sha = _json_field(new_commit_resp, ("sha",), "commit")
 
             # 6. Update reference
             patch_resp = await client.patch(
@@ -395,13 +441,12 @@ class MockGitProvider(GitProvider):
         repo: str,
         base_branch: str,
         new_branch: str,
+        base_sha: str,
         token: str | None = None,
-        base_sha: str | None = None,
     ) -> dict[str, Any]:
         base_key = (owner, repo, base_branch)
         if base_key not in self.branches:
             raise GitHubAPIError(f"Base branch '{base_branch}' not found.", 404)
-        base_sha = base_sha or self.branches[base_key]
         self.branches[(owner, repo, new_branch)] = base_sha
         return {
             "ref": f"refs/heads/{new_branch}",
@@ -484,8 +529,47 @@ class MockGitProvider(GitProvider):
         return self.pull_requests[key]
 
 
-# Global instance provider: defaults to MockGitProvider for local/dev/tests unless overridden
-_current_git_provider: GitProvider = MockGitProvider()
+class _UnconfiguredGitProvider:
+    """What a process gets before `configure_git_provider()` runs. Every method refuses.
+
+    The default used to be a `MockGitProvider`, which *fabricates* a commit SHA and a plausible
+    pull-request URL. Any process that skipped `lifespan` — a future worker — would therefore
+    record `PR_CREATED` with a dead link and no error: a silent fallback, which §4.10 prohibits
+    outright. Failing here makes "the mock is only for tests" structural instead of conventional.
+
+    Deliberately not a `GitProvider` subclass: the Protocol's method bodies are `...`, so an
+    unoverridden method would return `None` and `__getattr__` would never be consulted — a silent
+    wrong answer instead of a loud refusal. Each method is spelled out for that reason.
+    """
+
+    _MESSAGE = (
+        "No git provider is configured in this process. Call configure_git_provider() during "
+        "startup, or set_git_provider(MockGitProvider()) in a test."
+    )
+
+    async def _refuse(self, *_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError(self._MESSAGE)
+
+    # `async def`, matching the Protocol: a sync raise would also surface, but an awaiting caller
+    # should not have to care which kind of callable refused it.
+    get_repository = _refuse
+    get_file_contents = _refuse
+    get_branch_head = _refuse
+    create_branch = _refuse
+    commit_files = _refuse
+    create_pull_request = _refuse
+    get_pull_request = _refuse
+
+
+def _default_provider() -> GitProvider:
+    """Tests and local development get the mock; anything else must configure a provider."""
+    if settings.may_generate_dev_keys:
+        return MockGitProvider()
+    return _UnconfiguredGitProvider()
+
+
+# Replaced at startup by configure_git_provider(), and by tests with an explicit mock.
+_current_git_provider: GitProvider = _default_provider()
 
 
 def get_git_provider() -> GitProvider:

@@ -31,10 +31,14 @@ class GitProvider(Protocol):
         repo: str,
         base_branch: str,
         new_branch: str,
+        base_sha: str,
         token: str | None = None,
-        base_sha: str | None = None,
     ) -> dict[str, Any]:
-        """Create new_branch at base_sha, or at base_branch's current head if base_sha is None."""
+        """Create new_branch at base_sha — the commit the caller has already read.
+
+        `base_sha` is required on purpose: re-resolving the branch head here would reintroduce
+        the read-then-branch race that silently reverted a customer commit (CLAUDE.md §3.1).
+        """
         ...
 
     async def commit_files(

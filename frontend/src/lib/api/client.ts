@@ -38,6 +38,30 @@ export interface RequestOptions extends RequestInit {
   token?: string;
 }
 
+/**
+ * A validation failure arrives as a list of issues, not a string. Passing the list straight to
+ * `new Error(...)` rendered "[object Object]" in the UI, so a carefully worded refusal — for
+ * example, why a widget target is a protected path — never reached the user.
+ */
+function flattenValidationIssues(issues: unknown): string | null {
+  if (!Array.isArray(issues) || issues.length === 0) return null;
+  const messages = issues
+    .map((issue) =>
+      typeof issue === 'string'
+        ? issue
+        : typeof issue === 'object' && issue !== null && 'msg' in issue
+          ? String((issue as { msg: unknown }).msg).replace(/^Value error,\s*/, '')
+          : null,
+    )
+    .filter((message): message is string => Boolean(message));
+  return messages.length > 0 ? messages.join(' ') : null;
+}
+
+function flattenDetail(detail: unknown): string | null {
+  if (typeof detail === 'string') return detail;
+  return flattenValidationIssues(detail);
+}
+
 export async function fetchApi<T>(
   endpoint: string,
   options: RequestOptions = {}
@@ -72,7 +96,8 @@ export async function fetchApi<T>(
     }
 
     const message =
-      errorData?.detail ||
+      flattenDetail(errorData?.detail) ||
+      flattenValidationIssues(errorData?.error?.details) ||
       errorData?.error?.message ||
       `Request failed with status ${response.status}`;
     const code = errorData?.error?.code;

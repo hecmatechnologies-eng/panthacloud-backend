@@ -1,7 +1,7 @@
 import logging
 import uuid
 from datetime import UTC, datetime
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -41,7 +41,6 @@ from app.schemas.website_integration import (
     WebsiteIntegrationUpdate,
 )
 from app.services.audit import record_audit
-from app.services.integration.artifacts import generate_artifacts
 from app.services.integration.github import (
     GitHubAPIError,
     GitHubUnavailableError,
@@ -343,26 +342,54 @@ async def get_integration_plan(
     kb = (await db.execute(stmt_kb)).scalar_one_or_none()
     has_kb = bool(kb and len(kb.documents) > 0)
 
+    # Resolve the branch head *first*, then read the file at that SHA — the same order the run
+    # uses. Reading the path directly made a private repository, a wrong default branch and a bad
+    # token all arrive as a 404, which the preview then reported as "file missing", sending the
+    # user to fix a widget path that was never the problem (CLAUDE.md §3).
+    #
     # A transient GitHub failure (unreachable, rate-limited) degrades the preview to "unknown";
     # the run re-checks before modifying anything. Any other failure is a configuration problem
     # the user must fix, so it is reported with its cause.
     target_status: TargetStatus = "unknown"
+    provider = get_git_provider()
+    token = _decrypt_github_token(integration)
     try:
-        target_content = await get_git_provider().get_file_contents(
+        head_sha = await provider.get_branch_head(
             integration.repository_owner,
             integration.repository_name,
-            integration.widget_target_path,
-            ref=integration.default_branch,
-            token=_decrypt_github_token(integration),
+            integration.default_branch,
+            token=token,
         )
-        target_status = "exists" if target_content is not None else "missing"
     except GitHubUnavailableError as exc:
-        logger.warning(f"Could not verify widget target for integration {integration.id}: {exc}")
+        logger.warning(f"Could not resolve branch head for integration {integration.id}: {exc}")
+        head_sha = None
     except GitHubAPIError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Cannot read the widget target: {exc}",
+            detail=(
+                f"Cannot read repository '{integration.repository_owner}/"
+                f"{integration.repository_name}' branch '{integration.default_branch}': {exc} "
+                "Check the repository name, the default branch, and that the token can read it."
+            ),
         ) from exc
+
+    if head_sha is not None:
+        try:
+            target_content = await provider.get_file_contents(
+                integration.repository_owner,
+                integration.repository_name,
+                integration.widget_target_path,
+                ref=head_sha,
+                token=token,
+            )
+            target_status = "exists" if target_content is not None else "missing"
+        except GitHubUnavailableError as exc:
+            logger.warning(f"Could not verify widget target for integration {integration.id}: {exc}")
+        except GitHubAPIError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cannot read the widget target: {exc}",
+            ) from exc
 
     return IntegrationPlanner.generate_plan(
         framework=integration.framework,
@@ -535,42 +562,45 @@ async def get_run_diff(
             detail="Integration run not found.",
         )
 
-    # Re-generate deterministic diffs from stored plan
-    stmt_asst = select(Assistant).where(Assistant.project_id == project.id)
-    assistant = (await db.execute(stmt_asst)).scalar_one_or_none()
-    asst_data: dict[str, Any] = {}
-    if assistant:
-        asst_data = {
-            "id": str(assistant.id),
-            "name": assistant.name,
-            "welcome_message": assistant.welcome_message,
-            "brand_color": assistant.brand_color,
-            "text_color": assistant.text_color,
-            "position": assistant.position.value if hasattr(assistant.position, "value") else str(assistant.position),
-            "avatar_url": assistant.avatar_url,
-            "starter_prompt": assistant.starter_prompt,
-            "is_enabled": assistant.is_enabled,
-        }
+    # Served from what this run actually recorded, never re-derived. Re-deriving from the *current*
+    # assistant configuration and a stub layout is what showed the Studio a file the pull request
+    # never contained (CLAUDE.md §3.1), and re-deriving content now would repeat that: the run's
+    # inputs were the repository at a pinned commit, which is not what the config says today.
+    #
+    # File *content* is not persisted yet (§3.7), so this reports the paths and actions the run
+    # committed and points at the pull request for the content itself. Raising a TypeError here —
+    # which is what re-deriving did — meant a 500 on every successful run.
+    plan_summary = run.plan_summary or {}
+    created = [str(path) for path in plan_summary.get("files_to_create", [])]
+    modified = [str(path) for path in plan_summary.get("files_to_modify", [])]
 
-    generated_files = generate_artifacts(
-        project_id=project.id,
-        assistant_data=asst_data,
-        framework=integration.framework,
-        widget_target_path=integration.widget_target_path,
-    )
+    diff_items = [
+        DiffFileItem(
+            path=path,
+            action=action,
+            diff=(
+                "Content is not retained for completed runs. Review the pull request for the exact "
+                "diff Fussion committed."
+            ),
+        )
+        for action, paths in (("create", created), ("modify", modified))
+        for path in paths
+    ]
 
-    diff_items: list[DiffFileItem] = []
-    for path, content in generated_files.items():
-        is_modified = path == integration.widget_target_path
-        diff_items.append(
-            DiffFileItem(
-                path=path,
-                action="modify" if is_modified else "create",
-                diff=content,
-            )
+    if not diff_items:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This run recorded no file plan, so there is nothing to show. It was refused or "
+                "failed before generating changes; see the run's error message."
+            ),
         )
 
-    summary = f"{len(diff_items)} file(s) generated for branch {run.branch_name}"
+    base_sha = str(plan_summary.get("base_sha", ""))[:12]
+    summary = (
+        f"{len(diff_items)} file(s) on branch {run.branch_name}"
+        + (f", built on commit {base_sha}" if base_sha else "")
+    )
     return RunDiffPayload(run_id=run.id, files=diff_items, summary=summary)
 
 
