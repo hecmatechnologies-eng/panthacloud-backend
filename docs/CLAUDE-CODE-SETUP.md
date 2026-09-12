@@ -72,15 +72,19 @@ The device bridge cannot write to `.claude/`, so create these by hand.
       "Bash(rm -rf*)",
       "Read(./backend/.env)",
       "Read(./frontend/.env.local)",
-      "Read(./.env)"
+      "Read(./.env)",
+      "Read(./backend/.dev-secrets.json)",
+      "Read(./.dev-secrets.json)"
     ]
   }
 }
 ```
 
-The `deny` entries on `.env` matter more than they look: `SECRET_DEV_ENCRYPTION_KEY` is
-currently the live key protecting stored GitHub tokens, and nothing should pull those
-files into a context window.
+These `deny` entries matter more than they look. The live key protecting stored GitHub tokens is
+whatever `SECRET_ENCRYPTION_KEY` is set to, and in development that is the generated
+`backend/.dev-secrets.json` (`app/core/dev_secrets.py`) — so it belongs on this list alongside the
+`.env` files. Nothing should pull any of them into a context window. Note there is no checked-in
+`.claude/settings.json` in this repository yet, so these are instructions, not an enforced policy.
 
 ---
 

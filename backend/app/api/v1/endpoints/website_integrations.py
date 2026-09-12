@@ -63,6 +63,14 @@ def _decrypt_github_token(integration: WebsiteIntegration) -> str | None:
     try:
         return secret_store.decrypt(integration.encrypted_secrets).get("github_token")
     except SecretStoreError:
+        # Reachable whenever the encryption key changes — e.g. development keys are now generated
+        # per installation, so ciphertext stored under the old hardcoded key cannot be read. The
+        # caller proceeds unauthenticated, which fails confusingly, so say why here.
+        logger.warning(
+            "Stored credentials for integration %s could not be decrypted with the current "
+            "SECRET_ENCRYPTION_KEY; the token must be re-entered.",
+            integration.id,
+        )
         return None
 
 

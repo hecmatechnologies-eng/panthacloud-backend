@@ -73,7 +73,9 @@ async def add_allowed_origin(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> AllowedOriginRead:
     # payload.origin is already canonical: AllowedOriginCreate normalises it.
-    existing_stmt = select(AllowedOrigin.origin).where(AllowedOrigin.integration_id == integration.id)
+    existing_stmt = select(AllowedOrigin.origin).where(
+        AllowedOrigin.integration_id == integration.id
+    )
     existing = set((await db.execute(existing_stmt)).scalars().all())
     if payload.origin in existing:
         raise HTTPException(

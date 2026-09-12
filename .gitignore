@@ -3,6 +3,9 @@
 .env.*
 !.env.example
 *.local
+# Per-installation development keys, generated on first use (app/core/dev_secrets.py).
+.dev-secrets.json
+*.dev-secrets.json
 
 # Python
 __pycache__/

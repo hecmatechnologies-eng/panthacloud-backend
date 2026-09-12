@@ -15,7 +15,8 @@ if TYPE_CHECKING:
 class AllowedOrigin(BaseModel):
     """A site origin registered for a website integration's public key (FR-107).
 
-    ``origin`` is stored in the canonical form produced by ``app.core.origins.normalize_origin``. The same origin may be registered
+    ``origin`` is stored in the canonical form produced by
+    ``app.core.origins.normalize_origin``. The same origin may be registered
     under different integrations: tenancy comes from the public key, the origin only validates it.
     """
 

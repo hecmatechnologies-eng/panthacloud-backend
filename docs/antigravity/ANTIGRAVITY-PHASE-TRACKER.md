@@ -15,7 +15,7 @@ third, different numbering and is archived under `docs/archive/`.
 
 | Step | Scope | Status |
 | :--- | :--- | :--- |
-| **A. Truth & safety** | layout-overwrite fix, workspace clone+read, one roadmap, key removal, 05–08 decision | **IN PROGRESS** — layout-overwrite fix done (`415d5e3`); roadmap reconciliation done (this commit); key removal, workspace clone+read and the 05–08 decision remain, and have no slice breakdown yet |
+| **A. Truth & safety** | layout-overwrite fix, workspace clone+read, one roadmap, key removal, 05–08 decision | **IN PROGRESS** — layout-overwrite fix (`415d5e3`), roadmap reconciliation (`17a9c79`) and dev-secret removal from source done. Remaining items and their triggers are tabled in `CLAUDE.md` §3: `@/` alias before B8, the 05–08 decision before step C, `SandboxProvider` with B5 or later, and the git-history rewrite before the first push |
 | **B. Runtime plane** | `STEP-B-SLICES.md` B1–B8 | **IN PROGRESS** — B1 done (`f8cc086`); B2 next |
 | **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | NOT STARTED — no slice breakdown yet |
 | **D. Coding agent** | write capability, generated-code scan, ChangeSet → PR, bounded repair | NOT STARTED — no slice breakdown yet |
@@ -1153,3 +1153,115 @@ Checked against the proposed scope: none in the work itself. Two notes —
 - `grep` for `MVP-IMPLEMENTATION-ROADMAP` outside `docs/archive/`: the only remaining mentions
   are inside historical log entries in this file, which describe what was true then.
 
+---
+
+## Step A · Slice — remove the development secrets from source
+
+**Rigour tier: 2 — Standard** (CLAUDE.md §9.0), declared before work started. Credential
+*plumbing*, not a credential path: no customer-repo write, no tenancy, no agent, prompt, model or
+tool surface. The reviewer independently confirmed the tier.
+**Status: COMPLETED** — fussion-reviewer PASS WITH FINDINGS, no BLOCKING finding; merged to `main`.
+
+### Objective
+`FEASIBILITY.md` step A: `SECRET_DEV_ENCRYPTION_KEY` and `JWT_DEV_SECRET` out of
+`app/core/config.py` (CLAUDE.md §3.2). Development keys from the environment or a generated,
+gitignored file; production behaviour unchanged and still failing loudly. Done before B2 because
+the history-rewrite cost grows with every commit.
+
+### Completed Work
+- **`app/core/dev_secrets.py`**: `load_or_create_dev_secrets` generates `jwt_secret`
+  (`token_urlsafe(48)`) and `encryption_key` (`Fernet.generate_key()`) on first use, one file per
+  installation. Exclusive create with mode `0600` at creation rather than a chmod afterwards, so
+  there is no window in which the key is world-readable — on POSIX. On Windows file modes do not
+  map to ACLs, and the docstring says so rather than implying protection that does not exist. A
+  concurrent process's file is adopted, never overwritten. A corrupt, incomplete or non-Fernet
+  file raises an error naming the file and saying to delete it.
+- **`config.py`**: both literals gone. `DEV_SECRETS_FILE` defaults to an absolute path anchored to
+  the `backend` package, *not* the working directory — CLAUDE.md §8 documents two CWDs for one
+  installation, and a relative default silently hands them different keys. Keys are generated only
+  for development, dev, local, test and testing; any other `APP_ENV` (staging, unset, a typo) is
+  refused rather than handed a per-process random key.
+- **Production still refuses the leaked pair**, now by SHA-256 digest, so deleting the literals did
+  not also delete the check that stops a stale `.env` being promoted to production.
+- **`backend/scripts/verify_migration.py` plus `scripts/seeds/`**: the §9.1 migration rule made
+  executable — upgrade, downgrade, upgrade on SQLite *and* on a scratch Postgres database it
+  creates and drops, comparing schema snapshots so an asymmetric or lossy migration fails there.
+  It uses a `fussion_migcheck` role (LOGIN CREATEDB, not superuser) via libpq's password file;
+  never reads `backend/.env`, never touches `fussion_db`, never prints a connection string. Each
+  dialect runs in its own interpreter, because `Settings` is built at import and the second dialect
+  would otherwise migrate the first one's database — a bug this script's own first run exposed.
+- **Migration 0012 is now verified on Postgres too**, seeded with pre-existing rows.
+- Secondary: a failed credential decryption is logged rather than silently swallowed (reachable now
+  that dev keys differ per installation); `conftest.py` assigns per-run keys so no test reads or
+  writes a developer's file; `.gitignore`, `backend/.env.example` and `CLAUDE-CODE-SETUP.md`
+  updated — the last still described `SECRET_DEV_ENCRYPTION_KEY` as the live key.
+
+### Architectural & Technology Decisions
+1. A generated per-installation file rather than a committed placeholder: a default in source is a
+   default that ships, which is how this hazard was created.
+2. Known-compromised values are denied by digest, not plaintext. The plaintexts are already public
+   in `f4027e0`, so the digests leak nothing, and this keeps the check without keeping the secret.
+3. `DEV_SECRETS_FILE` must end with `.dev-secrets.json`, the name `.gitignore` covers, so
+   redirecting it cannot produce a committable secret.
+4. Generation is an allowlist of environments, not "anything that is not production". A denylist
+   would hand staging a fresh key per replica: 401 loops and unreadable ciphertext.
+
+### Review history
+One round (Tier 2 gate) — **PASS WITH FINDINGS**, no BLOCKING finding. All five SHOULD FIX items
+were defects in what this slice built, and are fixed here with tests:
+1. **The test file re-added both leaked plaintexts** — in the very commit that removes them, and
+   the guard test scanned `app/` only, so it structurally could not see its own file. The
+   plaintexts are gone; the guard now scans app, tests, alembic, scripts and docs; the denial
+   mechanism is exercised through a planted stand-in digest instead.
+2. Digests were restated in the test — now imported from `config`, so a third entry cannot leave
+   the guard checking only the old two.
+3. `DEV_SECRETS_FILE` was relative to the working directory (decision above).
+4. `chmod` after writing left a readable window, and does nothing on Windows.
+5. An unrecognised `APP_ENV` generated ephemeral keys (decision above).
+
+Four CONSIDER items were also taken: Fernet validation inside `_read`, the gitignore-coupling
+guard, `conftest` assignment instead of `setdefault`, and the stale `CLAUDE-CODE-SETUP.md` text
+plus deny entries for the new file.
+
+### Deviations
+Checked against the owner's instruction and the plan:
+- **Scope grew twice, both deliberately.** `backend/scripts/verify_migration.py` and its seed
+  module are the owner's separate instruction (promote the Postgres check, reference it from §9.1),
+  landed in this commit rather than a third one. The review fixes then widened the diff again.
+- `app/core/errors.py`, `pyproject.toml` and `uv.lock` are **not** in this commit; they belong to
+  B1 (`f8cc086`).
+- Two documented realities rather than fixes: on Windows the generated file is not ACL-protected,
+  and one installation has two documented working directories, which is why the default is
+  anchored to the package.
+- The `CLAUDE.md` §3 step-A table asserts this item done; it lands in the same commit as the code,
+  not ahead of it. The reviewer caught the tracker lagging while `CLAUDE.md` already claimed
+  completion — exactly the §10 pattern — which is why this entry exists.
+
+### Blockers / Deferred
+- **The git-history rewrite is unchanged, and still the hard blocker on the first push.** Both
+  values remain in `f4027e0`, and every commit makes the rewrite larger.
+- **A development database still holding tokens encrypted under the old key cannot read them.**
+  Re-enter the token, or set `SECRET_ENCRYPTION_KEY` to the old value accepting that it is
+  compromised. The failure is now logged, but the *user-facing* message still says "fix your widget
+  path" — the `GET /plan` hazard already logged in CLAUDE.md §3.
+- **No entropy floor on production keys.** `JWT_SECRET_KEY=q` is accepted, and the digest denylist
+  is exact-match, so a leaked value with a character appended also passes. The error messages no
+  longer claim otherwise. A length or entropy check is its own slice.
+- **`ruff` does not enforce the declared `line-length = 100`**: no `[tool.ruff.lint] select` is
+  configured, so `E501` is not in the default rule set, and "ruff clean" is weaker than it reads.
+  Enabling it surfaces **360** pre-existing violations, so it is its own cleanup slice; the lines
+  this slice and B1 added were wrapped by hand.
+- **`is_production` is still a two-string check** on the database-URL path, so an unrecognised
+  `APP_ENV` still falls back to SQLite. Narrowed for keys here, not for the database.
+- Three modules still carry private `_record_audit` copies (from B1).
+
+### Verification (2026-09-12)
+- Ruff: `All checks passed!` across `backend/app backend/tests backend/scripts`.
+- Backend, from the repository root: **254 passed** (238 before the review fixes, then 16 further
+  tests for the fixes). Red first: 3 failed and 5 errored before the code existed.
+- Migration 0012 via `backend/scripts/verify_migration.py --seed ...`: **SQLite and Postgres both
+  green**, scratch database created and dropped, none left behind.
+- Smoke test outside the suite: JWT and Fernet round-trips against a generated file, and the key is
+  not the leaked one.
+- Frontend: **not run, and not claimed** — no frontend file is in this diff.
+- Evals: none exist yet.

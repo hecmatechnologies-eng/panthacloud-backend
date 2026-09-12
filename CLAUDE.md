@@ -140,17 +140,21 @@ before any real question-answering ships.
    - `generate_artifacts` has no stub fallback; it cannot build a customer file without the
      real content.
 
-2. **`SECRET_DEV_ENCRYPTION_KEY` is hardcoded in `app/core/config.py`.** In development
-   it is the actual key protecting stored GitHub tokens. It (and `JWT_DEV_SECRET`) entered
-   git history in the baseline commit `f4027e0` (2026-09-11). **Hard blocker on first
-   push:** before adding any remote, either rewrite history to remove them, or treat both as
-   compromised — rotate them and re-encrypt stored tokens. Moving them out of source alone
-   does not fix this.
+2. **The leaked dev secrets are out of source; they are still in git history.**
+   `SECRET_DEV_ENCRYPTION_KEY` and `JWT_DEV_SECRET` are gone from `app/core/config.py`
+   (2026-09-12). Development keys are now generated per installation into a gitignored
+   `.dev-secrets.json` (`app/core/dev_secrets.py`), or supplied by the environment; production
+   still refuses to start without real values, and now rejects the two leaked ones by hash.
 
-   `f4027e0` is now in `main`'s history (merged 2026-09-12), and **every commit added on top
-   makes the rewrite larger** — a rebase-and-rewrite has to replay all of them. This does not
-   change the decision above (still a blocker on the first push, not on local work); it does
-   mean the key-removal slice gets more expensive the longer it waits.
+   **Still a hard blocker on first push:** both values entered git history in the baseline
+   commit `f4027e0` (2026-09-11), which is now in `main`. Before adding any remote, either
+   rewrite history or treat both as compromised and rotate anything they protected. **Every
+   commit added on top makes the rewrite larger.**
+
+   Consequence to expect locally: a development database still holding GitHub tokens encrypted
+   under the old hardcoded key cannot decrypt them. The token must be re-entered — or set
+   `SECRET_ENCRYPTION_KEY` to the old value in `backend/.env` for continuity, accepting that it
+   is a compromised key. A failed decryption is logged rather than silently ignored.
 
 3. **Generated import paths assume repo root.** Files are committed to `components/` and
    `lib/` while the component imports `@/components/...`. Any repo using a `src/` layout
@@ -181,6 +185,19 @@ before any real question-answering ships.
    gone and `generate_artifacts` now requires the real content, so the endpoint raises
    `TypeError` (500) — left that way on purpose rather than papered over. Fix: persist the
    generated change set on the `IntegrationRun` and serve that; do not re-derive it.
+
+### Remaining step-A items, and what each one blocks
+
+Step A is "truth & safety" (`docs/FEASIBILITY.md` §3). These are what is left of it. Each has a
+trigger rather than a date: do it before the thing it blocks, not "eventually". Four items with
+named triggers do not need a document of their own.
+
+| Item | Hazard | Trigger — do it before | Why then |
+|---|---|---|---|
+| ~~Remove the leaked dev secrets from source~~ | §3.2 | ~~B2~~ | **Done 2026-09-12.** The history rewrite remains, and still grows with every commit. |
+| `@/` alias vs `src/` layout — generated imports assume repo root | §3.3 | **B8** (real widget) | B8 is the first slice whose output has to build in a customer's repo. Any `src/` layout gets a build failure in the PR. |
+| Phases 05–08: repurpose or retire | §3.5 | **step C** | Step C builds the analyst. Either its deterministic detection reuses `discovery.py` or that subsystem goes; deciding after C is built means building it twice. |
+| `SandboxManager` rename + `SandboxProvider` Protocol | §2 ("no real sandbox") | **with B5 or later** | Nothing executes customer code yet, and the name claims otherwise. The Protocol is cheap once a second implementation is plausible; before that it is speculative. |
 
 ### Blockers on wiring `GitHubProvider` in
 
@@ -428,10 +445,13 @@ only if a finding shows the change actually has Tier 1 reach.
 - [ ] No new `if framework ==` branch in core code
 - [ ] Tenancy derived from `ExecutionContext`, never from a model-supplied value
 - [ ] Alembic migration verified `upgrade → downgrade → upgrade` on **both** SQLite **and** a
-      scratch Postgres database the check creates and drops — never `fussion_db`. SQLite is
-      permissive about precisely what Postgres enforces: B1 shipped a value that overflowed a
-      `String(255)` column, invisible on SQLite and a 500 on Postgres. Production is Postgres by
-      contract (`config.py` refuses SQLite there), and pgvector will be Postgres-only.
+      scratch Postgres database the check creates and drops — never `fussion_db`:
+      `backend/.venv/Scripts/python.exe backend/scripts/verify_migration.py`, plus
+      `--seed backend/scripts/seeds/<revision>.py` whenever the migration backfills or alters
+      existing rows (write that seed module; a backfill is not verified without pre-existing rows).
+      SQLite is permissive about precisely what Postgres enforces: B1 shipped a value that
+      overflowed a `String(255)` column, invisible on SQLite and a 500 on Postgres. Production is
+      Postgres by contract (`config.py` refuses SQLite there), and pgvector will be Postgres-only.
 - [ ] Cross-tenant access returns 404, not 403 (anti-enumeration)
 - [ ] No secret in code, logs, prompts, commits, or browser storage
 - [ ] `ANTIGRAVITY-PHASE-TRACKER.md` updated in the same commit as the work
