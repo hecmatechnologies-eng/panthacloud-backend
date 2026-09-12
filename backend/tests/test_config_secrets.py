@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from cryptography.fernet import Fernet
 
-# _COMPROMISED_VALUE_HASHES: the digests of the values that leaked in baseline commit f4027e0,
+# _COMPROMISED_VALUE_HASHES: the digests of the values that leaked in baseline commit 1034f4a,
 # imported rather than restated — one list, so adding a third compromised value cannot leave this
 # guard checking only the old two. The plaintexts appear nowhere in this repository, this test
 # included.

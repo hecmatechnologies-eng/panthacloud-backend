@@ -21,7 +21,7 @@ DEFAULT_DEV_SECRETS_FILE = str(Path(__file__).resolve().parents[2] / ".dev-secre
 _KEY_GENERATING_ENVIRONMENTS = frozenset({"development", "dev", "local", "test", "testing"})
 
 # Placeholders that must never reach production, plus the two development values that leaked in
-# baseline commit f4027e0 (CLAUDE.md §3.2). The leaked values are matched by SHA-256 so that
+# baseline commit 1034f4a (CLAUDE.md §3.2). The leaked values are matched by SHA-256 so that
 # removing them from source does not quietly remove the check that refuses them: they are
 # compromised, and "it is only the dev key" stops being true the moment someone sets it in prod.
 _WEAK_VALUES = frozenset({"secret", "changeme", "jwt_secret"})

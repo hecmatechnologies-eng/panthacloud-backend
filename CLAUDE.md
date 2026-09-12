@@ -143,10 +143,11 @@ before any real question-answering ships.
    `.dev-secrets.json` (`app/core/dev_secrets.py`), or supplied by the environment; production
    still refuses to start without real values, and now rejects the two leaked ones by hash.
 
-   **Still a hard blocker on first push:** both values entered git history in the baseline
-   commit `f4027e0` (2026-09-11), which is now in `main`. Before adding any remote, either
-   rewrite history or treat both as compromised and rotate anything they protected. **Every
-   commit added on top makes the rewrite larger.**
+   **Resolved (2026-09-12):** both values were rewritten out of git history with
+   `git filter-repo --replace-text` before any remote was added, so nothing has to be
+   rotated *because of history* — but they remain compromised, so treat anything they ever
+   protected as leaked. The rewrite changed every pre-rewrite SHA, which is why the tracker's
+   historical entries cite commits that no longer exist under their old hashes.
 
    Consequence to expect locally: a development database still holding GitHub tokens encrypted
    under the old hardcoded key cannot decrypt them. The token must be re-entered — or set

@@ -15,8 +15,8 @@ third, different numbering and is archived under `docs/archive/`.
 
 | Step | Scope | Status |
 | :--- | :--- | :--- |
-| **A. Truth & safety** | layout-overwrite fix, workspace clone+read, one roadmap, key removal, 05–08 decision | **IN PROGRESS** — layout-overwrite fix (`415d5e3`), roadmap reconciliation (`17a9c79`) and dev-secret removal from source done. Remaining items and their triggers are tabled in `CLAUDE.md` §3: `@/` alias before B8, the 05–08 decision before step C, `SandboxProvider` with B5 or later, and the git-history rewrite before the first push |
-| **B. Runtime plane** | `STEP-B-SLICES.md` B1–B8 | **IN PROGRESS** — B1 done (`f8cc086`); B2 done; B3 done; B4 done; B5 done; B6 done; **B7 (SSE) deferred by owner**; B8 next |
+| **A. Truth & safety** | layout-overwrite fix, workspace clone+read, one roadmap, key removal, 05–08 decision | **IN PROGRESS** — layout-overwrite fix (`dd10167`), roadmap reconciliation (`d91d821`), dev-secret removal from source and the git-history rewrite (2026-09-12) done. Remaining items and their triggers are tabled in `CLAUDE.md` §3: `@/` alias before B8, the 05–08 decision before step C, and `SandboxProvider` with B5 or later |
+| **B. Runtime plane** | `STEP-B-SLICES.md` B1–B8 | **IN PROGRESS** — B1 done (`95b63eb`); B2 done; B3 done; B4 done; B5 done; B6 done; **B7 (SSE) deferred by owner**; B8 next |
 | **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | NOT STARTED — no slice breakdown yet |
 | **D. Coding agent** | write capability, generated-code scan, ChangeSet → PR, bounded repair | NOT STARTED — no slice breakdown yet |
 
@@ -833,10 +833,10 @@ None.
 **Rigour tier: 1 — Maximum** (CLAUDE.md §9.0: writes to a customer repository), declared
 at the start and unchanged throughout.
 
-**Status: COMPLETED** — fussion-reviewer round 2 PASS WITH FINDINGS; committed as `415d5e3` and
+**Status: COMPLETED** — fussion-reviewer round 2 PASS WITH FINDINGS; committed as `dd10167` and
 merged to `main` on 2026-09-12 (fast-forward). Phase 11 code was already running (the table above
 still says PENDING; reconciling the table and the two roadmaps is its own step-A slice, and is
-the next one). Baseline commit `f4027e0`.
+the next one). Baseline commit `1034f4a`.
 
 ### Objective
 FEASIBILITY.md step A, one slice: stop the integration pipeline replacing or corrupting
@@ -932,9 +932,10 @@ Checked against the approved plan and the original prompt:
   - `/plan` reports private-repo, wrong-branch and bad-token 404s as "file missing"
   - `create_branch`'s `base_sha=None` default lets a future caller reintroduce the race
   - FR-097 generated-code security scan does not exist
-- **Hard blocker on first push:** the baseline commit `f4027e0` put the real dev
-  `SECRET_DEV_ENCRYPTION_KEY` (and `JWT_DEV_SECRET`) into git history. Before adding a
-  remote: rewrite history, or treat both as compromised and rotate. CLAUDE.md §3.2.
+- **Resolved (2026-09-12): the leaked dev secrets were rewritten out of git history**
+  (`git filter-repo --replace-text`, before any remote was added). They remain compromised —
+  rotate anything they protected. Every pre-rewrite SHA changed, so older entries in this file
+  cite hashes that no longer exist; they were remapped to the new ones. CLAUDE.md §3.2.
 - **`GET /runs/{id}/diff` raises** until the change set is persisted — CLAUDE.md §3.7.
 - PR body still claims "Sandbox validation: PASSED".
 - Pre-existing patcher behaviour: every `</body>` is patched (including one inside a string
@@ -947,7 +948,7 @@ Checked against the approved plan and the original prompt:
     only runs from the repository root.
   - The suite is not reproducible from a fresh clone: the fixture
     `backend/tests/fixtures/repositories/fastapi-nextjs-demo/.env` is gitignored, and
-    fixture/workspace paths depend on the working directory (a clean checkout of `f4027e0`
+    fixture/workspace paths depend on the working directory (a clean checkout of `1034f4a`
     had 39 failures). Needs `!backend/tests/fixtures/**/.env` and cwd-independent paths.
     CI would fail today.
   - `test_adapter_unknown_classification` (Phases 05–08) failed once under load and
@@ -974,7 +975,7 @@ slice changes control-plane behaviour with no customer-repo, credential or cross
 nothing resolves tenancy from these fields until B2.
 
 **Status: COMPLETED** — fussion-reviewer PASS WITH FINDINGS, no BLOCKING finding; committed as
-`f8cc086` and merged to `main` on 2026-09-12, along with `fix/layout-overwrite` (the §3.1 fix),
+`95b63eb` and merged to `main` on 2026-09-12, along with `fix/layout-overwrite` (the §3.1 fix),
 which had been sitting unmerged. Both were fast-forwards; both branches are deleted. `main` had
 been stuck at Phase 01 while two branches stacked on top of it. From now on a slice merges to
 `main` as soon as the reviewer passes and the owner approves — `docs/DEVELOPMENT-WORKFLOW.md`
@@ -1149,7 +1150,7 @@ Checked against the proposed scope: none in the work itself. Two notes —
 
 ### Verification (2026-09-12)
 - Ruff: `All checks passed!` (no code changed; run because §9.1 asks for it).
-- Backend suite: unchanged from `9fe77f7` — **223 passed** — and re-run after these edits.
+- Backend suite: unchanged from `b00a2d8` — **223 passed** — and re-run after these edits.
 - `grep` for `MVP-IMPLEMENTATION-ROADMAP` outside `docs/archive/`: the only remaining mentions
   are inside historical log entries in this file, which describe what was true then.
 
@@ -1200,7 +1201,7 @@ the history-rewrite cost grows with every commit.
 1. A generated per-installation file rather than a committed placeholder: a default in source is a
    default that ships, which is how this hazard was created.
 2. Known-compromised values are denied by digest, not plaintext. The plaintexts are already public
-   in `f4027e0`, so the digests leak nothing, and this keeps the check without keeping the secret.
+   in `1034f4a`, so the digests leak nothing, and this keeps the check without keeping the secret.
 3. `DEV_SECRETS_FILE` must end with `.dev-secrets.json`, the name `.gitignore` covers, so
    redirecting it cannot produce a committable secret.
 4. Generation is an allowlist of environments, not "anything that is not production". A denylist
@@ -1229,7 +1230,7 @@ Checked against the owner's instruction and the plan:
   module are the owner's separate instruction (promote the Postgres check, reference it from §9.1),
   landed in this commit rather than a third one. The review fixes then widened the diff again.
 - `app/core/errors.py`, `pyproject.toml` and `uv.lock` are **not** in this commit; they belong to
-  B1 (`f8cc086`).
+  B1 (`95b63eb`).
 - Two documented realities rather than fixes: on Windows the generated file is not ACL-protected,
   and one installation has two documented working directories, which is why the default is
   anchored to the package.
@@ -1239,7 +1240,7 @@ Checked against the owner's instruction and the plan:
 
 ### Blockers / Deferred
 - **The git-history rewrite is unchanged, and still the hard blocker on the first push.** Both
-  values remain in `f4027e0`, and every commit makes the rewrite larger.
+  values remain in `1034f4a`, and every commit makes the rewrite larger.
 - **A development database still holding tokens encrypted under the old key cannot read them.**
   Re-enter the token, or set `SECRET_ENCRYPTION_KEY` to the old value accepting that it is
   compromised. The failure is now logged, but the *user-facing* message still says "fix your widget
@@ -1341,7 +1342,7 @@ Reported to the owner in the same session, and deliberately **not** fixed:
 
 ### Verification (2026-09-12)
 - Ruff: `All checks passed!` (no code changed).
-- Backend suite: unchanged from `62fffa7` — **254 passed**.
+- Backend suite: unchanged from `7a9d10c` — **254 passed**.
 - `grep` for `ANTIGRAVITY-PROJECT-RULES` outside `docs/archive/`: only this tracker's historical
   entries and the two updated pointers remain.
 - Frontend: not run, and not claimed — no frontend file changed.
