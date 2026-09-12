@@ -4,12 +4,18 @@
 
 When resolving technical decisions, consult authoritative documents in this strict order:
 
-1. **Approved Design Phases 1–27**
-2. **MVP Implementation Roadmap** (`docs/implementation/MVP-IMPLEMENTATION-ROADMAP.md`)
-3. **Antigravity Project Rules** (`docs/antigravity/ANTIGRAVITY-PROJECT-RULES.md`)
-4. **Current Phase Tracker** (`docs/antigravity/ANTIGRAVITY-PHASE-TRACKER.md`)
-5. **Current Phase Implementation Prompt**
-6. **Current repository implementation**
+1. **`CLAUDE.md`** — the engineering contract; its §4 invariants override everything below
+2. **Scope & requirements** (`docs/requirements/MVP-REQUIREMENTS-V2.md`), which supersedes
+   Design Phase 2 §5–§10, and **`docs/FEASIBILITY.md`** for what is realistic and in what order
+3. **Architecture** (`docs/architecture/AGENT-ARCHITECTURE.md`, `ADR-001-agent-layer.md`,
+   `REFERENCE-ARCHITECTURE.md`)
+4. **Approved Design Phases 1–27**, where not superseded by the above
+5. **Antigravity Project Rules** (this document)
+6. **Step & slice tracker** (`docs/antigravity/ANTIGRAVITY-PHASE-TRACKER.md`)
+7. **Current repository implementation**
+
+*(Updated 2026-09-12. `MVP-IMPLEMENTATION-ROADMAP.md` was previously #2 here; it is archived
+under `docs/archive/` and is not an authority — `docs/FEASIBILITY.md` §3 is the plan.)*
 
 If these sources conflict, do not silently choose an interpretation. Stop at the smallest reasonable boundary and report the conflict.
 

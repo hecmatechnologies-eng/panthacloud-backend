@@ -156,9 +156,16 @@ before any real question-answering ships.
    `lib/` while the component imports `@/components/...`. Any repo using a `src/` layout
    gets a build failure.
 
-4. **Two conflicting roadmaps.** `docs/implementation/MVP-IMPLEMENTATION-ROADMAP.md`
-   (19 phases) and `docs/antigravity/ANTIGRAVITY-PHASE-TRACKER.md` (12 phases) use
-   colliding numbers for different work. Reconcile to one before citing a phase number.
+4. **Resolved (2026-09-12) — one plan, one numbering scheme.** Work is identified as a
+   **step and slice**: steps A–D from `docs/FEASIBILITY.md` §3, sliced per step in
+   `docs/implementation/STEP-<X>-SLICES.md` — "step B, slice B1". Use nothing else.
+   - The 19-phase `MVP-IMPLEMENTATION-ROADMAP.md` is archived under `docs/archive/` and is
+     not a plan. Do not cite its phase numbers.
+   - `ANTIGRAVITY-PHASE-TRACKER.md` keeps its `01`–`12`/`A`/`B`/`B.1` entries as the
+     **historical record of work already done**. Those numbers are never used for new work,
+     and never appear in a plan, commit message or tracker entry for it. Note the trap they
+     set: the tracker's legacy "Phase B.1" is frontend authentication, and has nothing to do
+     with step B slice B1.
 
 5. **Orphaned subsystem.** `repository_snapshots`, `discovery`, `contracts`,
    `integration_adapters`, `execution_plans` (migrations 0004–0008) are referenced by

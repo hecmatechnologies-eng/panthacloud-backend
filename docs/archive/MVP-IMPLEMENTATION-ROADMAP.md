@@ -1,4 +1,19 @@
-# Fussion — MVP Implementation Roadmap
+# Fussion — MVP Implementation Roadmap (ARCHIVED — superseded)
+
+> **Superseded on 2026-09-12. Do not plan from this document, and do not cite its phase
+> numbers.** The authoritative plan is `docs/FEASIBILITY.md` §3 (steps A–D) with the slice
+> breakdown per step, e.g. `docs/implementation/STEP-B-SLICES.md`; the authoritative scope is
+> `docs/requirements/MVP-REQUIREMENTS-V2.md`.
+>
+> Why it was retired: its numbering collided with `ANTIGRAVITY-PHASE-TRACKER.md` for entirely
+> different work — this document's Phase 04 is the knowledge base, the tracker's Phase 09 is the
+> knowledge base — so a bare phase number meant two things. `FEASIBILITY.md` §2 and §7 explain
+> the deeper problem: nineteen phases describe a system sized for a funded team of ten to
+> twenty engineers. **It is not wrong as a map of the territory. It is wrong as a plan**, which
+> is why it is kept here rather than deleted.
+>
+> It is retained read-only, for the scope it enumerates. Nothing in the repository should link
+> to it as a plan.
 
 The locked 19-phase implementation sequence for the Fussion MVP platform. Each phase builds incrementally on previous foundations and adheres strictly to the architectural decisions established in Design Phases 1–27.
 

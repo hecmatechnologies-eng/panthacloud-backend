@@ -50,7 +50,7 @@ what implementation revealed.
 | Item | Decision |
 |---|---|
 | Phase 05–08 subsystem (snapshots, discovery, contracts, adapters, execution plans) | **Repurpose or retire.** Its adapter categories — `DATABASE`, `PAYMENT`, `CACHE`, `MESSAGE_BROKER` — are explicitly outside MVP per Phase 1 §7. The deterministic analysis machinery in `discovery.py` should be repurposed for app-shell and design-token detection; the adapter/contract/execution-plan layers retired. |
-| Multi-provider model routing | Post-MVP (roadmap Phase 13) |
+| Multi-provider model routing | Post-MVP (see the Part D YAGNI register for the trigger) |
 | MCP client / server | Post-MVP — see YAGNI register |
 | Durable workflow engine (Temporal) | Post-MVP — bounded job queue suffices |
 | Preview environments | Post-MVP |

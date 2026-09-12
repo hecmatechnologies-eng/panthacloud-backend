@@ -6,11 +6,26 @@ Fussion is an **AI Integration Engineer Platform**. Rather than providing a simp
 
 ---
 
-## Current Status: Phase 01 Complete
+## Current status
 
-- **Current Phase**: **Phase 01 — Repository & Development Foundation** (Done)
-- **Next Phase**: **Phase 02 — Backend Core & Identity** (Pending explicit instruction)
-- **Phase Tracking Matrix**: [docs/antigravity/ANTIGRAVITY-PHASE-TRACKER.md](docs/antigravity/ANTIGRAVITY-PHASE-TRACKER.md)
+**Pre-MVP, under active development. Not deployable, and not yet demonstrable end to end.**
+
+The control plane works: accounts, organizations, projects, RBAC, the knowledge base, assistant
+configuration and the Studio. There is **no LLM in the codebase**, no live GitHub connection, and
+no visitor runtime yet, so the product promise — a knowledge-grounded assistant answering on a
+customer's site — is not yet deliverable.
+
+**[`CLAUDE.md` §2](CLAUDE.md) is the single source of truth for what exists.** It is read at the
+start of every working session, so it stays honest; this section deliberately does not repeat its
+detail, because duplicating it is how this README came to claim "Phase 01 Complete" through
+eleven phases.
+
+- **Plan**: [docs/FEASIBILITY.md](docs/FEASIBILITY.md) §3 — steps A–D, sliced per step in
+  [docs/implementation/](docs/implementation/). Work is identified as a step and slice
+  ("step B, slice B1"), never a phase number.
+- **Progress**: [docs/antigravity/ANTIGRAVITY-PHASE-TRACKER.md](docs/antigravity/ANTIGRAVITY-PHASE-TRACKER.md)
+  — step status at the top; its numbered phase table is historical record only.
+- **Scope**: [docs/requirements/MVP-REQUIREMENTS-V2.md](docs/requirements/MVP-REQUIREMENTS-V2.md)
 
 ---
 
@@ -18,9 +33,12 @@ Fussion is an **AI Integration Engineer Platform**. Rather than providing a simp
 
 Fussion follows the approved system architecture designed in **Phases 1–27**:
 
+- [CLAUDE.md](CLAUDE.md) — the engineering contract: invariants, boundaries, current state, definition of done. Start here.
+- [Agent Architecture](docs/architecture/AGENT-ARCHITECTURE.md) — agent contracts, budgets, memory tiers, tool standards, skill spec.
 - [Reference Architecture](docs/architecture/REFERENCE-ARCHITECTURE.md) — Layered architecture across Control Plane, Orchestration, Agent Harness, Sandbox, and Data Plane.
-- [MVP Implementation Roadmap](docs/implementation/MVP-IMPLEMENTATION-ROADMAP.md) — The locked 19-phase MVP milestone sequence.
+- [Development Workflow](docs/DEVELOPMENT-WORKFLOW.md) — how a slice is planned, reviewed, verified and merged.
 - [Antigravity Project Rules](docs/antigravity/ANTIGRAVITY-PROJECT-RULES.md) — Architectural boundaries, security rules, and engineering principles.
+- [Archived: MVP Implementation Roadmap](docs/archive/MVP-IMPLEMENTATION-ROADMAP.md) — the superseded 19-phase sequence, kept as a map of scope. Not a plan; do not cite its phase numbers.
 
 ---
 
@@ -32,9 +50,11 @@ Fussion follows the approved system architecture designed in **Phases 1–27**:
 │   └── workflows/
 │       └── ci.yml             # GitHub Actions CI workflow (lint, test, build)
 ├── docs/
-│   ├── antigravity/           # Engineering rules & phase tracker
-│   ├── architecture/          # Reference architecture synthesis
-│   └── implementation/        # Locked MVP implementation roadmap
+│   ├── antigravity/           # Engineering rules & step/slice tracker
+│   ├── architecture/          # Reference & agent architecture
+│   ├── archive/               # Superseded documents, kept for the record
+│   ├── implementation/        # Slice breakdowns per step
+│   └── requirements/          # MVP scope & functional requirements
 ├── infrastructure/
 │   ├── docker-compose.yml     # Local PostgreSQL 17 & Redis services
 │   └── .env.example

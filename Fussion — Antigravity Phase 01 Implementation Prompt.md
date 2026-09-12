@@ -1,5 +1,10 @@
 # Fussion — Phase 01: Repository & Development Foundation
 
+> **Historical.** The prompt that produced Phase 01 (2026-09-07), kept as a record. Phase
+> numbering was retired on 2026-09-12; work is now identified as a step and slice
+> (`docs/FEASIBILITY.md` §3). Do not use this as a template for new work —
+> `docs/DEVELOPMENT-WORKFLOW.md` describes how a slice runs today.
+
 ## Mission
 
 Implement **Phase 01 — Repository & Development Foundation** of the Fussion MVP.
@@ -10,7 +15,7 @@ The approved architecture and system-design decisions already exist in **Design 
 
 The locked MVP implementation sequence is defined in:
 
-`docs/implementation/MVP-IMPLEMENTATION-ROADMAP.md`
+`docs/archive/MVP-IMPLEMENTATION-ROADMAP.md` (archived 2026-09-12)
 
 The global engineering rules are defined in:
 

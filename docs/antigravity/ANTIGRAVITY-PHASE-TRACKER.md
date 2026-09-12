@@ -1,4 +1,26 @@
-# Fussion — Antigravity Phase Tracker
+# Fussion — Phase & Slice Tracker
+
+**How work is identified here (settled 2026-09-12).** New work is a **step and slice** — steps
+A–D from `docs/FEASIBILITY.md` §3, sliced in `docs/implementation/STEP-<X>-SLICES.md`. The
+current state of those is the *Step status* table below; each completed slice gets a log section
+at the end of this file.
+
+**The phase table below is the historical record of work done before that decision.** Its
+numbers are not used for new work and must not be cited in a plan or a commit message. In
+particular, legacy **"Phase B.1" is frontend authentication and is unrelated to step B slice
+B1** — the collision that prompted this. The 19-phase `MVP-IMPLEMENTATION-ROADMAP.md` used a
+third, different numbering and is archived under `docs/archive/`.
+
+## Step status (current plan — `FEASIBILITY.md` §3)
+
+| Step | Scope | Status |
+| :--- | :--- | :--- |
+| **A. Truth & safety** | layout-overwrite fix, workspace clone+read, one roadmap, key removal, 05–08 decision | **IN PROGRESS** — layout-overwrite fix done (`415d5e3`); roadmap reconciliation done (this commit); key removal, workspace clone+read and the 05–08 decision remain, and have no slice breakdown yet |
+| **B. Runtime plane** | `STEP-B-SLICES.md` B1–B8 | **IN PROGRESS** — B1 done (`f8cc086`); B2 next |
+| **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | NOT STARTED — no slice breakdown yet |
+| **D. Coding agent** | write capability, generated-code scan, ChangeSet → PR, bounded repair | NOT STARTED — no slice breakdown yet |
+
+## Phase history (legacy numbering — record only, never cited for new work)
 
 | Phase | Description | Status | Started | Completed |
 | :--- | :--- | :--- | :--- | :--- |
@@ -15,8 +37,8 @@
 | **Phase B.1** | **MVP Realignment — Frontend Authentication & Application Architecture Foundation** | **COMPLETED** | 2026-09-08 | 2026-09-08 |
 | **09** | **Knowledge Base Foundation** | **COMPLETED** | 2026-09-08 | 2026-09-08 |
 | **10** | **Assistant Configuration & Widget Generation** | **COMPLETED** | 2026-09-08 | 2026-09-08 |
-| 11 | Sandbox Integration & GitHub Pull Request | PENDING | - | - |
-| 12 | Visitor Runtime & End-to-End MVP Validation | PENDING | - | - |
+| **11** | **Sandbox Integration & GitHub Pull Request** | **COMPLETED** | 2026-09-08 | 2026-09-12 |
+| ~~12~~ | ~~Visitor Runtime & End-to-End MVP Validation~~ | **SUPERSEDED** by step B (`STEP-B-SLICES.md`) | - | - |
 
 ---
 
@@ -801,8 +823,8 @@ None.
 ---
 
 ### Next Phase
-`Phase 11 — Sandbox Integration & GitHub Pull Request`
-*(Halted: Strictly awaiting user instruction before starting Phase 11)*.
+*(Historical note: this section recorded the next legacy phase. Phase numbering was retired on
+2026-09-12 — what comes next is now the Step status table at the top of this file.)*
 
 ---
 
@@ -1071,4 +1093,63 @@ Logged, not fixed — none is a defect in what this slice built:
   NULL and the unique index both enforced, rows intact after downgrade. Repeated after the review
   fixes.
 - Evals: none exist yet.
+
+---
+
+## Step A · Slice — roadmap reconciliation (one numbering scheme)
+
+**Rigour tier: 3 — Light** (CLAUDE.md §9.0): documentation only, no code touched.
+**Status: COMPLETED** — merged to `main` on 2026-09-12.
+
+### Objective
+`FEASIBILITY.md` step A, "one roadmap". Three numbering schemes were live at once and collided:
+the archived 19-phase roadmap (its Phase 04 is the knowledge base), this tracker's `01`–`12` plus
+`A`/`B`/`B.1` (its Phase 09 is the knowledge base), and `FEASIBILITY.md` steps A–D with slices.
+The third collision — legacy "Phase B.1" (frontend auth) against step B slice B1 — appeared while
+writing the B1 entry above, and B2–B8 would each have hit it again.
+
+### Completed Work
+- **One forward scheme**: step + slice, from `FEASIBILITY.md` §3 and `STEP-<X>-SLICES.md`.
+  Recorded in `CLAUDE.md` §3.4, which previously logged the collision as an open hazard.
+- **`MVP-IMPLEMENTATION-ROADMAP.md` retired** to `docs/archive/` (`git mv`, history preserved)
+  with a banner explaining that it is a map of scope and not a plan. Its last live citations were
+  removed: `ANTIGRAVITY-PROJECT-RULES.md` ranked it #2 in the authority hierarchy — that
+  hierarchy now starts at `CLAUDE.md` and no longer omits it, `MVP-REQUIREMENTS-V2` or
+  `FEASIBILITY` — and `MVP-REQUIREMENTS-V2.md` cited "roadmap Phase 13".
+- **This tracker**: a Step status table for A–D at the top; the phase table demoted to
+  "historical record, never cited for new work"; Phase 11 corrected from PENDING to COMPLETED
+  (it shipped, was remediated and is merged); Phase 12 marked SUPERSEDED by step B; the stale
+  "Next Phase — halted awaiting instruction" note retired.
+- **README**: "Current Status: Phase 01 Complete", eleven phases stale, replaced with an honest
+  pre-MVP summary that points at `CLAUDE.md` §2 rather than repeating it — duplication is how it
+  drifted — plus corrected doc links and repository structure.
+- The root Phase 01 implementation prompt is marked historical.
+
+### Architectural & Technology Decisions
+1. The step/slice scheme wins because it is the only one tied to what is actually being built and
+   it already governs execution (`DEVELOPMENT-WORKFLOW.md` §2).
+2. The roadmap is archived, not deleted: `FEASIBILITY.md` §2 calls it a fair map of the territory
+   and a bad plan, and its scope enumeration is still worth having.
+3. Legacy phase entries are kept verbatim rather than renumbered. Renumbering completed work
+   would invalidate every commit message that cites a phase.
+
+### Deviations
+Checked against the proposed scope: none in the work itself. Two notes —
+- The proposal listed `ANTIGRAVITY-PROJECT-RULES.md` only implicitly ("retire or subordinate the
+  losing document"); its authority hierarchy had to change, since it ranked the archived roadmap
+  above everything except the design phases.
+- The optional `STEP-A-SLICES.md` (remaining step-A work: key removal, workspace clone+read, the
+  05–08 decision) was **not** written — it was offered and not chosen, so it stays out. Step A's
+  remaining slices therefore have no breakdown yet, which the Step status table now says plainly.
+
+### Blockers / Deferred
+- Design Phases 1–27 and `REFERENCE-ARCHITECTURE.md` still use their own phase numbering. They
+  are design documents rather than plans, so they were left alone; if they start being cited for
+  execution, they need the same treatment.
+
+### Verification (2026-09-12)
+- Ruff: `All checks passed!` (no code changed; run because §9.1 asks for it).
+- Backend suite: unchanged from `9fe77f7` — **223 passed** — and re-run after these edits.
+- `grep` for `MVP-IMPLEMENTATION-ROADMAP` outside `docs/archive/`: the only remaining mentions
+  are inside historical log entries in this file, which describe what was true then.
 
