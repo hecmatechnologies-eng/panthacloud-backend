@@ -17,7 +17,7 @@ third, different numbering and is archived under `docs/archive/`.
 | :--- | :--- | :--- |
 | **A. Truth & safety** | layout-overwrite fix, workspace clone+read, one roadmap, key removal, 05–08 decision | **IN PROGRESS** — layout-overwrite fix (`dd10167`), roadmap reconciliation (`d91d821`), dev-secret removal from source and the git-history rewrite (2026-09-12) done. Remaining items and their triggers are tabled in `CLAUDE.md` §3: `@/` alias before B8, the 05–08 decision before step C, and `SandboxProvider` with B5 or later |
 | **B. Runtime plane** | `STEP-B-SLICES.md` B1–B8 | **IN PROGRESS** — B1 done (`95b63eb`); B2 done; B3 done; B4 done; B5 done; B6 done; **B7 (SSE) deferred by owner**; B8 next |
-| **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **PLANNED** — `STEP-C-SLICES.md` C1–C10 written; prerequisites tabled; awaiting approval |
+| **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **IN PROGRESS** — `STEP-C-SLICES.md` C1–C10; C1 done (this change); C2 next |
 | **D. Coding agent** | write capability, generated-code scan, ChangeSet → PR, bounded repair | NOT STARTED — no slice breakdown yet |
 
 ## Phase history (legacy numbering — record only, never cited for new work)
@@ -1866,3 +1866,78 @@ Checked against the slice contract in `STEP-B-SLICES.md`:
   semantic ranking (refund↔shipping 0.58 > refund↔photosynthesis 0.46).
 - No test hits a paid API; the deterministic provider is genuinely substitutable.
 - Frontend: untouched, not run. Evals: none exist yet.
+
+---
+
+## Step C (FEASIBILITY §3) · Slice C1 — retire the 05–08 contract layers
+
+**Rigour tier: 2 — Standard** (CLAUDE.md §9.0), declared in `STEP-C-SLICES.md` and unchanged. No
+customer-repo, credential or cross-tenant path; the change deletes an unused subsystem.
+
+**Status: COMPLETED** — fussion-reviewer PASS WITH FINDINGS, no BLOCKING finding; the tracker gap
+and both CONSIDER items fixed. Committed with this entry.
+
+### Objective
+Execute the 05–08 decision (CLAUDE.md §3.5, 2026-09-12): **repurpose** the deterministic
+read/inspection/detection substrate as the analyst's input, and **retire** the contract /
+integration-plan / adapter / execution-plan layers that the MVP integration path never references.
+
+### Completed Work
+- **Deleted (backend):** models `contract`, `integration_plan`, `integration_adapter`,
+  `execution_plan`; schemas `contract`, `integration_plan`, `integration_adapter`,
+  `execution_plan`; services `contract`, `integration_planner`, `integration_adapter`,
+  `execution_planner`; endpoints `contracts`, `integration_plans`, `integration_adapters`,
+  `execution_plans`; tests `test_contracts`, `test_integration_plans`,
+  `test_integration_adapters`, `test_execution_plans`.
+- **Wiring removed:** the four snapshot relationships, the four `deps.py` resolvers, the four
+  router includes, the eight `CONTRACT_*`/`INTEGRATION_PLAN_*`/`INTEGRATION_ADAPTER_*`/
+  `EXECUTION_PLAN_*` permissions (and their role mappings), and the schema/model exports.
+- **Migration 0016** drops `api_contracts`, `api_operations`, `integration_plans`,
+  `integration_adapters`, `execution_plans` and the six Postgres enums; its `downgrade` recreates
+  the exact 0007/0008 schema. 0007/0008 stay for the chain's history.
+- **Frontend:** `DiagnosticsTab` stripped to the discovery section; the four API clients
+  (`contracts`, `integration-plans`, `adapters`, `execution-plans`) deleted and un-exported; the
+  Studio test updated.
+- **Kept, as decided:** `workspace.py`, `acquisition.py`, `inspection.py` and the `discovery.py`
+  detectors with `Repository`/`RepositorySnapshot`/`DiscoveryRun` — the read substrate C4/C8 build
+  on.
+
+### Architectural & Technology Decisions
+1. **Drop, don't rewrite history.** 0007 and 0008 created tables that a released migration chain
+   must still be able to walk; retiring them means a new migration that drops, never deleting the
+   applied ones.
+2. **Two similarly named things are not the same.** `IntegrationPlanPayload` and
+   `IntegrationPlanner` (the MVP widget plan, `services/integration/planner.py`) and
+   `ApiContractFinding` (a discovery finding) were deliberately kept; only the 05–08 `ApiContract`
+   / `IntegrationPlan` / `IntegrationAdapter` / `ExecutionPlan` models were retired.
+3. **The `DiagnosticsTab` sub-navigation collapses to one label** — with a single section left, an
+   interactive control that does nothing is worse than a heading.
+
+### Review history
+One round (Tier 2 gate), fresh reviewer — **PASS WITH FINDINGS**, no BLOCKING finding. The reviewer
+confirmed no dangling references (`import app.main`, mapper configuration, and `pytest
+--collect-only` all clean) and that the 0016 `downgrade` is column-, default-, FK-, index- and
+enum-faithful to 0007/0008. Fixed in-slice:
+1. **Tracker gap:** this entry (CLAUDE.md §9.1).
+2. (CONSIDER) the unused `discoveries` prop on `DiagnosticsTab` — removed.
+3. (CONSIDER) the inert sub-navigation button — replaced with a non-interactive label.
+
+### Deviations
+Checked against `STEP-C-SLICES.md` C1:
+- Everything the slice names was removed, and the drop migration keeps the chain reversible.
+- The `Repository`/snapshot/workspace substrate was **kept**, not moved into a new package; moving
+  it is deferred to C4, where its shape is decided by the tools that consume it.
+- No new package layout (`app/services/analysis/`) was introduced; `discovery.py` stays where it is
+  for now.
+
+### Blockers / Deferred
+- The remaining step-C gates are unchanged: a repository-read source for the tools (C4),
+  `pydantic_ai` (C5), `skills-ref` (C7), frontend widget-target fixtures (C9).
+
+### Verification (2026-09-13)
+- Ruff, from `backend/`: `All checks passed!`
+- Backend suite, from the repository root: **421 passed** (the 28 tests of the four retired test
+  modules removed; no other test changed).
+- Migration 0016: `upgrade → downgrade → upgrade` verified on **both SQLite and a scratch
+  Postgres database**.
+- Frontend: `pnpm build` clean; `pnpm test` **108 passed**.

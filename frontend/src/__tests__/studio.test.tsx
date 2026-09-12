@@ -269,41 +269,20 @@ describe('Studio Component Suite (Phase B)', () => {
   });
 
   describe('DiagnosticsTab', () => {
-    it('renders diagnostic sub-navigation and non-execution architectural view', () => {
+    it('renders diagnostic sub-navigation and the discovery view', () => {
       render(
         <DiagnosticsTab
           selectedSnapshotId="snap-1"
           snapshots={[mockSnapshot]}
-          discoveries={[]}
           selectedDiscovery={null}
           isRunningDiscovery={false}
           onRunDiscovery={vi.fn()}
-          contracts={[]}
-          selectedContract={null}
-          isNormalizingContract={false}
-          onNormalizeContract={vi.fn()}
-          integrationPlans={[]}
-          selectedPlan={null}
-          isGeneratingPlan={false}
-          onGeneratePlan={vi.fn()}
-          adapters={[]}
-          selectedAdapter={null}
-          onSelectAdapter={vi.fn()}
-          isPlanningAdapters={false}
-          onPlanAdapters={vi.fn()}
-          executionPlans={[]}
-          selectedExecutionPlan={null}
-          isGeneratingExecutionPlan={false}
-          onGenerateExecutionPlan={vi.fn()}
         />
       );
 
       expect(screen.getByText(/Technical Details & Engineering Diagnostics/i)).toBeDefined();
       expect(screen.getByText('Post-MVP / Diagnostic Tooling')).toBeDefined();
       expect(screen.getByText('Architecture Discovery')).toBeDefined();
-      expect(screen.getByText('API Contracts & Reconciliation')).toBeDefined();
-      expect(screen.getByText('Integration Planning & Credentials')).toBeDefined();
-      expect(screen.getByText('Adapters & Execution Plans')).toBeDefined();
       expect(screen.getByText('Static Architecture Discovery')).toBeDefined();
       expect(screen.getByText('Run Discovery')).toBeDefined();
     });

@@ -9,9 +9,7 @@ from app.models.base import BaseModel
 
 if TYPE_CHECKING:
     from app.models.assistant import Assistant
-    from app.models.execution_plan import ExecutionPlan
     from app.models.integration import Integration
-    from app.models.integration_plan import IntegrationPlan
     from app.models.knowledge import KnowledgeBase
     from app.models.organization import Organization
     from app.models.repository import Repository
@@ -51,16 +49,6 @@ class Project(BaseModel):
     )
     repositories: Mapped[list["Repository"]] = relationship(
         "Repository",
-        back_populates="project",
-        cascade="all, delete-orphan",
-    )
-    integration_plans: Mapped[list["IntegrationPlan"]] = relationship(
-        "IntegrationPlan",
-        back_populates="project",
-        cascade="all, delete-orphan",
-    )
-    execution_plans: Mapped[list["ExecutionPlan"]] = relationship(
-        "ExecutionPlan",
         back_populates="project",
         cascade="all, delete-orphan",
     )

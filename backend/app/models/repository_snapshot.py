@@ -11,11 +11,7 @@ from sqlalchemy.types import JSON, UUID
 from app.models.base import BaseModel
 
 if TYPE_CHECKING:
-    from app.models.contract import ApiContract
     from app.models.discovery import DiscoveryRun
-    from app.models.execution_plan import ExecutionPlan
-    from app.models.integration_adapter import IntegrationAdapter
-    from app.models.integration_plan import IntegrationPlan
     from app.models.repository import Repository
 
 
@@ -88,26 +84,6 @@ class RepositorySnapshot(BaseModel):
     )
     discovery_runs: Mapped[list["DiscoveryRun"]] = relationship(
         "DiscoveryRun",
-        back_populates="snapshot",
-        cascade="all, delete-orphan",
-    )
-    api_contracts: Mapped[list["ApiContract"]] = relationship(
-        "ApiContract",
-        back_populates="snapshot",
-        cascade="all, delete-orphan",
-    )
-    integration_plans: Mapped[list["IntegrationPlan"]] = relationship(
-        "IntegrationPlan",
-        back_populates="snapshot",
-        cascade="all, delete-orphan",
-    )
-    integration_adapters: Mapped[list["IntegrationAdapter"]] = relationship(
-        "IntegrationAdapter",
-        back_populates="snapshot",
-        cascade="all, delete-orphan",
-    )
-    execution_plans: Mapped[list["ExecutionPlan"]] = relationship(
-        "ExecutionPlan",
         back_populates="snapshot",
         cascade="all, delete-orphan",
     )

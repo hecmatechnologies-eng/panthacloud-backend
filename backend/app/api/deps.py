@@ -13,12 +13,8 @@ from app.core.database import get_db
 from app.core.permissions import Permission, has_permission
 from app.core.security import decode_access_token
 from app.models.assistant import Assistant, AssistantPosition
-from app.models.contract import ApiContract
 from app.models.discovery import DiscoveryRun
-from app.models.execution_plan import ExecutionPlan
 from app.models.integration import Integration
-from app.models.integration_adapter import IntegrationAdapter
-from app.models.integration_plan import IntegrationPlan
 from app.models.knowledge import KnowledgeBase, KnowledgeDocument
 from app.models.membership import Membership
 from app.models.organization import Organization
@@ -281,126 +277,6 @@ async def get_current_discovery(
         )
 
     return discovery
-
-
-async def get_current_contract(
-    contract_id: uuid.UUID,
-    snapshot: Annotated[RepositorySnapshot, Depends(get_current_snapshot)],
-    tenant: Annotated[
-        tuple[Organization, Membership],
-        Depends(require_permission(Permission.CONTRACT_VIEW)),
-    ],
-    db: Annotated[AsyncSession, Depends(get_db)],
-) -> ApiContract:
-    """
-    Contract Resolution Dependency:
-    Resolves API contract strictly scoped within the authenticated snapshot, repository, project, and organization.
-    """
-    stmt = (
-        select(ApiContract)
-        .options(selectinload(ApiContract.operations))
-        .where(
-            ApiContract.id == contract_id,
-            ApiContract.snapshot_id == snapshot.id,
-        )
-    )
-    result = await db.execute(stmt)
-    contract = result.scalar_one_or_none()
-
-    if not contract:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Contract not found in snapshot.",
-        )
-
-    return contract
-
-
-async def get_current_integration_plan(
-    plan_id: uuid.UUID,
-    snapshot: Annotated[RepositorySnapshot, Depends(get_current_snapshot)],
-    tenant: Annotated[
-        tuple[Organization, Membership],
-        Depends(require_permission(Permission.INTEGRATION_PLAN_VIEW)),
-    ],
-    db: Annotated[AsyncSession, Depends(get_db)],
-) -> IntegrationPlan:
-    """
-    Integration Plan Resolution Dependency:
-    Resolves integration plan strictly scoped within the authenticated snapshot, repository, project, and organization.
-    """
-    stmt = select(IntegrationPlan).where(
-        IntegrationPlan.id == plan_id,
-        IntegrationPlan.snapshot_id == snapshot.id,
-    )
-    result = await db.execute(stmt)
-    plan = result.scalar_one_or_none()
-
-    if not plan:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Integration plan not found in snapshot.",
-        )
-
-    return plan
-
-
-async def get_current_integration_adapter(
-    adapter_id: uuid.UUID,
-    snapshot: Annotated[RepositorySnapshot, Depends(get_current_snapshot)],
-    tenant: Annotated[
-        tuple[Organization, Membership],
-        Depends(require_permission(Permission.INTEGRATION_ADAPTER_VIEW)),
-    ],
-    db: Annotated[AsyncSession, Depends(get_db)],
-) -> IntegrationAdapter:
-    """
-    Integration Adapter Resolution Dependency:
-    Resolves integration adapter strictly scoped within the authenticated snapshot, repository, project, and organization.
-    """
-    stmt = select(IntegrationAdapter).where(
-        IntegrationAdapter.id == adapter_id,
-        IntegrationAdapter.snapshot_id == snapshot.id,
-    )
-    result = await db.execute(stmt)
-    adapter = result.scalar_one_or_none()
-
-    if not adapter:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Integration adapter not found in snapshot.",
-        )
-
-    return adapter
-
-
-async def get_current_execution_plan(
-    plan_id: uuid.UUID,
-    snapshot: Annotated[RepositorySnapshot, Depends(get_current_snapshot)],
-    tenant: Annotated[
-        tuple[Organization, Membership],
-        Depends(require_permission(Permission.EXECUTION_PLAN_VIEW)),
-    ],
-    db: Annotated[AsyncSession, Depends(get_db)],
-) -> ExecutionPlan:
-    """
-    Execution Plan Resolution Dependency:
-    Resolves execution plan strictly scoped within the authenticated snapshot, repository, project, and organization.
-    """
-    stmt = select(ExecutionPlan).where(
-        ExecutionPlan.id == plan_id,
-        ExecutionPlan.snapshot_id == snapshot.id,
-    )
-    result = await db.execute(stmt)
-    plan = result.scalar_one_or_none()
-
-    if not plan:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Execution plan not found in snapshot.",
-        )
-
-    return plan
 
 
 async def get_or_create_knowledge_base(

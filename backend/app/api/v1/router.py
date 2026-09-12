@@ -4,12 +4,8 @@ from app.api.v1.endpoints import (
     allowed_origins,
     assistant,
     auth,
-    contracts,
     discovery,
-    execution_plans,
     health,
-    integration_adapters,
-    integration_plans,
     integrations,
     knowledge,
     memberships,
@@ -33,10 +29,6 @@ api_v1_router.include_router(integrations.router)
 api_v1_router.include_router(repositories.router)
 api_v1_router.include_router(snapshots.router)
 api_v1_router.include_router(discovery.router)
-api_v1_router.include_router(contracts.router)
-api_v1_router.include_router(integration_plans.router)
-api_v1_router.include_router(integration_adapters.router)
-api_v1_router.include_router(execution_plans.router)
 api_v1_router.include_router(knowledge.router)
 api_v1_router.include_router(assistant.router)
 api_v1_router.include_router(

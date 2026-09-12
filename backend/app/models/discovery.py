@@ -11,7 +11,6 @@ from sqlalchemy.types import JSON, UUID
 from app.models.base import BaseModel
 
 if TYPE_CHECKING:
-    from app.models.contract import ApiContract
     from app.models.repository_snapshot import RepositorySnapshot
 
 
@@ -66,9 +65,4 @@ class DiscoveryRun(BaseModel):
     snapshot: Mapped["RepositorySnapshot"] = relationship(
         "RepositorySnapshot",
         back_populates="discovery_runs",
-    )
-    api_contracts: Mapped[list["ApiContract"]] = relationship(
-        "ApiContract",
-        back_populates="discovery_run",
-        cascade="all, delete-orphan",
     )

@@ -29,14 +29,6 @@ class Permission(str, enum.Enum):
     REPOSITORY_INSPECT = "repository:inspect"
     REPOSITORY_DISCOVERY_VIEW = "repository:discovery:view"
     REPOSITORY_DISCOVERY_CREATE = "repository:discovery:create"
-    CONTRACT_VIEW = "contract:view"
-    CONTRACT_CREATE = "contract:create"
-    INTEGRATION_PLAN_VIEW = "integration_plan:view"
-    INTEGRATION_PLAN_CREATE = "integration_plan:create"
-    INTEGRATION_ADAPTER_VIEW = "integration_adapter:view"
-    INTEGRATION_ADAPTER_CREATE = "integration_adapter:create"
-    EXECUTION_PLAN_VIEW = "execution_plan:view"
-    EXECUTION_PLAN_CREATE = "execution_plan:create"
     KNOWLEDGE_VIEW = "knowledge:view"
     KNOWLEDGE_CREATE = "knowledge:create"
     KNOWLEDGE_DELETE = "knowledge:delete"
@@ -73,14 +65,6 @@ ROLE_PERMISSIONS: dict[RoleEnum, set[Permission]] = {
         Permission.REPOSITORY_INSPECT,
         Permission.REPOSITORY_DISCOVERY_VIEW,
         Permission.REPOSITORY_DISCOVERY_CREATE,
-        Permission.CONTRACT_VIEW,
-        Permission.CONTRACT_CREATE,
-        Permission.INTEGRATION_PLAN_VIEW,
-        Permission.INTEGRATION_PLAN_CREATE,
-        Permission.INTEGRATION_ADAPTER_VIEW,
-        Permission.INTEGRATION_ADAPTER_CREATE,
-        Permission.EXECUTION_PLAN_VIEW,
-        Permission.EXECUTION_PLAN_CREATE,
         Permission.KNOWLEDGE_VIEW,
         Permission.KNOWLEDGE_CREATE,
         Permission.KNOWLEDGE_DELETE,
@@ -113,14 +97,6 @@ ROLE_PERMISSIONS: dict[RoleEnum, set[Permission]] = {
         Permission.REPOSITORY_INSPECT,
         Permission.REPOSITORY_DISCOVERY_VIEW,
         Permission.REPOSITORY_DISCOVERY_CREATE,
-        Permission.CONTRACT_VIEW,
-        Permission.CONTRACT_CREATE,
-        Permission.INTEGRATION_PLAN_VIEW,
-        Permission.INTEGRATION_PLAN_CREATE,
-        Permission.INTEGRATION_ADAPTER_VIEW,
-        Permission.INTEGRATION_ADAPTER_CREATE,
-        Permission.EXECUTION_PLAN_VIEW,
-        Permission.EXECUTION_PLAN_CREATE,
         Permission.KNOWLEDGE_VIEW,
         Permission.KNOWLEDGE_CREATE,
         Permission.KNOWLEDGE_DELETE,
@@ -147,14 +123,6 @@ ROLE_PERMISSIONS: dict[RoleEnum, set[Permission]] = {
         Permission.REPOSITORY_INSPECT,
         Permission.REPOSITORY_DISCOVERY_VIEW,
         Permission.REPOSITORY_DISCOVERY_CREATE,
-        Permission.CONTRACT_VIEW,
-        Permission.CONTRACT_CREATE,
-        Permission.INTEGRATION_PLAN_VIEW,
-        Permission.INTEGRATION_PLAN_CREATE,
-        Permission.INTEGRATION_ADAPTER_VIEW,
-        Permission.INTEGRATION_ADAPTER_CREATE,
-        Permission.EXECUTION_PLAN_VIEW,
-        Permission.EXECUTION_PLAN_CREATE,
         Permission.KNOWLEDGE_VIEW,
         Permission.KNOWLEDGE_CREATE,
         Permission.KNOWLEDGE_DELETE,
@@ -171,10 +139,6 @@ ROLE_PERMISSIONS: dict[RoleEnum, set[Permission]] = {
         Permission.REPOSITORY_VIEW,
         Permission.REPOSITORY_SNAPSHOT_VIEW,
         Permission.REPOSITORY_DISCOVERY_VIEW,
-        Permission.CONTRACT_VIEW,
-        Permission.INTEGRATION_PLAN_VIEW,
-        Permission.INTEGRATION_ADAPTER_VIEW,
-        Permission.EXECUTION_PLAN_VIEW,
         Permission.KNOWLEDGE_VIEW,
         Permission.ASSISTANT_VIEW,
     },

@@ -7,14 +7,6 @@ from app.schemas.assistant import (
     MockPreviewPayload,
 )
 from app.schemas.auth import LoginRequest, RegisterRequest, TokenPayload, TokenResponse
-from app.schemas.contract import (
-    ApiContractRead,
-    ApiOperationRead,
-    AuthenticationScheme,
-    ContractCreate,
-    ContractReconciliation,
-    ReconciliationFinding,
-)
 from app.schemas.discovery import (
     ApiContractFinding,
     ConfigurationFinding,
@@ -29,29 +21,10 @@ from app.schemas.discovery import (
     ModuleFinding,
     RouteFinding,
 )
-from app.schemas.execution_plan import (
-    ExecutionPlanCreate,
-    ExecutionPlanRead,
-    ExecutionStep,
-    SafetyClassification,
-)
 from app.schemas.integration import (
     IntegrationCreate,
     IntegrationRead,
     IntegrationUpdate,
-)
-from app.schemas.integration_adapter import (
-    AdapterConfiguration,
-    AdapterOperation,
-    IntegrationAdapterCreate,
-    IntegrationAdapterRead,
-)
-from app.schemas.integration_plan import (
-    IntegrationCandidate,
-    IntegrationPlanCreate,
-    IntegrationPlanRead,
-    RequiredCredential,
-    UnresolvedQuestion,
 )
 from app.schemas.membership import (
     MembershipCreate,
@@ -88,19 +61,12 @@ from app.schemas.website_integration import (
 )
 
 __all__ = [
-    "AdapterConfiguration",
-    "AdapterOperation",
     "ApiContractFinding",
-    "ApiContractRead",
-    "ApiOperationRead",
     "AssistantCreate",
     "AssistantPreview",
     "AssistantRead",
     "AssistantUpdate",
-    "AuthenticationScheme",
     "ConfigurationFinding",
-    "ContractCreate",
-    "ContractReconciliation",
     "DependencyFinding",
     "DeploymentFinding",
     "DiffFileItem",
@@ -109,18 +75,10 @@ __all__ = [
     "DiscoveryResult",
     "EntrypointFinding",
     "Evidence",
-    "ExecutionPlanCreate",
-    "ExecutionPlanRead",
-    "ExecutionStep",
     "FrameworkFinding",
     "InspectionResult",
-    "IntegrationAdapterCreate",
-    "IntegrationAdapterRead",
-    "IntegrationCandidate",
     "IntegrationCreate",
-    "IntegrationPlanCreate",
     "IntegrationPlanPayload",
-    "IntegrationPlanRead",
     "IntegrationRead",
     "IntegrationRunRead",
     "IntegrationUpdate",
@@ -138,20 +96,16 @@ __all__ = [
     "ProjectRead",
     "ProjectUpdate",
     "PullRequestInfo",
-    "ReconciliationFinding",
     "RegisterRequest",
     "RepositoryCreate",
     "RepositoryRead",
     "RepositoryUpdate",
-    "RequiredCredential",
     "RouteFinding",
     "RunDiffPayload",
-    "SafetyClassification",
     "SnapshotCreate",
     "SnapshotRead",
     "TokenPayload",
     "TokenResponse",
-    "UnresolvedQuestion",
     "UserBase",
     "UserCreate",
     "UserRead",

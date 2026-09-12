@@ -2,13 +2,9 @@ from app.models.allowed_origin import AllowedOrigin
 from app.models.assistant import Assistant, AssistantPosition
 from app.models.audit_event import AuditEvent
 from app.models.base import BaseModel
-from app.models.contract import ApiContract, ApiOperation, ContractSource, ContractStatus
 from app.models.conversation import Conversation, Message, MessageRole, VisitorSession
 from app.models.discovery import DiscoveryRun, DiscoveryStatus
-from app.models.execution_plan import ExecutionPlan, ExecutionPlanStatus
 from app.models.integration import Integration, IntegrationProvider, IntegrationStatus
-from app.models.integration_adapter import AdapterStatus, AdapterType, IntegrationAdapter
-from app.models.integration_plan import IntegrationPlan, IntegrationPlanStatus
 from app.models.knowledge import (
     DocumentStatus,
     KnowledgeBase,
@@ -31,27 +27,16 @@ from app.models.website_integration import (
 )
 
 __all__ = [
-    "AdapterStatus",
-    "AdapterType",
     "AllowedOrigin",
-    "ApiContract",
-    "ApiOperation",
     "Assistant",
     "AssistantPosition",
     "AuditEvent",
     "BaseModel",
-    "ContractSource",
-    "ContractStatus",
     "Conversation",
     "DiscoveryRun",
     "DiscoveryStatus",
     "DocumentStatus",
-    "ExecutionPlan",
-    "ExecutionPlanStatus",
     "Integration",
-    "IntegrationAdapter",
-    "IntegrationPlan",
-    "IntegrationPlanStatus",
     "IntegrationProvider",
     "IntegrationRun",
     "IntegrationRunStatus",
