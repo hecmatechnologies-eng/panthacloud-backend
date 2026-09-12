@@ -171,10 +171,14 @@ before any real question-answering ships.
      set: the tracker's legacy "Phase B.1" is frontend authentication, and has nothing to do
      with step B slice B1.
 
-5. **Orphaned subsystem.** `repository_snapshots`, `discovery`, `contracts`,
-   `integration_adapters`, `execution_plans` (migrations 0004–0008) are referenced by
-   **nothing** in the MVP integration path. Decision pending: repurpose the deterministic
-   analysis for app-shell/design detection, or retire it. Do not extend it meanwhile.
+5. **Orphaned subsystem — decided 2026-09-12.** The deterministic read/inspection/detection
+   substrate (`Repository` / `RepositorySnapshot` / `DiscoveryRun`, migrations 0004–0006, and
+   `workspace.py` / `acquisition.py` / `inspection.py` / the detectors in `discovery.py`) is
+   **repurposed** as the engineering plane's read substrate and the analyst's deterministic
+   pre-analysis. The contract / integration-plan / adapter / execution-plan layers (migrations
+   0007–0008, `contract.py`, `integration_planner.py`, `integration_adapter.py`,
+   `execution_planner.py`, and their models, endpoints and frontend tabs) are **retired** in
+   step-C slice C1. Do not extend the retired layers meanwhile.
 
 6. **SSE leak.** `studio_events.py` holds an `AsyncSession` open for the life of each
    connection while polling every second. It will exhaust the pool.
@@ -194,9 +198,9 @@ named triggers do not need a document of their own.
 
 | Item | Hazard | Trigger — do it before | Why then |
 |---|---|---|---|
-| ~~Remove the leaked dev secrets from source~~ | §3.2 | ~~B2~~ | **Done 2026-09-12.** The history rewrite remains, and still grows with every commit. |
+| ~~Remove the leaked dev secrets from source~~ | §3.2 | ~~B2~~ | **Done 2026-09-12.** History rewritten with `git filter-repo` (2026-09-12); all pre-rewrite SHAs changed. |
 | ~~`@/` alias vs `src/` layout~~ | §3.3 | ~~B8~~ | **Done 2026-09-12.** Brought forward: wiring the provider made this the slice whose output has to build in a customer's repo. |
-| Phases 05–08: repurpose or retire | §3.5 | **step C** | Step C builds the analyst. Either its deterministic detection reuses `discovery.py` or that subsystem goes; deciding after C is built means building it twice. |
+| ~~Phases 05–08: repurpose or retire~~ | §3.5 | ~~step C~~ | **Decided 2026-09-12:** repurpose the read/detection substrate, retire the contract/adapter/execution-plan layers in C1. |
 | `SandboxManager` rename + `SandboxProvider` Protocol | §2 ("no real sandbox") | **with B5 or later** | Nothing executes customer code yet, and the name claims otherwise. The Protocol is cheap once a second implementation is plausible; before that it is speculative. |
 
 ### Safety gates that now hold — all five wiring blockers closed (2026-09-12)
