@@ -17,9 +17,51 @@ logging.basicConfig(
 logger = logging.getLogger("fussion.main")
 
 
+def configure_git_provider() -> None:
+    """Install the real GitHub provider.
+
+    Until now nothing called this, so every run used the file-less `MockGitProvider` and the
+    pipeline had never seen a real repository (CLAUDE.md §2). It is called from `lifespan`, which
+    the test suite does not run, so tests keep the mock and cannot reach GitHub.
+    """
+    from app.services.integration.github import GitHubProvider, set_git_provider
+
+    set_git_provider(GitHubProvider())
+    logger.info("Git provider: GitHubProvider (real repositories)")
+
+
+def configure_model_gateway() -> None:
+    """Install the configured model provider, or leave the runtime failing loud.
+
+    Called from `lifespan`, which the test suite does not run; tests install a fake gateway
+    explicitly (mirroring `configure_git_provider`). With no key, the gateway stays unconfigured
+    and public chat returns 503 rather than a fabricated answer (CLAUDE.md §4.10).
+    """
+    from app.llm.factory import build_model_gateway
+    from app.llm.gateway import set_model_gateway
+
+    gateway = build_model_gateway()
+    set_model_gateway(gateway)
+    if gateway is None:
+        logger.warning("No model provider configured; public chat will return 503.")
+    else:
+        logger.info("Model gateway configured: %s", settings.MODEL_PROVIDER)
+
+
+def validate_embedding_configuration() -> None:
+    """Refuse an embedding configuration that would fail on the first upload or query."""
+    from app.services.knowledge.embeddings import validate_embedding_configuration as validate
+
+    validate()
+    logger.info("Embedding provider: %s", settings.EMBEDDING_PROVIDER)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting Fussion Backend (%s) in %s mode", settings.APP_NAME, settings.APP_ENV)
+    configure_git_provider()
+    configure_model_gateway()
+    validate_embedding_configuration()
     yield
     logger.info("Shutting down Fussion Backend, closing resources...")
     await close_database_connections()

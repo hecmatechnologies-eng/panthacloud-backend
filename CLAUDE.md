@@ -72,13 +72,15 @@ builder that hands the user an embed script, it is moving in the wrong direction
 
 Verify before you build on any of it.
 
-**Every Studio integration run currently ends in HTTP 422 "Integration refused". This is
-intended — failing closed. Do not "fix" it.** The running app uses `MockGitProvider`
-(see below), which contains no repository files, so the widget target is never found and
-the pipeline refuses rather than write a file it has not read (§4.8); `GET /plan` reports
-the target as `missing` for the same reason. Restoring a stub or default layout to make
-runs succeed would reintroduce §3.1. Runs complete only once a real provider is wired in,
-and that is gated by §3 "Blockers on wiring `GitHubProvider` in".
+**`GitHubProvider` is wired in (2026-09-12). The running app talks to real repositories.**
+`configure_git_provider()` runs from `lifespan`, so a Studio run now reads the customer's real
+widget target at a pinned commit, commits to an integration branch, and opens a pull request —
+provided the integration carries a GitHub token that can read the repository. Runs still fail
+closed, with a reason, whenever the target is missing, protected, or has no safe insertion point.
+
+Tests are unaffected: `lifespan` does not run under `ASGITransport`, so the suite uses
+`MockGitProvider`. Any process that runs neither — a future worker — gets a provider whose every
+method raises, rather than the mock's fabricated commit SHA and dead pull-request URL (§4.10).
 
 **Built and working**
 
@@ -91,11 +93,6 @@ and that is gated by §3 "Blockers on wiring `GitHubProvider` in".
   machine whose `backend/.env` points at Postgres
 
 **NOT built — do not write code that assumes these exist**
-
-- **No real GitHub connection.** `GitHubProvider` is implemented but never wired in —
-  nothing calls `set_git_provider(GitHubProvider())`, so the running app always talks to
-  `MockGitProvider`. The integration → branch → commit → pull request pipeline has only
-  ever run against the mock.
 
 - **No LLM anywhere.** No model SDK, no provider, no gateway, no API key handling.
 - **No agents, no harness, no orchestrator, no tool registry.**
@@ -156,9 +153,11 @@ before any real question-answering ships.
    `SECRET_ENCRYPTION_KEY` to the old value in `backend/.env` for continuity, accepting that it
    is a compromised key. A failed decryption is logged rather than silently ignored.
 
-3. **Generated import paths assume repo root.** Files are committed to `components/` and
-   `lib/` while the component imports `@/components/...`. Any repo using a `src/` layout
-   gets a build failure.
+3. **Resolved (2026-09-12) — generated files follow the project's source root.**
+   `source_root_for()` derives the root from the widget target (`src/app/layout.tsx` → `src/`),
+   generated files are written beside that tree, and the imports between them are **relative**,
+   so nothing depends on a `@/` alias Fussion has not read. A target outside any `app/` or
+   `pages/` tree is refused, because the source root cannot be determined.
 
 4. **Resolved (2026-09-12) — one plan, one numbering scheme.** Work is identified as a
    **step and slice**: steps A–D from `docs/FEASIBILITY.md` §3, sliced per step in
@@ -195,38 +194,53 @@ named triggers do not need a document of their own.
 | Item | Hazard | Trigger — do it before | Why then |
 |---|---|---|---|
 | ~~Remove the leaked dev secrets from source~~ | §3.2 | ~~B2~~ | **Done 2026-09-12.** The history rewrite remains, and still grows with every commit. |
-| `@/` alias vs `src/` layout — generated imports assume repo root | §3.3 | **B8** (real widget) | B8 is the first slice whose output has to build in a customer's repo. Any `src/` layout gets a build failure in the PR. |
+| ~~`@/` alias vs `src/` layout~~ | §3.3 | ~~B8~~ | **Done 2026-09-12.** Brought forward: wiring the provider made this the slice whose output has to build in a customer's repo. |
 | Phases 05–08: repurpose or retire | §3.5 | **step C** | Step C builds the analyst. Either its deterministic detection reuses `discovery.py` or that subsystem goes; deciding after C is built means building it twice. |
 | `SandboxManager` rename + `SandboxProvider` Protocol | §2 ("no real sandbox") | **with B5 or later** | Nothing executes customer code yet, and the name claims otherwise. The Protocol is cheap once a second implementation is plausible; before that it is speculative. |
 
-### Blockers on wiring `GitHubProvider` in
+### Safety gates that now hold — all five wiring blockers closed (2026-09-12)
 
-**This list is the gate. Nothing goes near a real repository until it is empty.**
+The gate list that stood here is empty. What replaced each item, and the limit that remains:
 
-Each item was found in review of the §3.1 fix and logged rather than fixed under §9.0's
-stopping rule: none can damage a repository as the code currently runs, because the only
-provider is the file-less `MockGitProvider` (§2) and the only generator is the
-deterministic patcher. Wiring a real provider — or adding the step-D CodingAgent — makes
-every one of them reachable.
+- **FR-096 protected paths are enforced at three points** (`app/core/protected_paths.py`):
+  the create/update schema refuses a protected `widget_target_path` (422 at configuration
+  time), the pipeline refuses one before reading anything, and `StaticValidator` rejects any
+  protected path among generated *or* declared files. Patterns are case-insensitive and
+  include `middleware.ts`, `.npmrc`, `.envrc`, CI directories and deployment config.
+- **Marker-pair discipline** (`validation.py`): a file is compared against its own framework
+  family only, each marker may appear once, and each must stand alone on its line. If
+  discipline fails the customer-content comparison is **skipped**, never trusted. The families
+  and the suffix map live in `artifacts.py` beside the patchers that emit them.
+- **`GET /plan`** resolves the branch head, then reads the target at that SHA, so a private
+  repository, a wrong default branch and a bad token each report their real cause.
+- **`create_branch(..., base_sha)` is required** across the Protocol and both providers.
+- **FR-097 generated-code scan exists** (`code_scan.py`): created files in full, and managed-block
+  content for modified files. Foreign origins include protocol-relative, `data:` and
+  `javascript:` URLs, and resource attributes beyond `<script src>`.
+- **The patchers are deliberately conservative: exactly one candidate, or refuse.** Text matching
+  cannot distinguish `</body>` the element from `</body>` inside a string or a comment, so a file
+  containing more than one candidate is refused rather than guessed at, as is a layout with none
+  (one that delegates its shell), a React target outside an `app/`/`pages/` tree, and a static
+  target that is not an HTML file. The import block is inserted *below* any `'use client'`
+  directive. Every one of these produced a file that did not compile, inside a managed block the
+  validator does not inspect — so refusing is the only honest answer until a build check exists.
+- **Generated code is scanned; the tenant's own configuration is not.** Config values are fenced
+  (`CONFIG_BEGIN`/`CONFIG_END`) and checked only for executable schemes. Scanning them as code
+  meant any tenant who set an avatar URL could never obtain a pull request.
+- **The pull-request body states what Fussion did *not* do** — no dependency install, no
+  type-check, no build — rather than claiming "Sandbox validation: PASSED" (FEASIBILITY §4).
 
-- **FR-096 protected paths are not enforced — violates invariant §4.9.**
-  `widget_target_path = ".github/workflows/deploy.yml"` passes `StaticValidator`, and the
-  PR would prepend a JS import to the workflow file. Also breaks AGENT-ARCHITECTURE §11
-  control 3 and §9.1 "Protected paths untouched". Self-inflicted rather than
-  cross-tenant.
-- **Marker-pair discipline.** The validator strips any Fussion marker pair wherever it
-  appears, so an edit wrapped in markers bypasses it, and a customer region that merely
-  looks like a managed block can be deleted by the patcher. Required: accept only the
-  file's framework marker family, no more pairs than the patcher emits, each marker alone
-  on its line (the HTML patcher needs a newline before its block). Required before the
-  step-D CodingAgent, since today only the deterministic patcher writes files.
-- **`GET /plan` reports private-repo, wrong-branch and bad-token 404s as "file missing"**
-  and tells the user to fix the widget path. Resolve the branch head first, then read the
-  file at that SHA. (The run itself is unaffected: it resolves repo and branch first.)
-- **`create_branch(..., base_sha=None)` has a default.** A future caller that omits it
-  silently re-resolves the moving head and reintroduces the §3.1 race. Make it required.
-- **FR-097 generated-code security scan does not exist.** Managed-block content is
-  unchecked by design, so the scan is the only gate on what ships inside those blocks.
+**Remaining limits, attached to what makes them reachable:**
+
+| Limit | Gate on |
+|---|---|
+| The scan cannot judge whether managed-block content is *plausible*, only whether it is malicious | step-D CodingAgent: agent-authored blocks need a build or type check, not just a scan |
+| Computed network destinations are flagged but not resolved; `postMessage`, dynamic imports and CSS `url()` are not covered | step-D CodingAgent |
+| A whitespace-only change is still invisible to the comparison (§3.1's known limit) | step-D CodingAgent — the deterministic patcher cannot produce one |
+| A failed run leaves its integration branch behind (FR-106); nothing deletes it | step-D resilience, or the job queue — needs `delete_branch` and verified teardown |
+| `_patch_preserving_line_endings` normalises a mixed-ending file, so the PR touches every line | B8, when a real widget makes diff size matter |
+| **The conservative patchers refuse real-world layouts** a person would integrate by hand — anything with a duplicated candidate tag, a delegated shell, or an unconventional target. This is the intended trade while nothing verifies output | step C's `WebsiteAnalyst` (ranked candidates, a human choosing) and step D's build check |
+| `GET /runs/{id}/diff` still raises (§3.7), and it is now reached on **every successful run** rather than never | its own slice — persist the change set on `IntegrationRun`; this is the Studio's change-inspection surface |
 
 ---
 
@@ -304,8 +318,11 @@ Execution          workspace today; container sandbox later
 - `app/agents/` may import `app/harness/` contracts only.
 - `app/harness/` may import `app/tools/`, `app/llm/` **abstractions**, never concrete
   providers.
-- `app/tools/` is the only layer that touches domain services, the database, GitHub, or
-  the filesystem.
+- Within the agent stack, `app/tools/` is the only layer that touches domain services, the
+  database, GitHub, or the filesystem; `app/agents/` and `app/harness/` reach them only through
+  it. The control plane, `app/services/`, the runtime plane (`app/runtime/`), and the model
+  gateway's usage accounting (`app/llm/gateway.py`, per AGENT-ARCHITECTURE §2) access the database
+  directly by design — this rule constrains the agent layer, not the platform.
 - `app/runtime/` (visitor data plane) must not import `app/agents/` or engineering tools.
 - `app/models/` is SQLAlchemy ORM. LLM provider code goes in `app/llm/`, never `models/`.
 
