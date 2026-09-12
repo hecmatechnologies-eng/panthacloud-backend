@@ -67,6 +67,51 @@ class Settings(BaseSettings):
     INSPECTION_TIMEOUT_SECONDS: int = 30
     WORKSPACE_RETENTION_HOURS: int = 24
 
+    # Runtime plane (step B). Rate limits are per-process fixed windows (app/runtime/rate_limit.py).
+    PUBLIC_SESSION_TTL_HOURS: int = 24
+    PUBLIC_CONVERSATION_RETENTION_DAYS: int = 30
+    PUBLIC_CHAT_RATE_LIMIT_WINDOW_SECONDS: int = 60
+    PUBLIC_CHAT_RATE_LIMIT_PER_IP: int = 60
+    PUBLIC_CHAT_RATE_LIMIT_PER_INTEGRATION: int = 120
+    PUBLIC_CHAT_RATE_LIMIT_PER_ORGANIZATION: int = 300
+    PUBLIC_CHAT_RATE_LIMIT_PER_SESSION: int = 30
+
+    # Model plane (step B5). No MODEL_API_KEY means no provider: the runtime returns 503 rather
+    # than answering, and tests install a fake gateway explicitly.
+    MODEL_PROVIDER: str = "gemini"
+    MODEL_API_KEY: str | None = None
+    # Required for OpenAI-compatible providers with no built-in default (app/llm/factory.py).
+    MODEL_BASE_URL: str | None = None
+    MODEL_ID: str = "gemini-2.5-flash"
+    # Keep in step with app/llm/pricing.py: an allowed model with no price records zero cost.
+    MODEL_ALLOWED_IDS: list[str] = ["gemini-2.5-flash"]
+    # Gemini 2.5 "thinking" tokens are billed as output but are not reported in
+    # candidates_token_count, so they silently inflate cost and can consume the output budget.
+    # 0 disables thinking — the runtime is grounded Q&A, not reasoning.
+    MODEL_THINKING_BUDGET: int = 0
+    MODEL_MAX_INPUT_TOKENS: int = 20_000
+    MODEL_MAX_OUTPUT_TOKENS: int = 1024
+    MODEL_TIMEOUT_SECONDS: float = 30.0
+    MODEL_MAX_RETRIES: int = 2
+    MODEL_RETRY_BACKOFF_SECONDS: float = 0.5
+    MODEL_HISTORY_MAX_MESSAGES: int = 20
+    # Per-organization monthly spend budget (FR-074). None disables the budget; a non-positive
+    # value suspends all calls. Fractions trigger warning, throttle and suspension.
+    MODEL_DEFAULT_SPEND_LIMIT_USD: float | None = 10.0
+    MODEL_BUDGET_WARNING_FRACTION: float = 0.8
+    MODEL_BUDGET_THROTTLE_FRACTION: float = 0.95
+    MODEL_BUDGET_THROTTLED_MAX_OUTPUT_TOKENS: int = 256
+
+    # Embedding plane (step B6). "gemini" uses the real semantic embeddings; "deterministic" is the
+    # lexical test/dev double. The dimension is stored on each KnowledgeBase, so a change here
+    # affects only newly created bases.
+    EMBEDDING_PROVIDER: str = "gemini"
+    EMBEDDING_API_KEY: str | None = None
+    EMBEDDING_MODEL: str = "gemini-embedding-001"
+    EMBEDDING_DIMENSION: int = 768
+    RETRIEVAL_TOP_K: int = 5
+    RETRIEVAL_SCORE_THRESHOLD: float = 0.0
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

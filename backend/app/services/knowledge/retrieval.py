@@ -7,7 +7,11 @@ from app.schemas.knowledge import (
     KnowledgeQueryResponse,
     KnowledgeQueryResultItem,
 )
-from app.services.knowledge.embeddings import DeterministicHashEmbeddingProvider, cosine_similarity
+from app.services.knowledge.embeddings import (
+    EmbeddingProviderError,
+    cosine_similarity,
+    get_embedding_provider,
+)
 
 
 async def query_knowledge_base(
@@ -17,11 +21,12 @@ async def query_knowledge_base(
 ) -> KnowledgeQueryResponse:
     """
     Semantic retrieval against the project's knowledge base.
-    Restricted strictly to READY documents within this specific KnowledgeBase.
+    Restricted strictly to READY documents within this specific KnowledgeBase (FR-109: tenancy
+    is a filter, not a ranking hint), and embedded with the base's own stored model.
     """
-    # 1. Embed query
-    embedder = DeterministicHashEmbeddingProvider(dimension=384)
-    query_emb = embedder.embed_text(request.query)
+    # 1. Embed query with the same model the chunks were embedded with
+    embedder = get_embedding_provider(kb.embedding_model, kb.embedding_dimension)
+    query_emb = await embedder.embed_text(request.query)
 
     # 2. Fetch all chunks from READY documents in this knowledge base
     stmt = (
@@ -39,6 +44,13 @@ async def query_knowledge_base(
     scored_items: list[tuple[float, KnowledgeChunk, KnowledgeDocument]] = []
     for chunk, doc in rows:
         chunk_emb: list[float] = chunk.embedding
+        if len(chunk_emb) != len(query_emb):
+            # A chunk embedded by a different model is unusable. Fail closed rather than score it
+            # 0 and let the 0.0 default threshold pass every chunk.
+            raise EmbeddingProviderError(
+                "Chunk embedding dimension does not match the query; the knowledge base's "
+                "embedding model is inconsistent with its chunks."
+            )
         score = cosine_similarity(query_emb, chunk_emb)
         if score >= request.score_threshold:
             scored_items.append((score, chunk, doc))

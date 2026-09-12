@@ -42,6 +42,22 @@ class KnowledgeBase(BaseModel):
         Text,
         nullable=True,
     )
+    # The embedding model and dimension this base's chunks were embedded with. Stored here, not
+    # hardcoded at the retrieval call site, so a query always uses the same model as the chunks
+    # (CLAUDE.md §6, connascence). Defaults match the pre-B6 deterministic provider so existing
+    # bases stay queryable; new bases take the configured provider.
+    embedding_model: Mapped[str] = mapped_column(
+        String(100),
+        default="deterministic-hash-384",
+        server_default="deterministic-hash-384",
+        nullable=False,
+    )
+    embedding_dimension: Mapped[int] = mapped_column(
+        Integer,
+        default=384,
+        server_default="384",
+        nullable=False,
+    )
 
     project: Mapped["Project"] = relationship(
         "Project",

@@ -13,6 +13,7 @@ from app.models.base import BaseModel
 
 if TYPE_CHECKING:
     from app.models.allowed_origin import AllowedOrigin
+    from app.models.conversation import VisitorSession
     from app.models.project import Project
 
 PUBLIC_KEY_PREFIX = "fussion_pk_"
@@ -142,6 +143,13 @@ class WebsiteIntegration(BaseModel):
         back_populates="website_integration",
         cascade="all, delete-orphan",
         order_by="AllowedOrigin.created_at",
+    )
+    # Visitor conversation memory (B3). Deleting the integration is the deletion path that
+    # purges a tenant's runtime conversations (FR-119/FR-120).
+    visitor_sessions: Mapped[list["VisitorSession"]] = relationship(
+        "VisitorSession",
+        back_populates="integration",
+        cascade="all, delete-orphan",
     )
 
 

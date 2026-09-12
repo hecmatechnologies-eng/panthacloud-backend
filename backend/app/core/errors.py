@@ -15,6 +15,7 @@ def create_error_response(
     code: str,
     message: str,
     details: Any | None = None,
+    headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     content: dict[str, Any] = {
         "detail": message,
@@ -25,7 +26,7 @@ def create_error_response(
     }
     if details is not None:
         content["error"]["details"] = details
-    return JSONResponse(status_code=status_code, content=content)
+    return JSONResponse(status_code=status_code, content=content, headers=headers)
 
 
 
@@ -36,9 +37,14 @@ def register_error_handlers(app: FastAPI) -> None:
             status.HTTP_404_NOT_FOUND: "NOT_FOUND",
             status.HTTP_400_BAD_REQUEST: "BAD_REQUEST",
             status.HTTP_401_UNAUTHORIZED: "UNAUTHORIZED",
+            status.HTTP_402_PAYMENT_REQUIRED: "PAYMENT_REQUIRED",
             status.HTTP_403_FORBIDDEN: "FORBIDDEN",
             status.HTTP_405_METHOD_NOT_ALLOWED: "METHOD_NOT_ALLOWED",
+            status.HTTP_413_CONTENT_TOO_LARGE: "PAYLOAD_TOO_LARGE",
+            status.HTTP_429_TOO_MANY_REQUESTS: "RATE_LIMITED",
             status.HTTP_422_UNPROCESSABLE_CONTENT: "UNPROCESSABLE_CONTENT",
+            status.HTTP_502_BAD_GATEWAY: "BAD_GATEWAY",
+            status.HTTP_503_SERVICE_UNAVAILABLE: "SERVICE_UNAVAILABLE",
             status.HTTP_500_INTERNAL_SERVER_ERROR: "INTERNAL_SERVER_ERROR",
         }
         error_code = code_map.get(exc.status_code, "HTTP_ERROR")
@@ -46,6 +52,9 @@ def register_error_handlers(app: FastAPI) -> None:
             status_code=exc.status_code,
             code=error_code,
             message=str(exc.detail),
+            # Preserve headers the raise site attached — Retry-After on 429, WWW-Authenticate on
+            # 401. The JSONResponse this builds would otherwise drop them.
+            headers=exc.headers,
         )
 
     @app.exception_handler(RequestValidationError)

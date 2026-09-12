@@ -15,6 +15,7 @@ from app.api.v1.endpoints import (
     memberships,
     organizations,
     projects,
+    public_chat,
     repositories,
     snapshots,
     studio_events,
@@ -50,3 +51,5 @@ api_v1_router.include_router(
     website_integrations.router,
     prefix="/organizations/{org_id}/projects/{project_id}/website-integration",
 )
+# Runtime plane: unauthenticated, tenanted by public key + Origin (B4).
+api_v1_router.include_router(public_chat.router, prefix="/public")

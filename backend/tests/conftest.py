@@ -17,6 +17,11 @@ os.environ["FALLBACK_SQLITE_URL"] = "sqlite+aiosqlite:///./test_fussion.db"
 os.environ["JWT_SECRET_KEY"] = token_urlsafe(48)
 os.environ["SECRET_ENCRYPTION_KEY"] = Fernet.generate_key().decode("ascii")
 
+# Tests must never call a paid embedding API. The deterministic provider is lexical but
+# deterministic and offline; production uses the configured real provider (app/core/config.py).
+os.environ["EMBEDDING_PROVIDER"] = "deterministic"
+os.environ["EMBEDDING_DIMENSION"] = "384"
+
 import app.models
 from app.core.database import Base, get_engine
 from app.main import app

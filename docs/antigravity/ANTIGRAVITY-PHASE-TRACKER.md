@@ -16,7 +16,7 @@ third, different numbering and is archived under `docs/archive/`.
 | Step | Scope | Status |
 | :--- | :--- | :--- |
 | **A. Truth & safety** | layout-overwrite fix, workspace clone+read, one roadmap, key removal, 05–08 decision | **IN PROGRESS** — layout-overwrite fix (`415d5e3`), roadmap reconciliation (`17a9c79`) and dev-secret removal from source done. Remaining items and their triggers are tabled in `CLAUDE.md` §3: `@/` alias before B8, the 05–08 decision before step C, `SandboxProvider` with B5 or later, and the git-history rewrite before the first push |
-| **B. Runtime plane** | `STEP-B-SLICES.md` B1–B8 | **IN PROGRESS** — B1 done (`f8cc086`); B2 next |
+| **B. Runtime plane** | `STEP-B-SLICES.md` B1–B8 | **IN PROGRESS** — B1 done (`f8cc086`); B2 done; B3 done; B4 done; B5 done; B6 done; **B7 (SSE) deferred by owner**; B8 next |
 | **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | NOT STARTED — no slice breakdown yet |
 | **D. Coding agent** | write capability, generated-code scan, ChangeSet → PR, bounded repair | NOT STARTED — no slice breakdown yet |
 
@@ -1345,3 +1345,523 @@ Reported to the owner in the same session, and deliberately **not** fixed:
 - `grep` for `ANTIGRAVITY-PROJECT-RULES` outside `docs/archive/`: only this tracker's historical
   entries and the two updated pointers remain.
 - Frontend: not run, and not claimed — no frontend file changed.
+
+---
+
+## Step B (FEASIBILITY §3) · Slice B2 — runtime tenant resolver
+
+**Rigour tier: 1 — Maximum** (CLAUDE.md §9.0), declared before work started and unchanged. The
+resolver is the runtime plane's tenancy boundary: it decides which organization a public request
+belongs to, and every later runtime call derives its scope from that decision. A tenancy defect
+here is a cross-tenant data path, which is the reason B4 deliberately precedes B5 — see
+`STEP-B-SLICES.md` Notes.
+
+**Status: COMPLETED** — fussion-reviewer PASS WITH FINDINGS, no BLOCKING finding; the one in-slice
+finding fixed and re-verified. No endpoint, migration or schema change; committed with this entry.
+
+### Objective
+FR-108, with FR-107's key and origins made useful: a function turns an untrusted `public_key` and
+`Origin` header into a trusted `TenantContext`, or refuses. Cross-tenant combinations fail.
+Unknown key, unregistered origin and an origin registered to a different integration are
+indistinguishable to the caller. **No behaviour exposed:** B4 is the first endpoint that calls it.
+
+### Completed Work
+- **`app/runtime/`** (new package, per `AGENT-ARCHITECTURE` §9). Its `__init__` records the layer
+  rule: the visitor data plane must not import `app/agents/` or engineering tools.
+- **`TenantContext`** (`app/runtime/resolver.py`): `organization_id`, `project_id`,
+  `integration_id`, `origin`. Frozen and slotted, constructed only from server state, so no later
+  stage — model output in particular — can widen its scope.
+- **`TenantResolutionError`**: one exception, one constant message. Every refusal reaches it:
+  missing/empty key or origin, malformed origin, and no match all take the same path.
+- **`resolve_tenant(db, public_key, origin)`**: normalises the header with B1's `normalize_origin`,
+  then runs **one** joined query filtering on `public_key` *and* the canonical origin, with the
+  origin scoped to the key's own integration. Joining rather than branching is what makes the
+  three refusal causes structurally indistinguishable.
+- **Tests** (`tests/test_tenant_resolver.py`, 20): written red-first — the module failed to import
+  before the code existed. Cover successful resolution and tenant-correctness; origin
+  normalisation before matching; immutability of the context; and refusal of unknown key,
+  unregistered origin, cross-integration origin, the cross-tenant combination (with the correct
+  pair still resolving), and missing/malformed key or origin. One test asserts all four refusal
+  invocations share a single exception type and message.
+
+### Architectural & Technology Decisions
+1. **No FastAPI dependency in the resolver.** It raises a domain exception and lets B4 map it to a
+   status. That keeps the tenancy decision unit-testable without an HTTP surface and keeps
+   `app/runtime/` from coupling to the API layer.
+2. **Reuse `app/core/origins.normalize_origin`; no second implementation.** B1's log (decision 1)
+   and its docstring both name B2 as the consumer, precisely so the stored and presented forms
+   cannot drift.
+3. **`raise ... from None` on the malformed-origin path**, so the underlying `ValueError` cannot
+   surface as a distinguishable cause.
+4. **No readiness/status gate.** A `NOT_CONNECTED` integration still resolves; resolution is about
+   tenancy, not whether the assistant is configured. B4 decides what readiness it requires (YAGNI).
+5. **Removable by deletion:** removing `app/runtime/` removes the capability; nothing else imports
+   it yet.
+
+### Review history
+One round (Tier 1 gate), fresh reviewer — **PASS WITH FINDINGS**, no BLOCKING finding. No §4
+invariant violated; the anti-enumeration property was confirmed to hold as the code runs, not just
+as asserted. One in-slice finding, fixed per §9.0:
+1. The indistinguishability test asserted equality for only two of the three refusal causes the
+   slice names; the cross-integration case asserted refusal alone. The test now proves all four
+   refusal invocations share one exception type and message.
+
+Three CONSIDER items, logged as gates on B4 rather than fixed now (the endpoint that would make
+them reachable does not exist):
+- `public_key` is passed to the query without a length or prefix bound. It becomes an
+  unauthenticated public input at B4; the bound belongs in B4's request schema, as
+  `AllowedOriginCreate` bounds its raw input.
+- B4 must map `TenantResolutionError` to exactly one status and body, with no per-cause branch, or
+  it will re-open the enumeration channel this slice closed.
+- No readiness gate on the resolved integration (decision 4) — a B4 product decision.
+
+### Deviations
+Checked against the slice contract in `STEP-B-SLICES.md`:
+- One file beyond the two named: `app/runtime/__init__.py`, because a package requires it.
+- No endpoint, migration, schema or frontend change, as the slice specifies.
+- Everything else matches: tier, the refusal property, and the cross-tenant behaviour.
+
+### Blockers / Deferred
+- The three B4 gates above.
+- **No `public_key` rotation path** (carried from B1): deleting the integration is still the only
+  way to change the key. Cheapest to add before B8 embeds it in customer pages.
+
+### Verification (2026-09-12)
+- Ruff, from `backend/`: `All checks passed!`
+- B2 tests red-first: collection error (`No module named 'app.runtime'`) before the code existed;
+  **20 passed** after.
+- Full backend suite, from the repository root (the §8 Postgres `.env` caveat): **393 passed**
+  (20 new + 373 pre-existing).
+- Migration: none. Frontend: untouched and not run. Evals: none exist yet.
+- Note: the full suite was run before the review fix; the fix changed only the B2 test file, which
+  was re-run green, and no application code changed after that run.
+
+---
+
+## Step B (FEASIBILITY §3) · Slice B3 — visitor session / conversation / message schema
+
+**Rigour tier: 2 — Standard** (CLAUDE.md §9.0), declared before work started and unchanged. Schema
+only: no endpoint, no service, no model call, and nothing writes the tables. The tier is 2 because
+the slice adds a storage shape with no reachable behaviour; it becomes Tier 1 when B4 first reads
+or writes it under a public request.
+
+**Status: COMPLETED** — fussion-reviewer PASS WITH FINDINGS, no BLOCKING finding; both in-slice
+findings fixed and re-verified. Committed with this entry.
+
+### Objective
+FR-056, FR-119–FR-121: the conversation-memory tier exists as its own store, with retention
+fields and a deletion path, separate from engineering conversations. Nothing writes to it yet —
+B4 is the first endpoint that does.
+
+### Completed Work
+- **`app/models/conversation.py`** — one aggregate file, as `knowledge.py` holds the knowledge
+  aggregate:
+  - `VisitorSession` — belongs to a `WebsiteIntegration`; carries the canonical `origin` it began
+    under and `expires_at`, its TTL.
+  - `Conversation` — belongs to a session; carries `retention_expires_at`, the content-retention
+    window, deliberately independent of the session TTL (FR-056).
+  - `Message` — belongs to a conversation; `role` (`VISITOR`/`ASSISTANT`) and `content`.
+  - `MessageRole` enum; a composite index on `(conversation_id, created_at, id)`.
+- **Registration** — `app/models/__init__.py`, and `WebsiteIntegration.visitor_sessions` with
+  `cascade="all, delete-orphan"`.
+- **Migration 0013** — `visitor_sessions`, `conversations`, `messages`; FK `ondelete="CASCADE"`;
+  the native `message_role` enum dropped in `downgrade()` on Postgres.
+- **Tests** (`tests/test_visitor_conversations.py`, 10) — round trip and tenancy path, ordering,
+  the enum, both retention fields required, the three cascade paths (integration, project,
+  conversation), cross-tenant isolation of a cascade, and deterministic ordering on tied
+  timestamps.
+
+### Architectural & Technology Decisions
+1. **Tenancy by path, not a column.** There is no `organization_id` on these tables; scope comes
+   from `WebsiteIntegration → Project → Organization`, so it cannot drift from the integration's
+   tenant. This is the runtime-plane counterpart of the resolver's `TenantContext`.
+2. **Two retention timestamps, not one.** Session TTL and conversation retention are separate
+   policies (FR-056 requires independent retention); collapsing them would force one policy on the
+   other.
+3. **Ordering is `(created_at, id)`.** `created_at` alone is not a total order — two turns written
+   in one clock tick would read back arbitrarily. `id` breaks the tie, and the index includes it.
+4. **`MAX_ORIGIN_LENGTH` is imported, not re-declared.** B1's review finding 3 was exactly this
+   duplication across a module boundary; the column reuses the constant.
+5. **The cascade that deletes is the ORM relationship cascade.** SQLite runs with the
+   `foreign_keys` pragma off, so the migration's `ondelete` is inert there; it is a Postgres
+   backstop. Recorded in the module docstring so a future bulk retention sweep does not silently
+   orphan rows on SQLite.
+6. **No `last_seen_at`.** Added, then removed after review: it duplicates `BaseModel.updated_at`
+   and has no consumer until B4 (YAGNI). `expires_at` is the retention field the slice requires.
+
+### Review history
+One round (Tier 2 gate), fresh reviewer — **PASS WITH FINDINGS**, no BLOCKING finding. Two
+in-slice findings, fixed per §9.0:
+1. **Message ordering was not a total order.** `order_by="Message.created_at"` with an
+   application-side clock could return a visitor turn and its reply in either order when written
+   in the same tick. Now ordered by `(created_at, id)`, with the index extended to match, and a
+   regression test on tied timestamps.
+2. **The deletion path rested on the ORM, not the constraint, and this was implicit.** The
+   reviewer's point stands: on SQLite the FK `ondelete` does nothing, so the passing cascade tests
+   prove the ORM relationship, not the migration. Resolved by the reviewer's first option —
+   keeping deletion ORM-only and saying so — documented in the module docstring and logged below
+   as a gate on the retention sweep.
+
+Also removed from CONSIDER: `last_seen_at` (decision 6). Two CONSIDER items were accepted without
+change: `origin` is unindexed (no B4 consumer yet), and `passive_deletes` is not set, so a
+control-plane delete loads children into the ORM (acceptable at current volume; see Deferred).
+
+### Deviations
+Checked against the slice contract in `STEP-B-SLICES.md`:
+- One column removed after review (`last_seen_at`, decision 6) and one index widened (finding 1);
+  both are the same three tables the slice names.
+- No endpoint, service, schema, or frontend change, as the slice specifies.
+- Everything else matches: tier, the three entities, and the retention fields.
+
+### Blockers / Deferred
+- **Retention enforcement (FR-119) is not built** — only the fields exist. The sweep is a later
+  slice; it must delete through the ORM or enable the SQLite `foreign_keys` pragma, or it will
+  orphan rows on SQLite while Postgres cascades.
+- **SQLite foreign keys are off repository-wide.** The suite exercises ORM cascades, not the DB
+  constraints; a dialect divergence in any `ondelete` is invisible to it. Enabling the pragma is
+  its own change.
+- **`passive_deletes` not set.** A control-plane delete loads all child rows; fine at current
+  volume, revisited if runtime conversation history grows large.
+- **FR-098 fencing is a B4 obligation.** `Message.content` is visitor-authored untrusted data;
+  nothing reads it yet.
+
+### Verification (2026-09-12)
+- Ruff, from `backend/`: `All checks passed!`
+- B3 tests: **10 passed**.
+- Full backend suite, from the repository root: **403 passed** (10 new + 393 pre-existing).
+- Migration 0013: `upgrade → downgrade → upgrade` verified on **both SQLite and a scratch
+  Postgres database** (created and dropped; `fussion_migcheck` role with `LOGIN CREATEDB`). This
+  closes the standing §9.1 gap B1 logged as a blocker. No seed: the migration creates new tables
+  and backfills nothing.
+- Frontend: untouched, not run. Evals: none exist yet.
+
+---
+
+## Step B (FEASIBILITY §3) · Slice B4 — public chat endpoint, no model
+
+**Rigour tier: 1 — Maximum** (CLAUDE.md §9.0), declared before work started and unchanged. This is
+the runtime plane's first reachable surface and it resolves tenancy for unauthenticated public
+traffic; a tenancy defect here is a cross-tenant data path.
+
+**Status: COMPLETED** — fussion-reviewer PASS WITH FINDINGS, no BLOCKING finding; all three
+in-slice findings fixed and re-verified. Committed with this entry.
+
+### Objective
+FR-107/FR-108/FR-113/FR-114: a real public endpoint that resolves the tenant from the public key
+and `Origin`, is rate-limited, persists the conversation, and returns a canned reply. No model —
+B5 replaces the reply; B6 inserts retrieval before it.
+
+### Completed Work
+- **`app/runtime/rate_limit.py`** — in-process fixed-window limiter (`RateLimiter.check`,
+  `RateLimitExceeded`, `reset`). Bounded memory with oldest-window eviction at the cap.
+- **`app/runtime/chat.py`** — `handle_chat(...)`: resolve tenant (B2) → IP limit → integration and
+  organization limits → resolve/create session + conversation → session limit → persist visitor
+  and assistant messages → return `ChatReply`. No FastAPI import; testable without HTTP.
+- **`app/schemas/public_chat.py`** — `ChatRequest` (`public_key` bounded to 64, `message` bounded
+  to 4000 and non-blank), `ChatResponse`.
+- **`app/api/v1/endpoints/public_chat.py`** — `POST /api/v1/public/chat`, unauthenticated;
+  `TenantResolutionError` → one 403 body (the B2 gate); `RateLimitExceeded` → 429 + `Retry-After`.
+- **`app/api/v1/router.py`** — public router under `/public`.
+- **`app/core/config.py`** — `PUBLIC_*` session TTL, retention and rate-limit settings.
+- **`app/core/errors.py`** — 429 code mapping; **preserves `HTTPException.headers`** on the JSON
+  error response (see Deviations — this fixed a pre-existing defect).
+- **Tests** (`tests/test_public_chat.py`, 19) — happy path and reuse, canned reply from the
+  Assistant and the fallback, tenancy refusals indistinguishable, missing/cross origin refused,
+  foreign and expired sessions start fresh, origin binding, tenant-scoped persistence, IP /
+  integration / organization / session limits, input bounds, and public-key capability separation.
+
+### Architectural & Technology Decisions
+1. **CORS for customer origins is deferred to B8.** The app's global `CORSMiddleware` intercepts a
+   customer preflight before the handler runs, so per-origin CORS is its own security-sensitive
+   change and belongs with the real widget and the CSP/origins documentation (FR-111). Agreed with
+   the owner; logged as a B8 gate.
+2. **Rate limiting is per-process, in-memory.** Honest for a single-process MVP; wrong across
+   workers, where the effective limit multiplies by the replica count. Redis is the trigger-named
+   replacement (CLAUDE.md §6) — no Redis exists.
+3. **IP, integration and organization are the enforceable scopes.** The session scope is
+   documented as *not* an abuse boundary: there is no server-set cookie, so a caller that omits or
+   fabricates `session_id` gets a fresh counter. A conversation scope would duplicate the session
+   one at MVP and is deferred to B5's usage accounting.
+4. **Session reuse requires the same integration *and* the same registered origin.** `origin` was
+   stored in B3 "so a later turn can be bound to it"; B4 is that turn. Same-integration, so never
+   cross-tenant, but it stops a session begun on one registered origin being continued from
+   another.
+5. **The public key is not a credential for anything but chat.** The endpoint carries no auth
+   dependency and reaches no control-plane resource (FR-114); a test asserts the key is not a
+   bearer token.
+6. **The canned reply is the tenant's `Assistant.welcome_message`**, falling back to a fixed
+   string. Reading the Assistant now exercises the tenant → project → assistant path B5 will use.
+
+### Review history
+One round (Tier 1 gate), fresh reviewer — **PASS WITH FINDINGS**, no BLOCKING finding. No §4
+invariant violated; the reviewer traced `_resolve_or_create_session` and confirmed no
+client-supplied session id can cross tenants, and confirmed the anti-enumeration body is
+identical. Three in-slice findings, fixed per §9.0:
+1. **Origin binding was not enforced.** `VisitorSession.origin` was written but never compared, so
+   a session could be resumed from a different registered origin of the same integration. Now
+   compared before reuse; test added.
+2. **The session rate-limit scope was presented as an abuse boundary but is client-resettable**,
+   and two of FR-113's five levels (organization, conversation) were absent with no deferral. The
+   organization scope is now enforced; the session scope's limitation is documented in the code;
+   the conversation scope is deferred to B5 with a reason. IP and organization tests added.
+3. **The rate-limiter memory comment overclaimed.** It said buckets were "pruned rather than
+   allowed to grow without limit", but pruning frees nothing while every bucket is inside its
+   window. The map now evicts the oldest window at the cap, and the comment matches.
+
+CONSIDER items accepted: `request.client.host` is the safe IP source (raw `X-Forwarded-For` is
+spoofable); behind a proxy a trusted `ProxyHeadersMiddleware` is required, documented rather than
+changed. FR-098 fencing is unreachable until B5 builds a prompt — logged as a B5 gate, not closed
+here. FR-119 retention enforcement remains a B3 deferral.
+
+### Deviations
+Checked against the slice contract in `STEP-B-SLICES.md`:
+- **`app/core/errors.py` changed for a pre-existing defect B4 surfaced.** The custom HTTP error
+  handler rebuilt the response with `create_error_response`, dropping any headers the raise site
+  attached. So the 429's `Retry-After` — and, already, the `WWW-Authenticate` on every 401 — never
+  reached the client. The handler now forwards `exc.headers`. No existing behaviour regresses; the
+  full suite is unchanged.
+- **Organization rate-limit scope and IP/organization tests added after review** (finding 2), and
+  origin binding after review (finding 1). Both are within the endpoint the slice names.
+- **CORS not implemented**, by explicit agreement, deferred to B8 (decision 1).
+- Everything else matches: tier, the public path, no model, no migration, no frontend.
+
+### Blockers / Deferred
+- **CORS for customer origins** — B8.
+- **Conversation rate-limit scope** — B5 (usage accounting), or a later slice.
+- **FR-098 context fencing** — B5, when a prompt first contains visitor messages.
+- **FR-119 retention enforcement** — the sweep is still unbuilt (B3 deferral).
+- **Rate limiting is per-process** — a multi-worker deployment needs Redis or a shared store.
+- **IP source behind a proxy** — needs trusted `ProxyHeadersMiddleware`; do not switch to raw XFF.
+
+### Verification (2026-09-12)
+- Ruff, from `backend/`: `All checks passed!`
+- B4 tests: **19 passed**.
+- Full backend suite, from the repository root: **422 passed** (19 new + 403 pre-existing).
+- Migration: none. Frontend: untouched, not run. Evals: none exist yet.
+
+---
+
+## Step B (FEASIBILITY §3) · Slice B5 — ModelProvider + ModelGateway
+
+**Rigour tier: 1 — Maximum** (CLAUDE.md §9.0), declared before work started and unchanged. The
+widget now gets a real LLM answer; this slice introduces the model plane and the per-organization
+cost boundary.
+
+**Status: COMPLETED** — fussion-reviewer PASS WITH FINDINGS, no BLOCKING finding; all five
+in-slice findings fixed and re-verified. Committed with this entry.
+
+### Objective
+FR-071–FR-075, FR-125: the widget gets a real LLM answer through a `ModelGateway` that enforces
+allowed models, context and token caps, timeouts, bounded retries, a per-organization spend budget,
+and records usage per call. Provider: Google Gemini. No model configured → 503, never a fabricated
+answer.
+
+### Completed Work
+- **`app/llm/base.py`** — the `ModelProvider` seam: `ModelMessage`/`ModelRequest`/`ModelResponse`/
+  `Usage` DTOs and the transient/permanent provider-error split. Fussion's types, not a vendor's.
+- **`app/llm/gateway.py`** — `ModelGateway`: allowlist, context cap, budget check, timeout +
+  bounded retries, usage recording; typed errors mapped to HTTP by the endpoint.
+- **`app/llm/providers/gemini.py`** — the only module importing `google-genai` (lazily), mapping
+  the SDK onto the DTOs and its errors onto the transient/permanent split.
+- **`app/llm/providers/fake.py`** — deterministic test double (records requests, can fail on
+  demand).
+- **`app/llm/pricing.py`** — per-1M-token price table → estimated cost.
+- **`app/llm/factory.py`** — builds the gateway from settings; `validate_model_configuration`
+  refuses an inconsistent config at startup.
+- **`app/models/model_usage.py` + migration 0014** — append-only usage ledger, org-scoped;
+  project/integration/conversation links are `SET NULL` so a paid call is never erased by deleting
+  its subject.
+- **`app/runtime/chat.py`** — the canned reply is replaced by the gateway call: trusted system
+  prompt + bounded conversation history; assistant reply and usage persisted.
+- **`public_chat.py`/`errors.py`/`config.py`/`main.py`** — model-error → HTTP mapping (503/502/413/
+  402), `MODEL_*` settings, gateway configured in `lifespan`.
+- **Tests** — `tests/test_model_gateway.py` (15) and the updated `tests/test_public_chat.py` (23).
+
+### Architectural & Technology Decisions
+1. **Gemini via `google-genai`, imported only in the provider module.** `pydantic_ai` is *not*
+   introduced in B5; the agent layer's framework decision (ADR-001) belongs to step C and plugs
+   into this same seam.
+2. **Fail loud, never fabricate.** No `MODEL_API_KEY` → the gateway is unconfigured and the runtime
+   returns 503 (CLAUDE.md §4.10). Tests install a fake gateway explicitly, mirroring the git
+   provider.
+3. **Budget is projected before the call, not just checked after.** The call's maximum estimated
+   cost is added to month-to-date spend; a call that would cross the limit is refused first.
+   Warning / throttle / suspend thresholds per FR-074; throttle reduces `max_output_tokens`.
+4. **A timeout is terminal, not retried.** A timeout is ambiguous — the provider may have completed
+   and billed — so retrying could double-charge. Only explicit transient errors (429/5xx) retry.
+5. **Usage is a ledger, not a column.** One append-only row per call keeps FR-073/FR-075 measurable
+   and survives the deletion of the project or conversation that produced it.
+6. **`CLAUDE.md` §5 clarified.** The "only `app/tools/` touches the database" rule is scoped to the
+   agent layer; the control plane, `app/services/`, the runtime plane and the gateway's accounting
+   access the database directly by design. The literal rule was already contradicted by
+   `app/services/` and `app/runtime/` (B2–B4), and AGENT-ARCHITECTURE §2 places cost accounting in
+   the gateway.
+7. **Thinking disabled (`MODEL_THINKING_BUDGET=0`).** Gemini 2.5 bills "thinking" tokens as output
+   but omits them from `candidates_token_count`, so leaving it on inflates recorded cost and can
+   consume the output budget — a live 10-token budget returned no text at all because thinking ate
+   it. The runtime is grounded Q&A, not reasoning. Verified against the live API.
+8. **A second provider proves the seam (FR-072).** `OpenAICompatibleProvider`
+   (`app/llm/providers/openai_compatible.py`, the only module importing the `openai` SDK) serves
+   Moonshot/Kimi, OpenAI and OpenRouter via `MODEL_BASE_URL`. Switching vendors is configuration,
+   not code. Kimi counts reasoning tokens inside `completion_tokens`, so its cost is honest without
+   a thinking toggle.
+
+### Review history
+One round (Tier 1 gate), fresh reviewer — **PASS WITH FINDINGS**, no BLOCKING finding. FR-125 and
+FR-098 were verified positively (SDK confined to the adapter; visitor content stays in user turns).
+Five in-slice findings, fixed per §9.0:
+1. **Budget was non-atomic.** Spend was read before the call and written after, so a call starting
+   just under the limit overshot it. The call's projected cost is now checked first. A residual
+   concurrency overshoot remains (N in-flight calls can pass on the same pre-call sum); it is
+   bounded by the per-org rate limit and documented in `_check_budget` as a gate on an atomic
+   reservation.
+2. **A `None` spend limit failed open silently.** `validate_model_configuration` now refuses an
+   uncapped production configuration at startup; the gateway logs loudly when it runs uncapped.
+3. **A retry could double-charge after a timeout.** Timeouts are now terminal (decision 4).
+4. **`ModelNotAllowedError` was uncaught.** Startup validation refuses a `MODEL_ID` outside the
+   allowlist; the endpoint also maps it to a legible 503 rather than a 500.
+5. **`app/llm/` touched the database, against §5 as written.** Resolved by scoping §5 to the agent
+   layer (decision 6) rather than by moving the access to another layer that is equally outside
+   `app/tools/`.
+
+CONSIDER logged, not fixed: the request's DB session is held across the model call (up to
+~3 × timeout), so a burst of slow chats ties up pool connections — the same shape as the
+`studio_events.py` leak (§3.6). Fixing it means releasing the session during the call and accepting
+that the visitor message persists even when the model fails; that is a resilience slice.
+
+### Deviations
+Checked against the slice contract in `STEP-B-SLICES.md`:
+- **`CLAUDE.md` §5 amended** (decision 6) — a governance change, recorded here rather than made
+  silently.
+- **`tests/test_public_chat.py` reply tests replaced.** The B4 canned-reply tests are superseded by
+  model-reply tests; the endpoint's tenancy/rate-limit tests are unchanged.
+- **`google-genai` added** to `pyproject.toml`/`uv.lock`, lazily imported.
+- Everything else matches: tier, one provider, no streaming, no retrieval, no migration beyond the
+  usage ledger.
+
+### Blockers / Deferred
+- **Atomic budget reservation** under concurrency — later slice (needs a committed reservation or a
+  shared store).
+- **DB session held across the model call** — resilience slice.
+- **FR-089/FR-090 reproducibility** — no prompt hash and no provider-reported model version are
+  recorded; `ModelUsage` stores the requested model id only. The eval harness (step C) owns this.
+- **Per-organization configurable limit** — only a platform default is enforced; a per-org override
+  is a later control-plane slice.
+- **`stream`** — B7. **Document fencing (FR-098)** — B6. **CORS** — B8.
+
+### Verification (2026-09-12)
+- Ruff, from `backend/`: `All checks passed!`
+- Model gateway tests: **15 passed**; the two model-touching files together: **38 passed**.
+- Full backend suite, from the repository root: **441 passed**.
+- Migration 0014: `upgrade → downgrade → upgrade` verified on **both SQLite and a scratch Postgres
+  database**. No seed: new table, no backfill.
+- No test hits a paid API; the fake provider is genuinely substitutable.
+- **Live provider smoke (not a test):** `GeminiModelProvider` returned `pong` against
+  `gemini-2.5-flash` (`in=15 out=1`) with a real key, confirming the key and the adapter. The vendor
+  has retired `gemini-2.0-flash` (404), so it was removed from `MODEL_ALLOWED_IDS` and pricing; the
+  allowlist and the price table are now the same single model.
+- **Second-provider smoke (not a test):** `MODEL_PROVIDER=moonshot`, `kimi-k2.6` returned `pong`
+  (`in=24 out=28`) through `OpenAICompatibleProvider`, confirming FR-072 substitution end to end.
+  `.env` (gitignored) currently points at Moonshot; Gemini remains available by switching
+  `MODEL_PROVIDER`.
+- Frontend: untouched, not run. Evals: none exist yet.
+
+---
+
+## Step B (FEASIBILITY §3) · Slice B6 — real embeddings + tenant-filtered retrieval
+
+**Rigour tier: 1 — Maximum** (CLAUDE.md §9.0), declared before work started and unchanged. The
+runtime now grounds answers in the tenant's own documents; retrieval is a tenancy boundary.
+
+**Status: COMPLETED** — fussion-reviewer PASS WITH FINDINGS, no BLOCKING finding; all four
+in-slice findings fixed and re-verified. Committed with this entry.
+
+### Objective
+FR-109, FR-098, scope item #9: replace the lexical placeholder embeddings with a real semantic
+provider, resolve the embedding model and dimension from the `KnowledgeBase` rather than a call-site
+constant, and ground runtime answers in the tenant's documents with citations.
+
+### Completed Work
+- **`app/services/knowledge/embeddings.py`** — asynchronous `EmbeddingProvider` ABC; the
+  deterministic hash provider (now a documented test/dev double); `build_default_embedding_provider`
+  (from settings) and `get_embedding_provider` (from a stored model id); `validate_embedding_configuration`.
+- **`app/services/knowledge/embeddings_gemini.py`** — the only embedding module importing a vendor
+  SDK; `gemini-embedding-001` at 768 dimensions via `output_dimensionality`, unit-normalised,
+  batched.
+- **`KnowledgeBase.embedding_model` + `embedding_dimension`** and **`Message.citations`**; migration
+  0015 with a `--seed` module (`scripts/seeds/0015_embedding_model_citations.py`).
+- **`ingestion.py` / `retrieval.py`** — both resolve the provider from the KB's stored model and
+  dimension; retrieval fails closed on a dimension mismatch.
+- **`app/runtime/chat.py`** — tenant-filtered retrieval, a fenced context block in the user turn,
+  citations on the reply and persisted on the assistant message.
+- **`public_chat.py`/`schemas`** — `citations` in the response; embedding errors mapped to 503.
+- **`deps.py`** — new knowledge bases take the configured provider's model and dimension.
+- **Tests** — grounding, citations, fencing, tenant filter, persistence, embedding-failure 503,
+  dimension-mismatch 503, factory/validation.
+
+### Architectural & Technology Decisions
+1. **Gemini embeddings (`gemini-embedding-001`, 768-d).** Moonshot exposes no embeddings API
+   (403), and `text-embedding-004` is retired (404). Vectors are normalised in the adapter so the
+   shared dot-product cosine stays correct.
+2. **Dimension and model live on the `KnowledgeBase`.** Ingestion and retrieval both resolve them
+   from the stored value — the connascence CLAUDE.md §6 named — so a query always uses the model
+   the chunks were embedded with. A base embedded with one model cannot be silently queried with
+   another.
+3. **The ABC is now asynchronous.** A real embedding call is I/O; the deterministic double is
+   `async` without awaiting anything, so it stays substitutable.
+4. **Tests use the deterministic provider** (`conftest` forces `EMBEDDING_PROVIDER=deterministic`);
+   the real provider is verified by a live smoke, never by the suite.
+5. **pgvector is deliberately not here.** Full-scan cosine is adequate at a few hundred chunks
+   (`STEP-B-SLICES` Notes); it is its own slice when volume demands it.
+6. **FR-098 fencing.** Retrieved chunks are labelled data inside the final user turn; the system
+   prompt is the only instruction region and tells the model to treat context as data and to say
+   when it does not know.
+
+### Review history
+One round (Tier 1 gate), fresh reviewer — **PASS WITH FINDINGS**, no BLOCKING finding. FR-109 and
+FR-098 were verified positively. Four in-slice findings, fixed per §9.0:
+1. **Embedding failures escaped as a 500.** `EmbeddingProviderError` is now mapped to 503 at the
+   endpoint — retrieval runs before the model, so an embedding outage is a dependency failure, not
+   an unhandled error.
+2. **No startup validation of the embedding configuration.** `validate_embedding_configuration`
+   now runs in `lifespan`, refusing an unknown provider, a non-positive dimension, or a
+   non-`gemini-embedding…` model id.
+3. (Part of 2.)
+4. **Migration 0015's NOT NULL backfill was unverified against pre-existing rows.** A seed module
+   now inserts a knowledge base and a message at revision 0014, and the migration was re-verified
+   `upgrade → downgrade → upgrade` with `--seed` on **both SQLite and scratch Postgres**.
+
+Also fixed from CONSIDER: the Gemini adapter batches (100 texts per request) so a large document
+cannot exceed the per-request limit, and retrieval fails closed on a chunk/query dimension mismatch
+rather than scoring every chunk 0 through the 0.0 threshold.
+
+CONSIDER logged, not fixed: embedding calls bypass `ModelGateway`, so embedding spend is unmetered
+and outside the per-organization budget; `RETRIEVAL_SCORE_THRESHOLD=0.0` means top-k always injects
+chunks and grounding rests on the prompt; the provider is dispatched by model-id prefix, so the
+stored spelling is coupled to resolution; the migration uses `sa.JSON()` while the model declares
+the JSONB variant (pre-existing convention).
+
+### Deviations
+Checked against the slice contract in `STEP-B-SLICES.md`:
+- The embedding ABC changed from synchronous to asynchronous; `test_knowledge.py`'s embedding test
+  and the ingestion/retrieval call sites were updated accordingly.
+- `tests/test_public_chat.py` gained a B6 section and its response-shape assertion.
+- No pgvector, no streaming, no change to the control-plane knowledge endpoints beyond the KB
+  fields.
+
+### Blockers / Deferred
+- **Embedding cost is unmetered** — the gateway budget covers generation only.
+- **pgvector** — full-scan cosine until volume demands it.
+- **Provider selection by model-id prefix** — store the provider name on the KB if a second
+  embedding vendor lands.
+- **`stream`** — B7. **CORS** — B8.
+
+### Verification (2026-09-12)
+- Ruff, from `backend/`: `All checks passed!`
+- Full backend suite, from the repository root: **449 passed**.
+- Migration 0015: `upgrade → downgrade → upgrade` verified with the `0015` seed on **both SQLite
+  and a scratch Postgres database**.
+- **Live embedding smoke (not a test):** `gemini-embedding-001`, 768 dimensions, unit norm, and
+  semantic ranking (refund↔shipping 0.58 > refund↔photosynthesis 0.46).
+- No test hits a paid API; the deterministic provider is genuinely substitutable.
+- Frontend: untouched, not run. Evals: none exist yet.

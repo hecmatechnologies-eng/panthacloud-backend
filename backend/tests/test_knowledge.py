@@ -71,14 +71,14 @@ async def create_project(client: AsyncClient, token: str, org_id: str, name: str
 # ============================================================================
 
 
-def test_embeddings_properties():
+async def test_embeddings_properties():
     provider = DeterministicHashEmbeddingProvider(dimension=384)
     assert provider.dimension == 384
     assert provider.model_id == "deterministic-hash-384"
 
     text = "Fussion AI integration engineer for customer websites"
-    emb1 = provider.embed_text(text)
-    emb2 = provider.embed_text(text)
+    emb1 = await provider.embed_text(text)
+    emb2 = await provider.embed_text(text)
 
     # Identical text -> identical vector
     assert emb1 == emb2
@@ -96,13 +96,39 @@ def test_embeddings_properties():
     related_text = "AI engineer integration for customer storefront websites"
     unrelated_text = "Photosynthesis chlorophyll plant biology light absorption"
 
-    emb_rel = provider.embed_text(related_text)
-    emb_unrel = provider.embed_text(unrelated_text)
+    emb_rel = await provider.embed_text(related_text)
+    emb_unrel = await provider.embed_text(unrelated_text)
 
     sim_rel = cosine_similarity(emb1, emb_rel)
     sim_unrel = cosine_similarity(emb1, emb_unrel)
 
     assert sim_rel > sim_unrel
+
+
+async def test_default_embedding_provider_and_resolution():
+    """The dimension/model come from settings and the KB, never a call-site constant."""
+    from app.services.knowledge.embeddings import (
+        build_default_embedding_provider,
+        get_embedding_provider,
+    )
+
+    default = build_default_embedding_provider()
+    assert default.model_id == "deterministic-hash-384"
+    assert default.dimension == 384
+
+    resolved = get_embedding_provider("deterministic-hash-384", 384)
+    assert resolved.model_id == "deterministic-hash-384"
+    assert len(await resolved.embed_text("hello")) == 384
+
+
+def test_validate_embedding_configuration_rejects_unknown_model(monkeypatch):
+    from app.core.config import settings
+    from app.services.knowledge.embeddings import validate_embedding_configuration
+
+    monkeypatch.setattr(settings, "EMBEDDING_PROVIDER", "gemini")
+    monkeypatch.setattr(settings, "EMBEDDING_MODEL", "text-embedding-004")
+    with pytest.raises(RuntimeError):
+        validate_embedding_configuration()
 
 
 # ============================================================================

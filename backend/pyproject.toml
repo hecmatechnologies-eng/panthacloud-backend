@@ -23,6 +23,8 @@ dependencies = [
     # UTS-46 host canonicalisation for allowed origins; the stdlib codec is IDNA2003 and
     # disagrees with browsers (app/core/origins.py).
     "idna>=3.7",
+    "google-genai>=1.0.0",
+    "openai>=1.40.0",
 ]
 
 [project.optional-dependencies]

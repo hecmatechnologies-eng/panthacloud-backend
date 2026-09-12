@@ -27,6 +27,7 @@ from app.models.repository import Repository
 from app.models.repository_snapshot import RepositorySnapshot
 from app.models.user import User
 from app.models.website_integration import WebsiteIntegration
+from app.services.knowledge.embeddings import build_default_embedding_provider
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -416,10 +417,15 @@ async def get_or_create_knowledge_base(
     kb = result.scalar_one_or_none()
 
     if not kb:
+        # New bases take the configured embedding provider; the stored model/dimension decide how
+        # every future query embeds (app/services/knowledge/embeddings.py).
+        provider = build_default_embedding_provider()
         kb = KnowledgeBase(
             project_id=project.id,
             name=f"{project.name} Knowledge Base",
             description=f"Business knowledge base for {project.name}",
+            embedding_model=provider.model_id,
+            embedding_dimension=provider.dimension,
         )
         db.add(kb)
         await db.commit()

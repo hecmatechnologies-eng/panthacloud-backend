@@ -3,6 +3,7 @@ from app.models.assistant import Assistant, AssistantPosition
 from app.models.audit_event import AuditEvent
 from app.models.base import BaseModel
 from app.models.contract import ApiContract, ApiOperation, ContractSource, ContractStatus
+from app.models.conversation import Conversation, Message, MessageRole, VisitorSession
 from app.models.discovery import DiscoveryRun, DiscoveryStatus
 from app.models.execution_plan import ExecutionPlan, ExecutionPlanStatus
 from app.models.integration import Integration, IntegrationProvider, IntegrationStatus
@@ -15,6 +16,7 @@ from app.models.knowledge import (
     KnowledgeDocument,
 )
 from app.models.membership import Membership, RoleEnum
+from app.models.model_usage import ModelUsage
 from app.models.organization import Organization
 from app.models.project import Project
 from app.models.repository import Repository, RepositoryProvider, RepositoryStatus
@@ -40,6 +42,7 @@ __all__ = [
     "BaseModel",
     "ContractSource",
     "ContractStatus",
+    "Conversation",
     "DiscoveryRun",
     "DiscoveryStatus",
     "DocumentStatus",
@@ -57,6 +60,9 @@ __all__ = [
     "KnowledgeChunk",
     "KnowledgeDocument",
     "Membership",
+    "Message",
+    "MessageRole",
+    "ModelUsage",
     "Organization",
     "Project",
     "Repository",
@@ -66,6 +72,7 @@ __all__ = [
     "RoleEnum",
     "SnapshotStatus",
     "User",
+    "VisitorSession",
     "WebsiteFramework",
     "WebsiteIntegration",
     "WebsiteIntegrationStatus",

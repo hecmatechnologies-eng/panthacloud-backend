@@ -9,7 +9,7 @@ from app.models.audit_event import AuditEvent
 from app.models.knowledge import DocumentStatus, KnowledgeBase, KnowledgeChunk, KnowledgeDocument
 from app.models.user import User
 from app.services.knowledge.chunking import extract_and_chunk
-from app.services.knowledge.embeddings import DeterministicHashEmbeddingProvider
+from app.services.knowledge.embeddings import get_embedding_provider
 
 MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
 
@@ -175,10 +175,11 @@ async def ingest_document(
         if not extracted_chunks:
             raise ValueError("Document contains no extractable text content.")
 
-        # Embed chunks
-        embedder = DeterministicHashEmbeddingProvider(dimension=384)
+        # Embed chunks with the model this knowledge base was created with, not a global default:
+        # the query side resolves the same stored model.
+        embedder = get_embedding_provider(kb.embedding_model, kb.embedding_dimension)
         texts = [c.text for c in extracted_chunks]
-        embeddings = embedder.embed_batch(texts)
+        embeddings = await embedder.embed_batch(texts)
 
         # Persist chunks
         for c, emb in zip(extracted_chunks, embeddings):
