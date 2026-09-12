@@ -16,13 +16,9 @@ from app.agents.base import AgentDefinition, Budget
 from app.agents.registry import AgentNotFoundError, AgentRegistry
 from app.core.database import get_session_factory
 from app.harness.context import ExecutionContext
-from app.harness.run import (
-    finish_agent_run,
-    record_run_metadata,
-    record_tool_call,
-    start_agent_run,
-)
+from app.harness.run import finish_agent_run, record_run_metadata, start_agent_run
 from app.models.agent_run import AgentRun, AgentRunStatus, AgentToolCall, FailureClass
+from app.tools.gateway import record_tool_call
 
 CAPABILITIES = frozenset({"repository.read"})
 

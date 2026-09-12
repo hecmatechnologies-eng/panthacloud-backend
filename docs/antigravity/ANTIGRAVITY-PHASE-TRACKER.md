@@ -17,7 +17,7 @@ third, different numbering and is archived under `docs/archive/`.
 | :--- | :--- | :--- |
 | **A. Truth & safety** | layout-overwrite fix, workspace clone+read, one roadmap, key removal, 05–08 decision | **IN PROGRESS** — layout-overwrite fix (`dd10167`), roadmap reconciliation (`d91d821`), dev-secret removal from source and the git-history rewrite (2026-09-12) done. Remaining items and their triggers are tabled in `CLAUDE.md` §3: `@/` alias before B8, the 05–08 decision before step C, and `SandboxProvider` with B5 or later |
 | **B. Runtime plane** | `STEP-B-SLICES.md` B1–B8 | **IN PROGRESS** — B1 done (`95b63eb`); B2 done; B3 done; B4 done; B5 done; B6 done; **B7 (SSE) deferred by owner**; B8 next |
-| **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **IN PROGRESS** — `STEP-C-SLICES.md` C1–C10; C1 done; C2 done; C3 next |
+| **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **IN PROGRESS** — `STEP-C-SLICES.md` C1–C10; C1 done; C2 done; C3 done; C4 next |
 | **D. Coding agent** | write capability, generated-code scan, ChangeSet → PR, bounded repair | NOT STARTED — no slice breakdown yet |
 
 ## Phase history (legacy numbering — record only, never cited for new work)
@@ -2024,3 +2024,82 @@ Checked against `STEP-C-SLICES.md` C2:
 - Backend suite, from the repository root: **433 passed**.
 - Migration 0017: `upgrade → downgrade → upgrade` verified on **both SQLite and a scratch Postgres
   database**.
+
+---
+
+## Step C (FEASIBILITY §3) · Slice C3 — the tool gateway
+
+**Rigour tier: 1 — Maximum** (CLAUDE.md §9.0), declared in `STEP-C-SLICES.md` and unchanged. The
+gateway is the authorization choke point for every tool an agent calls.
+
+**Status: COMPLETED** — fussion-reviewer PASS WITH FINDINGS, no BLOCKING finding; all three
+in-slice findings plus a consistency check fixed and re-verified. Committed with this entry.
+
+### Objective
+FR-064–070: a tool contract and registry, and one gateway that authorizes → executes → records.
+Read tools are auto-authorized for an agent holding the capability; write tools additionally require
+an approved plan.
+
+### Completed Work
+- **`app/tools/base.py`** — `ToolKind`, `ToolResult` (output, `truncated`, `error`, `denied`),
+  `ToolError`, and the `Tool` ABC (name, model-facing description, kind, required capability, input
+  schema, `execute(context, arguments)`).
+- **`app/tools/registry.py`** — `ToolRegistry`, refusing a duplicate registration.
+- **`app/tools/gateway.py`** — `ToolGateway`, `ApprovedPlan`, `redact_arguments`, `record_tool_call`.
+  Authorization precedes execution; every path is recorded with an outcome
+  (`ok`/`error`/`denied`/`unknown`).
+- **Tool-call recording moved** from `app/harness/run.py` to the tools layer, so the dependency
+  direction stays harness → tools and the tools layer (the DB layer per §5) owns the record.
+- **Tests** (`tests/test_tool_gateway.py`, 25) — read auto-auth, denial without capability, write
+  behind approval, unknown tool, invalid arguments, `ToolError`, unexpected exception, redaction
+  (nested and key-name cases), truncation, scope from context, cross-tenant run rejection, registry.
+
+### Architectural & Technology Decisions
+1. **Authorization is a precondition, not a convention.** `_denial_reason` runs before validation
+   and execution; a caller cannot reach `tool.execute` without passing the capability and approval
+   checks.
+2. **A denial is a result, an unknown tool is an error.** A denied call returns `denied=True` and is
+   recorded as `denied`; an unknown tool is recorded as `unknown` and is recoverable. The C6 loop
+   must treat `denied` as terminal — logged as a C6 gate.
+3. **Redaction lives inside `record_tool_call`.** No caller can persist a secret by forgetting to
+   wrap its arguments; matching is token-based so `path` survives while `api_key` and `X-Api-Key` do
+   not.
+4. **A run must belong to the context it is authorized against.** The gateway refuses a mismatched
+   `(run, context)` pair, so a read cannot be authorized for one tenant and recorded on another.
+5. **An unexpected tool exception is logged and hidden.** The model gets `"The tool failed
+   unexpectedly."`; the operator gets the traceback.
+
+### Review history
+One round (Tier 1 gate), fresh reviewer — **PASS WITH FINDINGS**, no BLOCKING finding. Three
+in-slice findings, fixed per §9.0:
+1. **`record_tool_call` stored arguments verbatim**, so redaction depended on every caller
+   remembering to wrap. Redaction now happens inside the function; two existing callers that passed
+   raw arguments are covered.
+2. **The sensitive-key list was incomplete** (`auth`, `bearer`, `session`, `pat`, …), and a
+   substring test would have redacted `path`. Matching is now token-based with a wider set.
+3. **The unexpected-exception path discarded the exception.** It is logged server-side while the
+   model still sees a generic message.
+
+Also added from CONSIDER: the gateway now asserts the run belongs to the context's tenant.
+
+CONSIDER logged as C6 gates: a denial and a recoverable tool error are both `is_error=True`, so the
+loop must branch on `denied`; the registry hands out live `Tool` objects, so the choke point is
+convention until the loop only sees `list()`; `_next_sequence` is not atomic; FR-070 must be
+re-verified per real tool in C4 (the gateway cannot enforce scope, only pass it); `ToolError` and
+validator messages must not interpolate secrets.
+
+### Deviations
+Checked against `STEP-C-SLICES.md` C3:
+- `record_tool_call` moved from `app/harness/run.py` to `app/tools/gateway.py` (decision 4 above);
+  the C2 test that imports it was updated. The `AgentToolCall` table itself is unchanged.
+- No real tools yet — C4 adds the read-only repository tools.
+
+### Blockers / Deferred
+- **FR-067 `offset`/`limit`** is a per-tool obligation the ABC declares but does not enforce — C4.
+- The remaining step-C gates: repository-read source (C4), `pydantic_ai` (C5), `skills-ref` (C7),
+  frontend fixtures (C9).
+
+### Verification (2026-09-13)
+- Ruff, from `backend/`: `All checks passed!`
+- Backend suite, from the repository root: **458 passed**.
+- No migration in this slice.

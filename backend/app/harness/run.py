@@ -1,21 +1,19 @@
-"""AgentRun persistence (FR-051, FR-090).
+"""AgentRun persistence (FR-051, FR-089).
 
-Infrastructure the harness owns: create a run from a trusted context, append ordered tool calls, and
-finish it. Kept out of the loop so the loop stays about control flow. This is the documented
-exception to CLAUDE.md §5's "the harness reaches the database only through tools" — an ``AgentRun``
-is the harness's own record, not a capability granted to the model.
+Infrastructure the harness owns: create a run from a trusted context, finish it, and record its
+reproducibility metadata. Kept out of the loop so the loop stays about control flow. This is the
+documented exception to CLAUDE.md §5's "the harness reaches the database only through tools" — an
+``AgentRun`` is the harness's own record, not a capability granted to the model. Tool calls are
+recorded by the tool gateway (`app/tools/gateway.py`), which owns that half of the run record.
 """
 
-import uuid
 from decimal import Decimal
-from typing import Any
 
-from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.base import AgentDefinition
 from app.harness.context import ExecutionContext
-from app.models.agent_run import AgentRun, AgentRunStatus, AgentToolCall, FailureClass
+from app.models.agent_run import AgentRun, AgentRunStatus, FailureClass
 from app.models.base import utc_now
 
 
@@ -46,30 +44,6 @@ async def start_agent_run(
     db.add(run)
     await db.flush()
     return run
-
-
-async def record_tool_call(
-    db: AsyncSession,
-    run: AgentRun,
-    *,
-    tool_name: str,
-    arguments: dict[str, Any],
-    outcome: str,
-    duration_ms: int,
-    error_message: str | None = None,
-) -> AgentToolCall:
-    call = AgentToolCall(
-        agent_run_id=run.id,
-        sequence=await _next_sequence(db, run.id),
-        tool_name=tool_name,
-        arguments=arguments,
-        outcome=outcome,
-        duration_ms=duration_ms,
-        error_message=error_message,
-    )
-    db.add(call)
-    await db.flush()
-    return call
 
 
 async def finish_agent_run(
@@ -124,11 +98,3 @@ def _assert_context_matches(context: ExecutionContext, definition: AgentDefiniti
         raise ValueError(
             f"ExecutionContext grants capabilities the agent does not declare: {sorted(undeclared)}."
         )
-
-
-async def _next_sequence(db: AsyncSession, agent_run_id: uuid.UUID) -> int:
-    stmt = select(func.max(AgentToolCall.sequence)).where(
-        AgentToolCall.agent_run_id == agent_run_id
-    )
-    current = (await db.execute(stmt)).scalar_one_or_none()
-    return (current or 0) + 1
