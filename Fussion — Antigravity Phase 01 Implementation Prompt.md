@@ -19,7 +19,7 @@ The locked MVP implementation sequence is defined in:
 
 The global engineering rules are defined in:
 
-`docs/antigravity/ANTIGRAVITY-PROJECT-RULES.md`
+`docs/archive/ANTIGRAVITY-PROJECT-RULES.md` (archived 2026-09-12)
 
 The current phase status is tracked in:
 

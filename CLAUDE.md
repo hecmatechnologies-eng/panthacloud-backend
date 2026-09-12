@@ -266,6 +266,19 @@ Violating any of these is a blocking review failure, regardless of test results.
    `infrastructure/`, deployment configuration, authentication, payment, or database
    schema files. (Phase 7 §7.13, AGENT-ARCHITECTURE §11 control 3, FR-096.)
 
+10. **Production fails loudly; it never falls back.** PostgreSQL is the system of record, and
+    the SQLite fallback is for local development and test only. A missing `DATABASE_URL`, a
+    SQLite URL, or a missing, placeholder or known-compromised secret raises at startup rather
+    than degrading to something that appears to work. Development keys are generated only for
+    explicitly named development environments — never for an unrecognised `APP_ENV`.
+
+11. **The public surface is configuration-driven, and says nothing about internals.** CORS
+    comes from an integration's registered allowed origins; `allow_origins=["*"]` is never
+    used in production. Public health endpoints return operational status only — no database
+    engine, version, latency or internal topology.
+    *(Both carried from `ANTIGRAVITY-PROJECT-RULES.md` §4 when it was archived, 2026-09-12.
+    §4.11 binds the B2 tenant resolver and the B4 public endpoint.)*
+
 ---
 
 ## 5. Architecture boundaries
@@ -355,6 +368,16 @@ tools. Tools talk to services. No reaching through.
 
 **Hide Implementation Details.** An agent must not know whether GitHub is reached via
 REST, a GitHub App, or an MCP server.
+
+**Do not reinvent mature infrastructure.** No custom HTTP framework, ORM, database driver,
+authentication primitive, task queue, validation library or logging framework. The agent
+harness is the one deliberate exception, for the reason in the terminology section: Fussion
+must own its own multi-tenant authorization, budgets, audit and capability model. That is an
+argued exception, not a licence for others.
+
+**Inspect before modifying.** Understand why existing code is there, and what depends on it,
+before changing it. Preserve working behaviour unless there is a stated reason to change it —
+the counterpart, for our own code, of §4.8 for a customer's.
 
 **Boy Scout Rule.** Applies to the hazards in §3. If you are already in `pipeline.py`,
 leave it better. Do not let §3 items age.

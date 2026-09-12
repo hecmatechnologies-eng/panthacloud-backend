@@ -1,4 +1,26 @@
-# Fussion — Antigravity Global Engineering Rules
+# Fussion — Antigravity Global Engineering Rules (ARCHIVED — superseded)
+
+> **Archived 2026-09-12. Not an authority. Do not cite it, and do not resolve a decision from
+> it.** It was written before the agent architecture, the requirements revision and the
+> feasibility assessment existed, and a governance document that predates the design work it
+> governs cannot stay live. Everything still true is now in the documents that are read every
+> session.
+>
+> Where each section went:
+>
+> | Section | Disposition |
+> |---|---|
+> | §1 Authority hierarchy | Obsolete by archiving. It ranked the (also archived) 19-phase roadmap second and did not mention `CLAUDE.md`, `MVP-REQUIREMENTS-V2` or `FEASIBILITY` at all. `CLAUDE.md` is the contract; `docs/requirements/MVP-REQUIREMENTS-V2.md` is scope; `docs/FEASIBILITY.md` §3 is the plan. |
+> | §2 Control plane vs runtime · orchestrator vs LLM · harness vs sandbox | Already in `CLAUDE.md` §4.1–§4.6 and §5, and `AGENT-ARCHITECTURE.md` §8. |
+> | §3.1 Do not reinvent mature infrastructure | **Carried** to `CLAUDE.md` §6, with the agent harness named as the one argued exception. |
+> | §3.2 YAGNI list | **Superseded, and it contradicted current scope** — it forbade the sandbox and "advanced memory" that `MVP-REQUIREMENTS-V2` Part A pulls *into* MVP. The Part D YAGNI register replaces it and carries a trigger per item. |
+> | §3.3 Avoid premature abstractions | Already in `CLAUDE.md` §6 (YAGNI / Do The Simplest Thing). |
+> | §3.4 Inspect before modifying | **Carried** to `CLAUDE.md` §6. |
+> | §4 Never commit secrets | Already in `CLAUDE.md` §9.1, and §3.2 records the outstanding history rewrite. |
+> | §4 Tenant isolation | Already in `CLAUDE.md` §4.1 and §9.1. Its wording — "Business is the primary tenant" — contradicted the canonical `Organization → Project → resources` hierarchy (`MVP-REQUIREMENTS-V2` Part A #1), so it is **not** carried. |
+> | §4 Database fallback policy | **Carried** to `CLAUDE.md` §4.10 as an invariant. |
+> | §4 CORS policy · health-check privacy | **Carried** to `CLAUDE.md` §4.11. These bind the B2 resolver and the B4 public endpoint directly. |
+> | §5 Phase discipline | Superseded by `docs/DEVELOPMENT-WORKFLOW.md` §2 (propose the slice, one slice per session, wait for approval) and `CLAUDE.md` §9.1 (the tracker updates in the same commit). Phase numbering itself was retired on 2026-09-12. |
 
 ## 1. Architectural Authority Hierarchy
 

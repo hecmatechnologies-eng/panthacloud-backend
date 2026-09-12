@@ -37,8 +37,8 @@ Fussion follows the approved system architecture designed in **Phases 1–27**:
 - [Agent Architecture](docs/architecture/AGENT-ARCHITECTURE.md) — agent contracts, budgets, memory tiers, tool standards, skill spec.
 - [Reference Architecture](docs/architecture/REFERENCE-ARCHITECTURE.md) — Layered architecture across Control Plane, Orchestration, Agent Harness, Sandbox, and Data Plane.
 - [Development Workflow](docs/DEVELOPMENT-WORKFLOW.md) — how a slice is planned, reviewed, verified and merged.
-- [Antigravity Project Rules](docs/antigravity/ANTIGRAVITY-PROJECT-RULES.md) — Architectural boundaries, security rules, and engineering principles.
-- [Archived: MVP Implementation Roadmap](docs/archive/MVP-IMPLEMENTATION-ROADMAP.md) — the superseded 19-phase sequence, kept as a map of scope. Not a plan; do not cite its phase numbers.
+- [MVP Scope & Requirements](docs/requirements/MVP-REQUIREMENTS-V2.md) — functional requirements and the YAGNI register, each exclusion with the trigger that would reverse it.
+- Archived, kept for the record and not authorities: the superseded [19-phase roadmap](docs/archive/MVP-IMPLEMENTATION-ROADMAP.md) and [Antigravity Project Rules](docs/archive/ANTIGRAVITY-PROJECT-RULES.md). Each carries a banner saying where its live content went.
 
 ---
 
