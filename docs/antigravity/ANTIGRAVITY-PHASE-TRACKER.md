@@ -17,7 +17,7 @@ third, different numbering and is archived under `docs/archive/`.
 | :--- | :--- | :--- |
 | **A. Truth & safety** | layout-overwrite fix, workspace clone+read, one roadmap, key removal, 05–08 decision | **IN PROGRESS** — layout-overwrite fix (`dd10167`), roadmap reconciliation (`d91d821`), dev-secret removal from source and the git-history rewrite (2026-09-12) done. Remaining items and their triggers are tabled in `CLAUDE.md` §3: `@/` alias before B8, the 05–08 decision before step C, and `SandboxProvider` with B5 or later |
 | **B. Runtime plane** | `STEP-B-SLICES.md` B1–B8 | **IN PROGRESS** — B1 done (`95b63eb`); B2 done; B3 done; B4 done; B5 done; B6 done; **B7 (SSE) deferred by owner**; B8 next |
-| **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **IN PROGRESS** — `STEP-C-SLICES.md` C1–C10; C1 done (this change); C2 next |
+| **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **IN PROGRESS** — `STEP-C-SLICES.md` C1–C10; C1 done; C2 done; C3 next |
 | **D. Coding agent** | write capability, generated-code scan, ChangeSet → PR, bounded repair | NOT STARTED — no slice breakdown yet |
 
 ## Phase history (legacy numbering — record only, never cited for new work)
@@ -1941,3 +1941,86 @@ Checked against `STEP-C-SLICES.md` C1:
 - Migration 0016: `upgrade → downgrade → upgrade` verified on **both SQLite and a scratch
   Postgres database**.
 - Frontend: `pnpm build` clean; `pnpm test` **108 passed**.
+
+---
+
+## Step C (FEASIBILITY §3) · Slice C2 — agent runtime substrate
+
+**Rigour tier: 1 — Maximum** (CLAUDE.md §9.0), declared in `STEP-C-SLICES.md` and unchanged. This
+introduces the tenancy carrier for the engineering plane.
+
+**Status: COMPLETED** — fussion-reviewer PASS WITH FINDINGS, no BLOCKING finding; all three
+in-slice findings fixed and re-verified. Committed with this entry.
+
+### Objective
+FR-046–049, FR-051, FR-089, FR-090: a declarative agent contract and registry, a frozen
+`ExecutionContext` built only from trusted state, and `AgentRun` persistence with its ordered
+tool-call log. No model call and no loop yet — those are C5/C6.
+
+### Completed Work
+- **`app/agents/base.py`** — `Budget` and `AgentDefinition` (name, version, instructions,
+  capabilities, tools, output schema, budget). Pure data; no infrastructure.
+- **`app/agents/registry.py`** — `AgentRegistry` resolving `(name, version)`, refusing a duplicate
+  registration.
+- **`app/harness/context.py`** — frozen `ExecutionContext` (org, project, repository, environment,
+  agent, capabilities, `commit_sha`, run id), `has_capability`, `bind_run`, and a JSON `snapshot`.
+- **`app/models/agent_run.py`** — `AgentRun` (status, step, attempt, prompt hash, model id +
+  reported version, skill versions, budget, tokens, cost, context snapshot, failure class/reason,
+  timestamps) and `AgentToolCall` (ordered, unique per run); migration 0017.
+- **`app/harness/run.py`** — `start_agent_run`, `record_tool_call`, `finish_agent_run`,
+  `record_run_metadata`.
+- **`Project.agent_runs`** cascade, and registration in `models/__init__.py`.
+- **Tests** (`tests/test_agent_runtime.py`, 12) — context immutability/snapshot, registry,
+  run/context consistency, capability narrowing, metadata, ordered tool calls, failure class,
+  cascade purge.
+
+### Architectural & Technology Decisions
+1. **The context is frozen and trusted-state only (FR-048/049).** `bind_run` returns a new context,
+   so no stage can widen its own scope; `snapshot()` is the audit record stored on the run.
+2. **A run verifies it belongs to its context.** `start_agent_run` refuses a context naming a
+   different agent, and refuses capabilities the agent does not declare — while allowing a
+   *subset*, which is the capability-narrowing FR-094 requires.
+3. **`AgentRun` is the harness's own record, not a model capability.** `app/harness/run.py` touches
+   the database; CLAUDE.md §5's exception list now names it explicitly rather than the code
+   claiming an exception that was not written.
+4. **`commit_sha` is on the context from the start.** C4's read tools need to read at a pinned
+   revision; adding a field to a frozen slots dataclass later would churn every call site.
+5. **The tool-call log is a table, not a JSON blob** — ordered by a unique `(run, sequence)`, so
+   FR-090's reconstruction is a query.
+
+### Review history
+One round (Tier 1 gate), fresh reviewer — **PASS WITH FINDINGS**, no BLOCKING finding. FR-046/048/049
+were verified positively (the agent package imports no infrastructure; the context is immutable).
+Three in-slice findings, fixed per §9.0:
+1. **`run.py` claimed a §5 exception that did not exist.** CLAUDE.md §5 now names the harness's run
+   record in its exception list, so the precedent is written rather than asserted.
+2. **A run could be started for a context describing a different agent**, leaving the columns and
+   the context snapshot inconsistent (FR-089) and the capability set unverified (FR-049).
+   `start_agent_run` now verifies identity and refuses undeclared capabilities.
+3. **FR-089 metadata was columns without a writer.** `record_run_metadata` writes prompt hash, model
+   id, provider-reported version and skill versions, with a test.
+
+CONSIDER fixed: `commit_sha` added to the context (see decision 4); duplicate agent registration now
+raises. CONSIDER logged: `_next_sequence` is `MAX+1` and not atomic (sequential at C6); the entity
+diverges from AGENT-ARCHITECTURE §3.0's `job_id`/`agent_id` and needs a decision before C6; FR-069
+argument redaction is C3's obligation; `repository_id` is `SET NULL` on purpose so a run outlives
+its repository.
+
+### Deviations
+Checked against `STEP-C-SLICES.md` C2:
+- All named pieces exist; the persistence lives in `app/harness/run.py` as the architecture's module
+  layout specifies, with the §5 exception now written.
+- No `ProjectMemory` model and no budget enforcement — both are later slices (C6), as the notes
+  allow.
+
+### Blockers / Deferred
+- **Budget enforcement** and **resumability** are C6. **Project memory (FR-058–062)** is C6.
+- **FR-069 argument redaction** is C3's gateway obligation.
+- The remaining step-C gates: repository-read source (C4), `pydantic_ai` (C5), `skills-ref` (C7),
+  frontend fixtures (C9).
+
+### Verification (2026-09-13)
+- Ruff, from `backend/`: `All checks passed!`
+- Backend suite, from the repository root: **433 passed**.
+- Migration 0017: `upgrade → downgrade → upgrade` verified on **both SQLite and a scratch Postgres
+  database**.

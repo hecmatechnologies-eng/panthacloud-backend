@@ -8,6 +8,7 @@ from sqlalchemy.types import UUID
 from app.models.base import BaseModel
 
 if TYPE_CHECKING:
+    from app.models.agent_run import AgentRun
     from app.models.assistant import Assistant
     from app.models.integration import Integration
     from app.models.knowledge import KnowledgeBase
@@ -68,6 +69,10 @@ class Project(BaseModel):
         "WebsiteIntegration",
         back_populates="project",
         uselist=False,
+        cascade="all, delete-orphan",
+    )
+    agent_runs: Mapped[list["AgentRun"]] = relationship(
+        "AgentRun",
         cascade="all, delete-orphan",
     )
 

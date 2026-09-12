@@ -325,8 +325,9 @@ Execution          workspace today; container sandbox later
   providers.
 - Within the agent stack, `app/tools/` is the only layer that touches domain services, the
   database, GitHub, or the filesystem; `app/agents/` and `app/harness/` reach them only through
-  it. The control plane, `app/services/`, the runtime plane (`app/runtime/`), and the model
-  gateway's usage accounting (`app/llm/gateway.py`, per AGENT-ARCHITECTURE §2) access the database
+  it. The control plane, `app/services/`, the runtime plane (`app/runtime/`), the model
+  gateway's usage accounting (`app/llm/gateway.py`, per AGENT-ARCHITECTURE §2), and the harness's
+  own run record (`app/harness/run.py`, per AGENT-ARCHITECTURE §3.0/§9) access the database
   directly by design — this rule constrains the agent layer, not the platform.
 - `app/runtime/` (visitor data plane) must not import `app/agents/` or engineering tools.
 - `app/models/` is SQLAlchemy ORM. LLM provider code goes in `app/llm/`, never `models/`.

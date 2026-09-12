@@ -1,3 +1,4 @@
+from app.models.agent_run import AgentRun, AgentRunStatus, AgentToolCall, FailureClass
 from app.models.allowed_origin import AllowedOrigin
 from app.models.assistant import Assistant, AssistantPosition
 from app.models.audit_event import AuditEvent
@@ -27,6 +28,9 @@ from app.models.website_integration import (
 )
 
 __all__ = [
+    "AgentRun",
+    "AgentRunStatus",
+    "AgentToolCall",
     "AllowedOrigin",
     "Assistant",
     "AssistantPosition",
@@ -36,6 +40,7 @@ __all__ = [
     "DiscoveryRun",
     "DiscoveryStatus",
     "DocumentStatus",
+    "FailureClass",
     "Integration",
     "IntegrationProvider",
     "IntegrationRun",
