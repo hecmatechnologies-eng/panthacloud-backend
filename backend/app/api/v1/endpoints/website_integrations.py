@@ -22,7 +22,6 @@ from app.models.membership import Membership, RoleEnum
 from app.models.organization import Organization
 from app.models.project import Project
 from app.models.user import User
-from app.models.website_analysis import WebsiteAnalysis
 from app.models.website_integration import (
     IntegrationRun,
     IntegrationRunStatus,
@@ -43,6 +42,7 @@ from app.schemas.website_integration import (
     WebsiteIntegrationUpdate,
 )
 from app.services.analysis.analysis_service import analyze_website_integration
+from app.services.analysis.queries import get_latest_analysis
 from app.services.audit import record_audit
 from app.services.integration.github import (
     GitHubAPIError,
@@ -345,6 +345,15 @@ async def get_integration_plan(
     kb = (await db.execute(stmt_kb)).scalar_one_or_none()
     has_kb = bool(kb and len(kb.documents) > 0)
 
+    # A repository the analyst refused is refused here too, before any GitHub call (acceptance #10):
+    # a plan for a repository Fussion will not integrate is a promise it cannot keep.
+    analysis = await get_latest_analysis(db, integration.id)
+    if analysis and analysis.unsupported_reason:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"This repository cannot be integrated: {analysis.unsupported_reason}",
+        )
+
     # Resolve the branch head *first*, then read the file at that SHA — the same order the run
     # uses. Reading the path directly made a private repository, a wrong default branch and a bad
     # token all arrive as a 404, which the preview then reported as "file missing", sending the
@@ -394,13 +403,23 @@ async def get_integration_plan(
                 detail=f"Cannot read the widget target: {exc}",
             ) from exc
 
-    return IntegrationPlanner.generate_plan(
+    plan = IntegrationPlanner.generate_plan(
         framework_skill_id=integration.framework_skill_id,
         widget_target_path=integration.widget_target_path,
         assistant_data=asst_data,
         has_knowledge_base=has_kb,
         target_status=target_status,
     )
+
+    # A moved repository is a warning, not a refusal: the detected target may still be valid, and a
+    # legitimate run must not be blocked by a commit that landed elsewhere. Re-analysis is the fix.
+    if analysis and head_sha is not None and analysis.commit_sha != head_sha:
+        plan.warnings.append(
+            "The repository changed since it was analysed "
+            f"(analysed {analysis.commit_sha[:12]}, head {head_sha[:12]}). Re-run the analysis to "
+            "refresh the detected framework and integration point."
+        )
+    return plan
 
 
 @router.post(
@@ -713,11 +732,5 @@ async def get_latest_website_analysis(
     ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> WebsiteAnalysisRead | None:
-    stmt = (
-        select(WebsiteAnalysis)
-        .where(WebsiteAnalysis.integration_id == integration.id)
-        .order_by(WebsiteAnalysis.created_at.desc(), WebsiteAnalysis.id.desc())
-        .limit(1)
-    )
-    analysis = (await db.execute(stmt)).scalar_one_or_none()
+    analysis = await get_latest_analysis(db, integration.id)
     return WebsiteAnalysisRead.model_validate(analysis) if analysis else None

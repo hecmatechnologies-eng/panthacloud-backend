@@ -540,6 +540,25 @@ describe('Fussion Project Studio — Guided Sequential UX & Website Stage', () =
       expect(screen.getByTestId('detected-framework').textContent).toBe('generic-html');
       expect(screen.getByTestId('detected-target').textContent).toBe('index.html');
     });
+
+    // A human can pick a ranked candidate; selecting one is a choice, not a typed path.
+    vi.mocked(websiteIntegrationApi.update).mockResolvedValue({
+      ...mockWebsiteConfig,
+      framework_skill_id: 'generic-html',
+      widget_target_path: 'index.html',
+    });
+    fireEvent.click(screen.getByTestId('use-candidate-index.html'));
+
+    await waitFor(() => {
+      expect(websiteIntegrationApi.update).toHaveBeenCalledWith(
+        'org-123',
+        'proj-1',
+        expect.objectContaining({
+          widget_target_path: 'index.html',
+          framework_skill_id: 'generic-html',
+        })
+      );
+    });
   });
 
   it('displays error banner if website connection fails', async () => {

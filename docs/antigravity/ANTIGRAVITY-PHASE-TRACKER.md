@@ -17,7 +17,7 @@ third, different numbering and is archived under `docs/archive/`.
 | :--- | :--- | :--- |
 | **A. Truth & safety** | layout-overwrite fix, workspace clone+read, one roadmap, key removal, 05–08 decision | **IN PROGRESS** — layout-overwrite fix (`dd10167`), roadmap reconciliation (`d91d821`), dev-secret removal from source and the git-history rewrite (2026-09-12), the `@/` alias fix (B8-gated) and the 05–08 decision are done. The one item left, `SandboxProvider` + workspace rename, is now slice **C14** (the B5-or-later trigger has passed) |
 | **B. Runtime plane** | `STEP-B-SLICES.md` B1–B8 | **IN PROGRESS** — B1 (`95b63eb`) through B6 done; **B7 (SSE) and B8 (real widget + customer-origin CORS) remain**. The owner's B7 deferral is re-scoped as an MVP gap in `GAP-CLOSURE-PLAN.md` (acceptance #8 names a *streamed* answer); B7 precedes B8 |
-| **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **IN PROGRESS** — C1–C10 done (`acda350`, `16a13a0`, `d697e7d`). **C11–C15** are planned in `GAP-CLOSURE-PLAN.md`: C11 detection becomes the configuration (critical path), C12 run change set, C13 Studio SSE leak, C14 contract closeout, C15 memory reconciliation |
+| **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **IN PROGRESS** — C1–C11 done (`acda350`, `16a13a0`, `d697e7d`, C11). **C12–C15** remain, per `GAP-CLOSURE-PLAN.md`: C12 run change set, C13 Studio SSE leak, C14 contract closeout, C15 memory reconciliation |
 | **D. Coding agent** | write capability, generated-code scan, ChangeSet → PR, bounded repair | NOT STARTED — no slice breakdown yet; post-MVP per `FEASIBILITY.md` §4 (the deterministic PR path already covers acceptance #6) |
 
 The gap between the code and the Part C acceptance criteria, and the ordered path to close it, is
@@ -2631,4 +2631,79 @@ analysis is served but not yet fed into planning (step D).
 - Migration 0019 with its seed: `upgrade → downgrade → upgrade` verified on **both SQLite and a
   scratch Postgres database**.
 - Backend suite, from the repository root: **526 passed, 2 skipped**.
+- Frontend, from `frontend/`: `pnpm build` clean; `pnpm test` — **109 passed** (9 files).
+
+## Step C (FEASIBILITY §3) · Slice C11 — detection becomes the configuration
+
+**Rigour tier: 1 — Maximum** (CLAUDE.md §9.0), declared in `STEP-C-SLICES.md`. This slice is the
+critical path of `GAP-CLOSURE-PLAN.md`: it makes the C10 analyst's result drive the plan and the
+pull request, so acceptance #4 ("automatically detected, without selecting") is true end to end.
+
+**Status: COMPLETED** — the Tier-1 reviewer returned **PASS WITH FINDINGS**, no BLOCKING; all four
+SHOULD FIX were reachable and are fixed. Committed with this entry.
+
+### Objective
+MVP acceptance #4 and #5: the detected framework and integration point become the integration's
+configuration, an unanalysable repository refuses with its reason, and a model-authored target
+cannot become a write target.
+
+### Completed Work
+- **`app/services/analysis/selection.py`** — `select_target(profile)` returns the chosen
+  `(framework_skill_id, widget_target_path, confidence)` or declines: unsupported, no candidate
+  above `TARGET_CONFIDENCE_THRESHOLD` (0.6), an unknown skill, or every candidate an unsafe path.
+- **`app/core/target_paths.py`** — `unsafe_target_reason`, one gate for a typed path and an
+  analyst-chosen one: repository-relative, no traversal, no control characters, within the
+  `String(255)` column, and not a protected path.
+- **`analysis_service.py`** — on success, the selection is written onto the integration; declining
+  is non-destructive (an existing configuration is never clobbered by a below-threshold re-analysis).
+- **Refusal** — `GET /plan` and `POST /runs` both refuse with the analysis's `unsupported_reason`
+  (acceptance #10). The pipeline refuses before allocating a sandbox or recording a run.
+- **Staleness** — `GET /plan` warns when the branch head differs from `analysis.commit_sha`; not a
+  block.
+- **Studio** — the ranked candidates each get a "Use this" action (a choice, not a typed path); the
+  PATCH is validated by the same gate.
+- **`app/services/analysis/queries.py`** — `get_latest_analysis`, shared by the control plane and
+  the pipeline, so "latest analysis" is defined once.
+- **Tests** — selection (unit), the path gate (parametrised), the analyze-commits /
+  below-threshold / non-destructive-re-analysis / unsupported-refuses behaviour, and the frontend
+  pick.
+
+### Architectural & Technology Decisions
+1. **Detection writes the existing columns.** `pipeline.py` was not changed — it already read
+   `framework_skill_id` and `widget_target_path`. C11 makes the analyst their writer.
+2. **One path gate, two callers.** The configuration schema and the analyst's selection apply the
+   same `unsafe_target_reason`, so a path is safe however it was chosen. This closes the human-pick
+   route the reviewer found open.
+3. **Declining is not an error and is non-destructive.** A weak or refused analysis leaves the
+   integration's configuration as it was; a human chooses in the Studio.
+4. **The pipeline reads the latest analysis through a neutral query module**, not by importing the
+   analyst stack, keeping the integration pipeline free of the LLM dependency.
+
+### Review history
+One round (Tier 1), fresh reviewer — **PASS WITH FINDINGS**, no BLOCKING. SHOULD FIX, all fixed:
+1. The "Use this" route bypassed the traversal/absolute gate (PATCH only checked protected paths) —
+   the schema now applies the full `unsafe_target_reason` gate.
+2. No length bound on a model path → a Postgres `DataError` (500), invisible on SQLite — bounded at
+   `MAX_WIDGET_TARGET_LENGTH` (255).
+3. Null bytes and control characters passed — now refused.
+4. The "leave unconfigured" comment was false for an already-configured integration — the behaviour
+   is now explicitly non-destructive and covered by a re-analysis test.
+CONSIDER logged: repository identity is not part of the analysis key (a repo change should
+invalidate the analysis); the staleness warning is plan-only; the absence of an analysis does not
+refuse (it fails later at "target not found").
+
+### Deviations
+- **Repository identity is not part of the analysis key** — the primary connect flow deletes and
+  recreates the integration, so this is logged as a gate on the edit-repository flow, not fixed here.
+- **The staleness signal is on `GET /plan` only** — a run carries no staleness warning yet.
+
+### Blockers / Deferred
+- **Repository-identity invalidation** and **run-time staleness** — small follow-ups on the
+  edit-repository and run surfaces.
+- **Skill-registry dispatch** — still step D, unchanged.
+
+### Verification (2026-09-13)
+- Ruff, from `backend/`: `All checks passed!`
+- No migration in this slice.
+- Backend suite, from the repository root: **554 passed, 2 skipped**.
 - Frontend, from `frontend/`: `pnpm build` clean; `pnpm test` — **109 passed** (9 files).

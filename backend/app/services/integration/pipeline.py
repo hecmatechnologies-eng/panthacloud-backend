@@ -18,6 +18,7 @@ from app.models.website_integration import (
     WebsiteIntegration,
     WebsiteIntegrationStatus,
 )
+from app.services.analysis.queries import get_latest_analysis
 from app.services.integration.artifacts import WidgetInjectionError, generate_artifacts
 from app.services.integration.github import get_git_provider
 from app.services.integration.planner import IntegrationPlanner
@@ -102,6 +103,14 @@ class IntegrationPipeline:
         kb_result = await db.execute(stmt_kb)
         kb = kb_result.scalar_one_or_none()
         has_kb = bool(kb and len(kb.documents) > 0) if kb else False
+
+        # A repository the analyst refused is refused before any work (acceptance #10): no sandbox
+        # is allocated and no run is recorded for a repository Fussion will not integrate.
+        latest_analysis = await get_latest_analysis(db, integration.id)
+        if latest_analysis and latest_analysis.unsupported_reason:
+            raise IntegrationRefusedError(
+                f"This repository cannot be integrated: {latest_analysis.unsupported_reason}"
+            )
 
         run_id = uuid.uuid4()
         short_run = run_id.hex[:8]

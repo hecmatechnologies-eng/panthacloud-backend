@@ -46,10 +46,12 @@ export const WebsiteStageView: React.FC<WebsiteStageViewProps> = ({
     isConnecting,
     isDisconnecting,
     isAnalyzing,
+    isSelecting,
     error,
     connect,
     disconnect,
     analyze,
+    selectTarget,
     clearError,
   } = useWebsiteStage({
     orgId,
@@ -91,6 +93,14 @@ export const WebsiteStageView: React.FC<WebsiteStageViewProps> = ({
   const handleAnalyze = async () => {
     try {
       await analyze();
+    } catch {
+      // Error handled by hook
+    }
+  };
+
+  const handleSelectTarget = async (path: string) => {
+    try {
+      await selectTarget(path, analysis?.framework_skill_id ?? null);
     } catch {
       // Error handled by hook
     }
@@ -328,8 +338,19 @@ export const WebsiteStageView: React.FC<WebsiteStageViewProps> = ({
                             className="flex items-center justify-between gap-3 text-xs font-mono text-[var(--text-primary)]"
                           >
                             <span className="truncate">{candidate.path}</span>
-                            <span className="text-[var(--text-muted)] shrink-0">
-                              {Math.round(candidate.confidence * 100)}%
+                            <span className="flex items-center gap-2 shrink-0">
+                              <span className="text-[var(--text-muted)]">
+                                {Math.round(candidate.confidence * 100)}%
+                              </span>
+                              <button
+                                type="button"
+                                data-testid={`use-candidate-${candidate.path}`}
+                                onClick={() => handleSelectTarget(candidate.path)}
+                                disabled={isSelecting || config.widget_target_path === candidate.path}
+                                className="px-2 py-0.5 rounded-md border border-[var(--border)] text-[10px] font-semibold text-[var(--color-purple)] hover:border-[var(--color-purple)]/40 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-default"
+                              >
+                                {config.widget_target_path === candidate.path ? 'Selected' : 'Use this'}
+                              </button>
                             </span>
                           </li>
                         ))}

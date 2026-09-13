@@ -22,6 +22,7 @@ from app.models.website_analysis import WebsiteAnalysis
 from app.models.website_integration import WebsiteIntegration
 from app.services.analysis.analyst import analyze_repository
 from app.services.analysis.clone import clone_repository, clone_url_for
+from app.services.analysis.selection import select_target
 from app.services.repository.reader import LocalWorkspaceReader
 from app.services.repository.workspace import workspace_manager
 from app.tools.gateway import ToolGateway
@@ -83,6 +84,26 @@ async def analyze_website_integration(
 
         analysis = _build_analysis(integration.id, commit_sha, run.id, profile)
         db.add(analysis)
+
+        # C11: the detected profile becomes the integration's configuration, so the plan and the
+        # pull request use what was detected rather than a server default.
+        #
+        # Declining is not an error, and it is deliberately non-destructive: an unsupported
+        # repository, a below-threshold candidate or an unsafe path leaves the integration's
+        # existing configuration untouched (a fresh integration keeps its server defaults). The
+        # Studio shows the ranked list for a human to choose.
+        selected = select_target(profile) if profile is not None else None
+        if selected is not None:
+            integration.framework_skill_id = selected.framework_skill_id
+            integration.widget_target_path = selected.widget_target_path
+            logger.info(
+                "Analysis configured integration %s: target '%s' (%s, confidence %.2f)",
+                integration.id,
+                selected.widget_target_path,
+                selected.framework_skill_id,
+                selected.confidence,
+            )
+
         await db.commit()
         await db.refresh(analysis)
         return analysis

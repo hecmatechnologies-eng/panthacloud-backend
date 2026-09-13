@@ -57,6 +57,21 @@ def _stub_clone(profile: WebsiteProfile):
     return fake_clone
 
 
+def _stub_analysis(monkeypatch: pytest.MonkeyPatch, profile: WebsiteProfile) -> None:
+    """Stub cloning and the model, leaving the wiring, persistence and selection real."""
+    monkeypatch.setattr(
+        "app.services.analysis.analysis_service.clone_repository", _stub_clone(profile)
+    )
+    monkeypatch.setattr(
+        "app.services.analysis.analysis_service.PydanticAIAgentRunner",
+        lambda: _FakeRunner(profile),
+    )
+    monkeypatch.setattr(
+        "app.services.analysis.analysis_service.get_model_gateway",
+        lambda: ModelGateway(FakeModelProvider()),
+    )
+
+
 async def _tenant(client: AsyncClient, email: str, name: str) -> tuple[str, str, str]:
     resp = await client.post(
         "/api/v1/auth/register",
@@ -131,6 +146,127 @@ async def test_analysis_endpoint_runs_and_persists(
     latest = await client.get(f"{_integration_url(org_id, proj_id)}/{ANALYSIS}", headers=hdr)
     assert latest.status_code == 200
     assert latest.json()["id"] == body["id"]
+
+
+@pytest.mark.asyncio
+async def test_analysis_configures_the_integration(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C11: what was detected becomes the integration's configuration, so the plan uses it."""
+    token, org_id, proj_id = await _tenant(client, "c11_owner@example.com", "C11Owner")
+    hdr = {"Authorization": f"Bearer {token}"}
+    profile = WebsiteProfile(
+        framework_skill_id="generic-html",
+        integration_candidates=[
+            IntegrationCandidate(path="index.html", confidence=0.9, reason="static entry")
+        ],
+    )
+    _stub_analysis(monkeypatch, profile)
+
+    resp = await client.post(f"{_integration_url(org_id, proj_id)}/{ANALYZE}", headers=hdr)
+    assert resp.status_code == 200, resp.text
+
+    # The integration defaults are nextjs-app-router / app/layout.tsx; the analysis overrides both.
+    configured = (await client.get(_integration_url(org_id, proj_id), headers=hdr)).json()
+    assert configured["framework_skill_id"] == "generic-html"
+    assert configured["widget_target_path"] == "index.html"
+
+
+@pytest.mark.asyncio
+async def test_analysis_below_threshold_leaves_the_integration_unconfigured(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A weak candidate is not a decision: a human chooses in the Studio (C11)."""
+    token, org_id, proj_id = await _tenant(client, "c11_low@example.com", "C11Low")
+    hdr = {"Authorization": f"Bearer {token}"}
+    profile = WebsiteProfile(
+        framework_skill_id="generic-html",
+        integration_candidates=[
+            IntegrationCandidate(path="index.html", confidence=0.2, reason="uncertain")
+        ],
+    )
+    _stub_analysis(monkeypatch, profile)
+
+    resp = await client.post(f"{_integration_url(org_id, proj_id)}/{ANALYZE}", headers=hdr)
+    assert resp.status_code == 200, resp.text
+
+    configured = (await client.get(_integration_url(org_id, proj_id), headers=hdr)).json()
+    assert configured["framework_skill_id"] == "nextjs-app-router"
+    assert configured["widget_target_path"] == "app/layout.tsx"
+
+
+@pytest.mark.asyncio
+async def test_unsupported_analysis_refuses_plan_and_run(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Acceptance #10: an unanalysable repository is refused with its reason, not integrated."""
+    token, org_id, proj_id = await _tenant(client, "c11_refuse@example.com", "C11Refuse")
+    hdr = {"Authorization": f"Bearer {token}"}
+    profile = WebsiteProfile(unsupported_reason="Not a website Fussion can integrate.")
+    _stub_analysis(monkeypatch, profile)
+
+    resp = await client.post(f"{_integration_url(org_id, proj_id)}/{ANALYZE}", headers=hdr)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["unsupported_reason"] is not None
+
+    plan = await client.get(f"{_integration_url(org_id, proj_id)}/plan", headers=hdr)
+    assert plan.status_code == 422
+    assert "cannot be integrated" in plan.json()["detail"]
+
+    run = await client.post(f"{_integration_url(org_id, proj_id)}/runs", headers=hdr)
+    assert run.status_code == 422
+
+    # Refused before any work: no run was recorded for the refused repository.
+    from app.models.website_integration import IntegrationRun, WebsiteIntegration
+
+    session_factory = get_session_factory()
+    async with session_factory() as db:
+        integration = (
+            await db.execute(
+                select(WebsiteIntegration).where(
+                    WebsiteIntegration.project_id == uuid.UUID(proj_id)
+                )
+            )
+        ).scalar_one()
+        runs = (
+            await db.execute(
+                select(IntegrationRun).where(IntegrationRun.integration_id == integration.id)
+            )
+        ).scalars().all()
+    assert runs == []
+
+
+@pytest.mark.asyncio
+async def test_re_analysis_below_threshold_keeps_the_existing_configuration(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Declining to auto-configure is non-destructive: it never clobbers a working configuration."""
+    token, org_id, proj_id = await _tenant(client, "c11_keep@example.com", "C11Keep")
+    hdr = {"Authorization": f"Bearer {token}"}
+
+    good = WebsiteProfile(
+        framework_skill_id="generic-html",
+        integration_candidates=[
+            IntegrationCandidate(path="index.html", confidence=0.9, reason="static entry")
+        ],
+    )
+    _stub_analysis(monkeypatch, good)
+    first = await client.post(f"{_integration_url(org_id, proj_id)}/{ANALYZE}", headers=hdr)
+    assert first.status_code == 200, first.text
+
+    weak = WebsiteProfile(
+        framework_skill_id="nextjs-app-router",
+        integration_candidates=[
+            IntegrationCandidate(path="app/layout.tsx", confidence=0.1, reason="uncertain")
+        ],
+    )
+    _stub_analysis(monkeypatch, weak)
+    second = await client.post(f"{_integration_url(org_id, proj_id)}/{ANALYZE}", headers=hdr)
+    assert second.status_code == 200, second.text
+
+    configured = (await client.get(_integration_url(org_id, proj_id), headers=hdr)).json()
+    assert configured["framework_skill_id"] == "generic-html"
+    assert configured["widget_target_path"] == "index.html"
 
 
 @pytest.mark.asyncio

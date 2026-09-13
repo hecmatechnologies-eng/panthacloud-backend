@@ -25,6 +25,7 @@ export function useWebsiteStage({
   const [isConnecting, setIsConnecting] = useState<boolean>(false);
   const [isDisconnecting, setIsDisconnecting] = useState<boolean>(false);
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
+  const [isSelecting, setIsSelecting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
   const onStatusChangeRef = useRef(onStatusChange);
@@ -183,6 +184,33 @@ export function useWebsiteStage({
     setError(null);
   }, []);
 
+  const selectTarget = useCallback(
+    async (widgetTargetPath: string, frameworkSkillId: string | null): Promise<WebsiteIntegrationConfig> => {
+      if (!orgId || !projectId) {
+        throw new Error('Active organization and project are required to select a target.');
+      }
+
+      setIsSelecting(true);
+      setError(null);
+
+      try {
+        const updated = await websiteIntegrationApi.update(orgId, projectId, {
+          widget_target_path: widgetTargetPath,
+          ...(frameworkSkillId ? { framework_skill_id: frameworkSkillId } : {}),
+        });
+        setConfig(updated);
+        return updated;
+      } catch (err: any) {
+        const msg = err?.message || 'Failed to select the integration point.';
+        setError(msg);
+        throw err;
+      } finally {
+        setIsSelecting(false);
+      }
+    },
+    [orgId, projectId]
+  );
+
   return {
     config,
     analysis,
@@ -190,10 +218,12 @@ export function useWebsiteStage({
     isConnecting,
     isDisconnecting,
     isAnalyzing,
+    isSelecting,
     error,
     connect,
     disconnect,
     analyze,
+    selectTarget,
     refresh: loadConfig,
     clearError,
   };

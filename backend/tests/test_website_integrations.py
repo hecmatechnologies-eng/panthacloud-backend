@@ -1151,7 +1151,36 @@ async def test_plan_preview_reports_configuration_errors(client: AsyncClient) ->
 @pytest.mark.asyncio
 async def test_plan_preview_reports_an_invalid_path(client: AsyncClient) -> None:
     # A configuration error, not "unreachable": the preview names the real cause.
-    plan_resp = await plan_preview_with(client, MockGitProvider(), widget_target_path="/app/layout.tsx")
+    #
+    # The API now refuses an absolute path at configuration time (C11), so this seeds the corrupted
+    # value directly to prove the plan endpoint still maps the provider's refusal to a 400 — the
+    # same backstop shape as the run-refuses-a-protected-target test.
+    token, _, org_id = await register_user(client, "preview_invalid@example.com", "PreviewInvalid")
+    hdr = {"Authorization": f"Bearer {token}"}
+    proj_id = await create_project(client, token, org_id, "Preview Invalid", "preview-invalid")
+    base = f"/api/v1/organizations/{org_id}/projects/{proj_id}/website-integrations"
+
+    set_git_provider(MockGitProvider())
+    created = await client.post(
+        base,
+        headers=hdr,
+        json={"repository_owner": "fussion-org", "repository_name": "storefront"},
+    )
+    assert created.status_code == 201, created.text
+
+    session_factory = get_session_factory()
+    async with session_factory() as db:
+        integration = (
+            await db.execute(
+                select(WebsiteIntegration).where(
+                    WebsiteIntegration.project_id == uuid.UUID(proj_id)
+                )
+            )
+        ).scalar_one()
+        integration.widget_target_path = "/app/layout.tsx"
+        await db.commit()
+
+    plan_resp = await client.get(f"{base}/plan", headers=hdr)
 
     assert plan_resp.status_code == 400
     assert "Invalid repository file path '/app/layout.tsx'" in plan_resp.json()["detail"]

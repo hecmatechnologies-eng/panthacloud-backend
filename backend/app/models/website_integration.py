@@ -24,6 +24,10 @@ PUBLIC_KEY_PREFIX = "fussion_pk_"
 DEFAULT_FRAMEWORK_SKILL_ID = "nextjs-app-router"
 GENERIC_HTML_SKILL_ID = "generic-html"
 
+# The ids the deterministic generator can build. One definition, imported by the schema gate and the
+# analyst's target selection, so an id the generator cannot build is refused in both places.
+KNOWN_FRAMEWORK_SKILL_IDS = frozenset({DEFAULT_FRAMEWORK_SKILL_ID, GENERIC_HTML_SKILL_ID})
+
 
 def generate_public_key() -> str:
     """A widget's public client key (FR-107). Not a secret: it ships in the customer's page.

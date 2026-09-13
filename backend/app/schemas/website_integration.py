@@ -5,18 +5,13 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.origins import MAX_ORIGIN_LENGTH, normalize_origin
-from app.core.protected_paths import protected_reason
+from app.core.target_paths import unsafe_target_reason
 from app.models.website_integration import (
     DEFAULT_FRAMEWORK_SKILL_ID,
-    GENERIC_HTML_SKILL_ID,
+    KNOWN_FRAMEWORK_SKILL_IDS,
     IntegrationRunStatus,
     WebsiteIntegrationStatus,
 )
-
-# The skill ids the generator can actually build. An unknown id would otherwise reach the planner
-# and produce an empty plan — a run that changes nothing rather than a refusal. This is the earliest
-# gate, exactly as `_reject_protected_target` is for a protected path.
-KNOWN_FRAMEWORK_SKILL_IDS = frozenset({DEFAULT_FRAMEWORK_SKILL_ID, GENERIC_HTML_SKILL_ID})
 
 
 class WebsiteIntegrationRead(BaseModel):
@@ -41,22 +36,23 @@ class WebsiteIntegrationRead(BaseModel):
     updated_at: datetime
 
 
-def _reject_protected_target(path: str | None) -> str | None:
-    """Refuse a protected widget target at configuration time (FR-096, CLAUDE.md §4.9).
+def _reject_unsafe_target(path: str | None) -> str | None:
+    """Refuse an unsafe widget target at configuration time (FR-096, step C11).
 
-    The pipeline and the validator both refuse it later. This is the earliest gate: without it the
-    user saves a configuration, `GET /plan` renders a plan promising to modify
-    `.github/workflows/deploy.yml`, and only the run — at the end — says no.
+    The earliest gate: without it the user saves a configuration, `GET /plan` renders a plan
+    promising to modify `.github/workflows/deploy.yml`, and only the run — at the end — says no.
+    It applies the same checks the analyst's target selection does (`app.core.target_paths`), so a
+    path is safe however it was chosen — typed, or selected from the analyst's candidates.
     """
     if path is None:
         return None
-    reason = protected_reason(path)
+    reason = unsafe_target_reason(path)
     if reason:
         raise ValueError(
-            f"'{path}' is a protected path ({reason}). Fussion never writes there; point the "
-            "widget target at the application shell, such as app/layout.tsx or index.html."
+            f"'{path}' cannot be the widget target ({reason}). Fussion writes only to the "
+            "application shell, such as app/layout.tsx or index.html."
         )
-    return path
+    return path.strip()
 
 
 def _reject_unknown_framework_skill(skill_id: str | None) -> str | None:
@@ -82,7 +78,7 @@ class WebsiteIntegrationCreate(BaseModel):
     widget_target_path: str = Field("app/layout.tsx", max_length=255)
     github_token: str | None = Field(None, max_length=500)
 
-    _check_target = field_validator("widget_target_path")(_reject_protected_target)
+    _check_target = field_validator("widget_target_path")(_reject_unsafe_target)
     _check_skill = field_validator("framework_skill_id")(_reject_unknown_framework_skill)
 
 
@@ -95,7 +91,7 @@ class WebsiteIntegrationUpdate(BaseModel):
     widget_target_path: str | None = Field(None, max_length=255)
     github_token: str | None = Field(None, max_length=500)
 
-    _check_target = field_validator("widget_target_path")(_reject_protected_target)
+    _check_target = field_validator("widget_target_path")(_reject_unsafe_target)
     _check_skill = field_validator("framework_skill_id")(_reject_unknown_framework_skill)
 
 
