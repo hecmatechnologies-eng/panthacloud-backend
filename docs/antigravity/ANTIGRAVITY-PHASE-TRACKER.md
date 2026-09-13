@@ -15,10 +15,11 @@ third, different numbering and is archived under `docs/archive/`.
 
 | Step | Scope | Status |
 | :--- | :--- | :--- |
-| **A. Truth & safety** | layout-overwrite fix, workspace clone+read, one roadmap, key removal, 05–08 decision | **IN PROGRESS** — layout-overwrite fix (`dd10167`), roadmap reconciliation (`d91d821`), dev-secret removal from source and the git-history rewrite (2026-09-12), the `@/` alias fix (B8-gated) and the 05–08 decision are done. The one item left, `SandboxProvider` + workspace rename, is now slice **C14** (the B5-or-later trigger has passed) |
+| **A. Truth & safety** | layout-overwrite fix, workspace clone+read, one roadmap, key removal, 05–08 decision | **COMPLETE** — layout-overwrite fix, roadmap reconciliation, dev-secret removal from source and the git-history rewrite (2026-09-12), the `@/` alias fix and the 05–08 decision all done; the last item, `SandboxProvider` + workspace rename, landed as **C14** |
 | **B. Runtime plane** | `STEP-B-SLICES.md` B1–B8 | **IN PROGRESS** — B1 (`95b63eb`) through B6 done; **B7 (SSE) and B8 (real widget + customer-origin CORS) remain**. The owner's B7 deferral is re-scoped as an MVP gap in `GAP-CLOSURE-PLAN.md` (acceptance #8 names a *streamed* answer); B7 precedes B8 |
 | **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **COMPLETE** — C1–C15 done. The remaining MVP gaps are step B (B7 SSE, B8 widget) per `GAP-CLOSURE-PLAN.md`; step D stays post-MVP |
 | **D. Coding agent** | write capability, generated-code scan, ChangeSet → PR, bounded repair | NOT STARTED — no slice breakdown yet; post-MVP per `FEASIBILITY.md` §4 (the deterministic PR path already covers acceptance #6) |
+| **E. GitHub App connection** | `STEP-E-SLICES.md` E1–E2 (planned) | NOT STARTED — the Railway-style connect flow, replacing the pasted PAT. Post-MVP per `MVP-REQUIREMENTS-V2.md` scope item #3; sequenced after the pipeline is validated on a real repository. See `GAP-CLOSURE-PLAN.md` Phase 6 |
 
 The gap between the code and the Part C acceptance criteria, and the ordered path to close it, is
 `docs/implementation/GAP-CLOSURE-PLAN.md`. Slice definitions live in the `STEP-*-SLICES.md` files;

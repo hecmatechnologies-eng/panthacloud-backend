@@ -155,3 +155,31 @@ tiers, a third agent.
 ## Critical path to a sellable demo
 
 C11 → C12 → C13 → B7 → B8. C14 and C15 slot in wherever convenient.
+
+## Phase 6 (post-validation) — GitHub App connection
+
+The repository connection is the last hand-typed input. Today the user pastes a PAT and types the
+owner, repository and branch. The intended experience is Railway's: a **Connect GitHub** button, an
+installation screen, and a card list of the repositories the installation may access, from which the
+user selects one. `MVP-REQUIREMENTS-V2.md` calls this the **first post-MVP item** and defers it only
+until the encryption key left source — which it has (`FEASIBILITY.md` §6, `B11`).
+
+It is deliberately **after** the pipeline is validated on a real repository: the connection UX and
+the integration engine are independent, and testing them one at a time points a failure at the right
+one. It is a new step, **E**, sliced in `STEP-E-SLICES.md`.
+
+| # | Slice | Tier | Done when |
+|---|---|---|---|
+| E1 | GitHub App config, installation model, install + callback, installation-token minting, repository listing | 1 | An organization installs the app; the callback records the installation; a short-lived installation token is minted and cached; `GET /github/repositories` lists what the installation can reach, tenant-scoped |
+| E2 | Studio repo picker replacing the PAT form | 1 | "Connect GitHub" → install → a searchable repository card list → select → the integration is created from the selection; no PAT is typed |
+
+**The architectural change to plan for:** the platform stops storing a user credential. A GitHub App
+has no user token — it mints a short-lived installation access token (sign a JWT with the app private
+key, exchange it for an installation token, cache until expiry). That resolver replaces
+`_decrypt_token` / `_decrypt_github_token`, and the model still never holds it (`CLAUDE.md` §4.2).
+
+**Decision:** GitHub App, not an OAuth App — per-repository permissions and short-lived tokens
+rather than a broad, long-lived user token. This matches the Railway experience and the requirement.
+
+**Deliberately not built:** webhook-driven repository sync (the list is fetched live until a real
+need appears), and GitHub Enterprise hosts.
