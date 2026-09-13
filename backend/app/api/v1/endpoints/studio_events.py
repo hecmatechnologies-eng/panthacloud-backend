@@ -1,69 +1,74 @@
 import asyncio
 import json
+import uuid
 from collections.abc import AsyncGenerator
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_project, require_permission
-from app.core.database import get_db
-from app.core.permissions import Permission
+from app.api.deps import authorize_project_stream
+from app.core.database import get_session_factory
 from app.models.audit_event import AuditEvent
-from app.models.membership import Membership
-from app.models.organization import Organization
-from app.models.project import Project
 
 router = APIRouter(prefix="/organizations/{org_id}/projects", tags=["Studio Events"])
 
 
-def _serialize_event(event: AuditEvent) -> dict[str, object]:
-    return {
+def _frame(event: AuditEvent) -> str:
+    payload = {
         "id": str(event.id),
         "event_type": event.event_type,
         "payload": event.payload,
         "created_at": event.created_at.isoformat(),
     }
+    return f"id: {event.id}\nevent: studio.activity\ndata: {json.dumps(payload)}\n\n"
 
 
 @router.get("/{project_id}/events/stream", summary="Stream project studio activity")
 async def stream_project_events(
     request: Request,
-    project: Annotated[Project, Depends(get_current_project)],
-    tenant: Annotated[
-        tuple[Organization, Membership], Depends(require_permission(Permission.PROJECT_VIEW))
-    ],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    authorized_project_id: Annotated[uuid.UUID, Depends(authorize_project_stream)],
 ) -> StreamingResponse:
-    del tenant
+    """Stream a project's audit events.
+
+    Authorization happens in `authorize_project_stream`, which closes its session before this
+    returns. The generator then opens a short-lived session per poll and closes it before yielding,
+    so an idle connection holds no pooled connection at all (CLAUDE.md §3.6).
+    """
 
     async def event_generator() -> AsyncGenerator[str]:
-        initial_stmt = (
-            select(AuditEvent)
-            .where(AuditEvent.project_id == project.id)
-            .order_by(AuditEvent.created_at.desc())
-            .limit(25)
-        )
-        initial_events = list(reversed((await db.execute(initial_stmt)).scalars().all()))
-        last_created_at = None
+        session_factory = get_session_factory()
 
-        for event in initial_events:
-            last_created_at = event.created_at
-            yield f"id: {event.id}\nevent: studio.activity\ndata: {json.dumps(_serialize_event(event))}\n\n"
+        async with session_factory() as db:
+            initial_stmt = (
+                select(AuditEvent)
+                .where(AuditEvent.project_id == authorized_project_id)
+                .order_by(AuditEvent.created_at.desc())
+                .limit(25)
+            )
+            initial_events = list(reversed((await db.execute(initial_stmt)).scalars().all()))
+            # Serialise inside the session: the frames are plain strings, so nothing is read from a
+            # detached instance after the session closes.
+            initial_frames = [_frame(event) for event in initial_events]
+            last_created_at = initial_events[-1].created_at if initial_events else None
+
+        for frame in initial_frames:
+            yield frame
 
         while not await request.is_disconnected():
-            stmt = select(AuditEvent).where(AuditEvent.project_id == project.id)
-            if last_created_at is not None:
-                stmt = stmt.where(AuditEvent.created_at > last_created_at)
-            stmt = stmt.order_by(AuditEvent.created_at.asc())
-            new_events = (await db.execute(stmt)).scalars().all()
+            async with session_factory() as db:
+                stmt = select(AuditEvent).where(AuditEvent.project_id == authorized_project_id)
+                if last_created_at is not None:
+                    stmt = stmt.where(AuditEvent.created_at > last_created_at)
+                stmt = stmt.order_by(AuditEvent.created_at.asc())
+                new_events = (await db.execute(stmt)).scalars().all()
+                new_frames = [_frame(event) for event in new_events]
+                if new_events:
+                    last_created_at = new_events[-1].created_at
 
-            for event in new_events:
-                last_created_at = event.created_at
-                yield f"id: {event.id}\nevent: studio.activity\ndata: {json.dumps(_serialize_event(event))}\n\n"
-
+            for frame in new_frames:
+                yield frame
             yield ": keepalive\n\n"
             await asyncio.sleep(1)
 

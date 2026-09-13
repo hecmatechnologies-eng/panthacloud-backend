@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.database import get_db
+from app.core.database import get_db, get_session_factory
 from app.core.permissions import Permission, has_permission
 from app.core.security import decode_access_token
 from app.models.assistant import Assistant, AssistantPosition
@@ -161,6 +161,30 @@ async def get_current_project(
         )
 
     return project
+
+
+async def authorize_project_stream(
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    token_auth: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
+) -> uuid.UUID:
+    """Authorize a streaming connection, then release the session before the stream begins.
+
+    A server-sent-events connection outlives a request, and FastAPI closes a `yield` dependency
+    only after the response completes — so a route that depends on `get_db` holds a pooled
+    connection for the connection's life and exhausts the pool (CLAUDE.md §3.6). This resolves the
+    user, tenant, permission and project in its own short-lived session and returns only the
+    trusted project id; the session is closed when this returns, before any event is streamed.
+
+    It composes the existing resolution functions directly rather than re-implementing the checks,
+    so the authorization is identical to a normal request.
+    """
+    async with get_session_factory()() as db:
+        user = await get_current_user(token_auth=token_auth, db=db)
+        tenant = await get_current_organization(org_id=org_id, current_user=user, db=db)
+        await require_permission(Permission.PROJECT_VIEW)(tenant=tenant)
+        project = await get_current_project(project_id=project_id, tenant=tenant, db=db)
+        return project.id
 
 
 async def get_current_integration(

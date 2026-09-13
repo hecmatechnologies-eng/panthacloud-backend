@@ -17,7 +17,7 @@ third, different numbering and is archived under `docs/archive/`.
 | :--- | :--- | :--- |
 | **A. Truth & safety** | layout-overwrite fix, workspace clone+read, one roadmap, key removal, 05–08 decision | **IN PROGRESS** — layout-overwrite fix (`dd10167`), roadmap reconciliation (`d91d821`), dev-secret removal from source and the git-history rewrite (2026-09-12), the `@/` alias fix (B8-gated) and the 05–08 decision are done. The one item left, `SandboxProvider` + workspace rename, is now slice **C14** (the B5-or-later trigger has passed) |
 | **B. Runtime plane** | `STEP-B-SLICES.md` B1–B8 | **IN PROGRESS** — B1 (`95b63eb`) through B6 done; **B7 (SSE) and B8 (real widget + customer-origin CORS) remain**. The owner's B7 deferral is re-scoped as an MVP gap in `GAP-CLOSURE-PLAN.md` (acceptance #8 names a *streamed* answer); B7 precedes B8 |
-| **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **IN PROGRESS** — C1–C12 done. **C13–C15** remain, per `GAP-CLOSURE-PLAN.md`: C13 Studio SSE leak, C14 contract closeout, C15 memory reconciliation |
+| **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **IN PROGRESS** — C1–C13 done. **C14–C15** remain, per `GAP-CLOSURE-PLAN.md`: C14 contract closeout (`SandboxProvider` + `AgentRun.skill_versions`), C15 memory reconciliation |
 | **D. Coding agent** | write capability, generated-code scan, ChangeSet → PR, bounded repair | NOT STARTED — no slice breakdown yet; post-MVP per `FEASIBILITY.md` §4 (the deterministic PR path already covers acceptance #6) |
 
 The gap between the code and the Part C acceptance criteria, and the ordered path to close it, is
@@ -2766,3 +2766,59 @@ failed run's diff describes generated-but-uncommitted content (intentional, disa
   database**. No seed — the column is nullable with no backfill.
 - Backend suite, from the repository root: **556 passed, 2 skipped**.
 - Frontend, from `frontend/`: `pnpm build` clean; `pnpm test` — **109 passed** (9 files).
+
+## Step C (FEASIBILITY §3) · Slice C13 — the Studio SSE session leak
+
+**Rigour tier: 2 — Standard** (CLAUDE.md §9.0), declared in `STEP-C-SLICES.md`. A backend behaviour
+change with no customer-repo or credential path; the one security-relevant surface is the stream's
+authorization, which is unchanged in what it checks.
+
+**Status: COMPLETED** — the reviewer returned **PASS WITH FINDINGS**, no BLOCKING; the one SHOULD FIX
+(the session guarantee was untested) is fixed. Committed with this entry.
+
+### Objective
+Close `CLAUDE.md` §3.6: `studio_events.py` held an `AsyncSession` for the life of each connection
+while polling every second, which would exhaust the pool.
+
+### Completed Work
+- **`app/api/deps.py`** — `authorize_project_stream`: resolves the user, tenant, permission and
+  project in its own short-lived session and returns the trusted project id. It composes the
+  existing resolution functions directly, so the checks are identical to a normal request.
+- **`studio_events.py`** — the route no longer depends on `get_db` (which FastAPI closes only after
+  the response completes); the generator opens a short-lived session per poll, serialises the frames
+  inside that session, and closes it before yielding. The disconnect check and the wire format are
+  unchanged.
+- **Tests** — the authorization path (valid, cross-tenant 404, no credentials 401), a structural
+  guard that the route's dependency tree contains no `get_db`, and a generator test asserting no
+  session is open at any yield and that the poll loop opens its own session.
+
+### Architectural & Technology Decisions
+1. **A streaming route must not depend on a session-yielding dependency.** FastAPI closes a `yield`
+   dependency only after the response completes, so the fix is not just the generator — the auth
+   dependency itself has to release its session before the stream begins.
+2. **Authorization is composed, not duplicated.** `authorize_project_stream` calls the same
+   `get_current_user` / `get_current_organization` / `require_permission` / `get_current_project`
+   functions a normal request uses, so there is one definition of each check.
+3. **Frames are serialised inside the session.** The generator yields plain strings, so nothing is
+   read from a detached ORM instance after its session closes.
+
+### Review history
+One round (Tier 2), fresh reviewer — **PASS WITH FINDINGS**, no BLOCKING. The reviewer confirmed
+authorization equivalence (the explicit permission check is necessary, since `get_current_project`
+does not enforce it) and that no pooled connection is held across a yield. SHOULD FIX: the session
+guarantee was untested — now covered by the generator test. CONSIDER logged: the dependency uses
+`get_session_factory()` directly, so a future `dependency_overrides[get_db]` would not apply to it;
+the composition hand-mirrors the permission set.
+
+### Deviations
+- **None from the slice definition.**
+
+### Blockers / Deferred
+- **`dependency_overrides[get_db]` does not affect the stream auth path** — no override exists today;
+  a gate on introducing one.
+
+### Verification (2026-09-13)
+- Ruff, from `backend/`: `All checks passed!`
+- No migration in this slice.
+- Backend suite, from the repository root: **561 passed, 2 skipped**.
+- Frontend: no change; last run `pnpm build` clean, `pnpm test` **109 passed**.
