@@ -100,6 +100,47 @@ class ModelGateway:
         await self._record_usage(db, response, context, latency_ms)
         return response
 
+    async def ensure_budget(
+        self, db: AsyncSession, organization_id: uuid.UUID, estimated_cost: Decimal = Decimal(0)
+    ) -> None:
+        """Refuse a call before it is made when the organization is over budget (FR-074).
+
+        The agent adapter calls its provider directly, so the harness checks here before the call
+        and records with ``record_external_usage`` after it.
+        """
+        await self._check_budget(db, organization_id, estimated_cost)
+
+    async def record_external_usage(
+        self,
+        db: AsyncSession,
+        *,
+        organization_id: uuid.UUID,
+        provider: str,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        latency_ms: int = 0,
+        project_id: uuid.UUID | None = None,
+        integration_id: uuid.UUID | None = None,
+        conversation_id: uuid.UUID | None = None,
+    ) -> None:
+        """Record a call made outside ``complete`` — the agent adapter — in the same ledger."""
+        db.add(
+            ModelUsage(
+                organization_id=organization_id,
+                project_id=project_id,
+                integration_id=integration_id,
+                conversation_id=conversation_id,
+                provider=provider,
+                model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                estimated_cost_usd=estimate_cost_usd(model, input_tokens, output_tokens),
+                latency_ms=latency_ms,
+            )
+        )
+        await db.flush()
+
     # --- policy -------------------------------------------------------------------------------
 
     def _check_allowed(self, model: str) -> None:

@@ -25,6 +25,7 @@ dependencies = [
     "idna>=3.7",
     "google-genai>=1.0.0",
     "openai>=1.40.0",
+    "pydantic-ai>=2.43.0",
 ]
 
 [project.optional-dependencies]

@@ -17,7 +17,7 @@ third, different numbering and is archived under `docs/archive/`.
 | :--- | :--- | :--- |
 | **A. Truth & safety** | layout-overwrite fix, workspace clone+read, one roadmap, key removal, 05–08 decision | **IN PROGRESS** — layout-overwrite fix (`dd10167`), roadmap reconciliation (`d91d821`), dev-secret removal from source and the git-history rewrite (2026-09-12) done. Remaining items and their triggers are tabled in `CLAUDE.md` §3: `@/` alias before B8, the 05–08 decision before step C, and `SandboxProvider` with B5 or later |
 | **B. Runtime plane** | `STEP-B-SLICES.md` B1–B8 | **IN PROGRESS** — B1 done (`95b63eb`); B2 done; B3 done; B4 done; B5 done; B6 done; **B7 (SSE) deferred by owner**; B8 next |
-| **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **IN PROGRESS** — `STEP-C-SLICES.md` C1–C10; C1 done; C2 done; C3 done; C4 done; C5 next |
+| **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **IN PROGRESS** — `STEP-C-SLICES.md` C1–C10; C1 done; C2 done; C3 done; C4 done; C5 done; C6 next |
 | **D. Coding agent** | write capability, generated-code scan, ChangeSet → PR, bounded repair | NOT STARTED — no slice breakdown yet |
 
 ## Phase history (legacy numbering — record only, never cited for new work)
@@ -2180,3 +2180,77 @@ Checked against `STEP-C-SLICES.md` C4:
 - Reader tests: **16 passed, 2 skipped**; full backend suite **474 passed, 2 skipped** at the
   round-2 fix point, and the reader tests re-run green after the round-3 touch-ups.
 - No migration in this slice.
+
+---
+
+## Step C (FEASIBILITY §3) · Slice C5 — AgentRunner seam and Pydantic AI adapter
+
+**Rigour tier: 1 — Maximum** (CLAUDE.md §9.0), declared in `STEP-C-SLICES.md` and unchanged. This
+introduces the model path the analyst runs on.
+
+**Status: COMPLETED** — fussion-reviewer PASS WITH FINDINGS, no BLOCKING finding; both SHOULD FIX
+findings and the cheap CONSIDERs fixed and re-verified. Committed with this entry.
+
+### Objective
+ADR-001, FR-072, FR-125: adopt Pydantic AI behind Fussion's own `AgentRunner` Protocol, with
+structured output validated, `pydantic_ai` imported only in `app/llm/adapters/`, and usage flowing
+through the model gateway.
+
+### Completed Work
+- **`app/harness/runner.py`** — the `AgentRunner` Protocol, `AgentRunResult`, `StructuredOutputError`,
+  `AgentRunnerError`, and the `UsageRecorder` seam.
+- **`app/llm/adapters/pydantic_ai_runner.py`** — `PydanticAIAgentRunner` (the only module importing
+  `pydantic_ai`), `_build_model`, and `gateway_usage_recorder`.
+- **`app/llm/factory.py`** — `ProviderConfig` + `resolve_provider_config`, the single provider
+  selector the text provider and the agent adapter both read.
+- **`app/llm/gateway.py`** — `ensure_budget` (pre-call) and `record_external_usage` (post-call), so
+  agent calls are metered in the same ledger as runtime calls.
+- **Tests** (`tests/test_agent_runner.py`, 7) — structured output parsed, usage returned and
+  recorded, unparseable output a failed step, text output when no schema, the framework confined to
+  the adapter, a fake runner substituting, and the recorder writing through the gateway.
+
+### Architectural & Technology Decisions
+1. **The harness depends on `AgentRunner`; Pydantic AI is one implementation.** `app/agents/` and
+   `app/harness/runner.py` never import the framework (verified by a repo-wide test).
+2. **Unparseable output is a failed step, a provider failure is not.** `UnexpectedModelBehavior`
+   maps to `StructuredOutputError`, but `ContentFilterError` and `IncompleteToolCall` — which
+   subclass it — map to `AgentRunnerError`, so a content filter is not mislabelled as bad output.
+3. **Usage flows through the gateway.** The adapter returns usage and hands it to a recorder; the
+   harness wires `gateway_usage_recorder`, which writes to the same `ModelUsage` ledger via
+   `record_external_usage`, and checks `ensure_budget` before the call.
+4. **One provider selector.** `resolve_provider_config` is shared by the text provider and the agent
+   adapter, so adding a vendor is one edit and the two cannot drift.
+5. **No key, no call.** The adapter fails fast rather than attempting a call on an empty credential.
+
+### Review history
+One round (Tier 1 gate), fresh reviewer — **PASS WITH FINDINGS**, no BLOCKING finding. FR-125 was
+verified by grep. Two in-slice findings, fixed per §9.0:
+1. **Usage did not actually flow through the gateway** — the adapter called the provider directly
+   and the recorder was a bare callback with no gateway entry point. Added
+   `ModelGateway.ensure_budget`/`record_external_usage` and `gateway_usage_recorder`, with a test
+   that writes a `ModelUsage` row.
+2. **Provider selection was duplicated** between the factory and the adapter. Extracted
+   `resolve_provider_config` as the single selector.
+
+CONSIDER fixed: the exception mapping narrowed (see decision 2); the adapter fails fast without a
+key; the dependency floor tightened to `pydantic-ai>=2.43.0`. CONSIDER logged as C6/C8 gates: the
+`context` parameter is a signature-only seam until tools need `deps_type`; `definition.tools` is
+ignored until tool dispatch exists; `_build_model` is covered by inspection, not a test (all tests
+inject a model).
+
+### Deviations
+Checked against `STEP-C-SLICES.md` C5:
+- `app/llm/factory.py` and `app/llm/gateway.py` were extended beyond the slice's two new files, to
+  satisfy "usage flows through the gateway" and remove the duplicated selector.
+- `backend/tests/conftest.py` was briefly changed and reverted: a drop-before-create experiment
+  caused cross-file setup errors; the stale database from the interrupted run was deleted instead.
+
+### Blockers / Deferred
+- **Tool dispatch** and **budget enforcement wiring** are C6; the **eval corpus** is C9.
+- Remaining step-C gates: `skills-ref` (C7), frontend fixtures (C9).
+
+### Verification (2026-09-13)
+- Ruff, from `backend/`: `All checks passed!`
+- Backend suite, from the repository root: **481 passed, 2 skipped**.
+- No migration in this slice. No test hits a paid API; pydantic_ai's `TestModel`/`FunctionModel` are
+  used, and the fake runner substitutes.
