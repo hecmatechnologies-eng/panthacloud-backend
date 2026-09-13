@@ -3023,3 +3023,27 @@ exists in the unrouted `integrations` feature.
   database**. No seed (nullable column, no backfill).
 - Backend suite, from the repository root: **582 passed, 2 skipped**.
 - Frontend, from `frontend/`: `pnpm build` clean; `pnpm test` — **110 passed** (9 files).
+
+## Dev tooling — Windows + Postgres event loop
+
+**Rigour tier: 3 — Light** (CLAUDE.md §9.0). Development-environment only; no product behaviour.
+
+**Status: COMPLETED.** Found while setting up a real GitHub App test: on Windows the API and Alembic
+could not reach Postgres.
+
+### Problem
+psycopg's async driver cannot run on Windows' default `ProactorEventLoop`. Setting the event-loop
+policy is not enough, because **uvicorn 0.52 forces `ProactorEventLoop` on Windows unless it is
+running a subprocess** (`uvicorn/loops/asyncio.py`). The documented `uvicorn ... --reload` command
+only works because `--reload` runs the server in a subprocess, which uvicorn gives a `Selector` loop.
+
+### Fix
+- **`app/core/loop.py`** — `selector_loop_factory`, passed to uvicorn as a custom loop.
+- **`run_dev.py`** — a launcher that runs the app with that factory (no reliance on `--reload`).
+- **`alembic/env.py`** — sets the Windows `Selector` policy before `asyncio.run`, so the documented
+  `alembic upgrade head` works.
+
+### Verification
+- `alembic upgrade head` succeeds against Postgres; migrations applied to `0022`.
+- `python run_dev.py` starts the API; `/api/v1/health` reports `"database": {"type": "postgresql"}`.
+- Ruff clean on `app`, `tests` and `run_dev.py`.
