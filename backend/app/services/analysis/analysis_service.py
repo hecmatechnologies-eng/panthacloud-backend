@@ -12,7 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents.website_analyst import WEBSITE_ANALYST
 from app.agents.website_profile import WebsiteProfile
 from app.core.config import settings
-from app.core.secrets import SecretStoreError, secret_store
 from app.harness.context import ExecutionContext
 from app.llm.adapters.pydantic_ai_runner import PydanticAIAgentRunner
 from app.llm.gateway import get_model_gateway
@@ -23,6 +22,7 @@ from app.models.website_integration import WebsiteIntegration
 from app.services.analysis.analyst import analyze_repository
 from app.services.analysis.clone import clone_repository, clone_url_for
 from app.services.analysis.selection import select_target
+from app.services.integration.credentials import resolve_github_token
 from app.services.repository.reader import LocalWorkspaceReader
 from app.services.repository.workspace import workspace_manager
 from app.tools.gateway import ToolGateway
@@ -46,7 +46,7 @@ async def analyze_website_integration(
         # Resolve the gateway before cloning: a no-model deployment must fail without touching
         # the repository.
         gateway = get_model_gateway()
-        token = _decrypt_token(integration)
+        token = await resolve_github_token(integration)
         commit_sha = await clone_repository(
             clone_url_for(integration, token), integration.default_branch, workspace_path
         )
@@ -109,20 +109,6 @@ async def analyze_website_integration(
         return analysis
     finally:
         workspace_manager.cleanup_workspace(workspace_path)
-
-
-def _decrypt_token(integration: WebsiteIntegration) -> str | None:
-    if not integration.encrypted_secrets:
-        return None
-    try:
-        return secret_store.decrypt(integration.encrypted_secrets).get("github_token")
-    except SecretStoreError:
-        logger.warning(
-            "Stored credentials for integration %s could not be decrypted; analysing "
-            "unauthenticated.",
-            integration.id,
-        )
-        return None
 
 
 def _build_analysis(integration_id, commit_sha: str, agent_run_id, profile: WebsiteProfile | None):

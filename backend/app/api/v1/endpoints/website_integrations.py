@@ -15,8 +15,9 @@ from app.api.deps import (
 )
 from app.core.database import get_db
 from app.core.permissions import Permission
-from app.core.secrets import SecretStoreError, secret_store
+from app.core.secrets import secret_store
 from app.models.assistant import Assistant
+from app.models.github_installation import GitHubInstallation
 from app.models.knowledge import KnowledgeBase
 from app.models.membership import Membership, RoleEnum
 from app.models.organization import Organization
@@ -44,6 +45,10 @@ from app.schemas.website_integration import (
 from app.services.analysis.analysis_service import analyze_website_integration
 from app.services.analysis.queries import get_latest_analysis
 from app.services.audit import record_audit
+from app.services.integration.credentials import (
+    GitHubCredentialError,
+    resolve_github_token,
+)
 from app.services.integration.github import (
     GitHubAPIError,
     GitHubUnavailableError,
@@ -59,23 +64,6 @@ router = APIRouter(
 )
 
 
-def _decrypt_github_token(integration: WebsiteIntegration) -> str | None:
-    if not integration.encrypted_secrets:
-        return None
-    try:
-        return secret_store.decrypt(integration.encrypted_secrets).get("github_token")
-    except SecretStoreError:
-        # Reachable whenever the encryption key changes — e.g. development keys are now generated
-        # per installation, so ciphertext stored under the old hardcoded key cannot be read. The
-        # caller proceeds unauthenticated, which fails confusingly, so say why here.
-        logger.warning(
-            "Stored credentials for integration %s could not be decrypted with the current "
-            "SECRET_ENCRYPTION_KEY; the token must be re-entered.",
-            integration.id,
-        )
-        return None
-
-
 def to_website_integration_read(integration: WebsiteIntegration) -> WebsiteIntegrationRead:
     return WebsiteIntegrationRead(
         id=integration.id,
@@ -89,7 +77,10 @@ def to_website_integration_read(integration: WebsiteIntegration) -> WebsiteInteg
         website_root_dir=integration.website_root_dir,
         widget_target_path=integration.widget_target_path,
         status=integration.status,
-        has_credentials=bool(integration.encrypted_secrets),
+        has_credentials=bool(
+            integration.encrypted_secrets or integration.github_installation_id is not None
+        ),
+        github_installation_id=integration.github_installation_id,
         public_key=integration.public_key,
         last_error=integration.last_error,
         last_success_at=integration.last_success_at,
@@ -142,6 +133,23 @@ async def create_website_integration(
     if payload.github_token:
         encrypted_blob = secret_store.encrypt({"github_token": payload.github_token})
 
+    # An App-linked integration must reference an installation this organization owns; the caller
+    # cannot attach an arbitrary installation id (step E2).
+    if payload.github_installation_id is not None:
+        installation = (
+            await db.execute(
+                select(GitHubInstallation).where(
+                    GitHubInstallation.organization_id == project.organization_id,
+                    GitHubInstallation.installation_id == payload.github_installation_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if installation is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="That GitHub installation is not connected to this organization.",
+            )
+
     integration = WebsiteIntegration(
         project_id=project.id,
         provider="github",
@@ -153,6 +161,7 @@ async def create_website_integration(
         widget_target_path=payload.widget_target_path.strip() or "app/layout.tsx",
         status=WebsiteIntegrationStatus.CONNECTED,
         encrypted_secrets=encrypted_blob,
+        github_installation_id=payload.github_installation_id,
     )
     db.add(integration)
     await db.commit()
@@ -275,7 +284,12 @@ async def validate_connection(
     ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ValidationResultPayload:
-    raw_token = _decrypt_github_token(integration)
+    try:
+        raw_token = await resolve_github_token(integration)
+    except GitHubCredentialError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
+        ) from exc
 
     issues: list[str] = []
     repo_ok = False
@@ -364,7 +378,12 @@ async def get_integration_plan(
     # the user must fix, so it is reported with its cause.
     target_status: TargetStatus = "unknown"
     provider = get_git_provider()
-    token = _decrypt_github_token(integration)
+    try:
+        token = await resolve_github_token(integration)
+    except GitHubCredentialError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
+        ) from exc
     try:
         head_sha = await provider.get_branch_head(
             integration.repository_owner,
@@ -709,6 +728,10 @@ async def analyze_website_integration_endpoint(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="The repository could not be read. Check the repository, branch and token.",
         ) from None
+    except GitHubCredentialError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
+        ) from exc
     except (StructuredOutputError, AgentRunnerError):
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

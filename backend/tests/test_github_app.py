@@ -427,3 +427,131 @@ async def test_installations_are_listed_for_the_tenant(
         headers={"Authorization": f"Bearer {other_token}"},
     )
     assert other.json() == []
+
+
+async def create_project(client: AsyncClient, token: str, org_id: str, name: str) -> str:
+    resp = await client.post(
+        f"/api/v1/organizations/{org_id}/projects",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": name, "slug": name.lower().replace(" ", "-")},
+    )
+    assert resp.status_code == 201
+    return resp.json()["id"]
+
+
+@pytest.mark.asyncio
+async def test_create_integration_from_an_installation(
+    client: AsyncClient, github_app: _FakeGitHub
+) -> None:
+    """E2: an integration created from a selected repo records the installation, not a PAT."""
+    token, org_id = await register_user(client, "e2_create@example.com", "E2Create")
+    await _record_installation(org_id)
+    proj_id = await create_project(client, token, org_id, "E2 Create")
+
+    resp = await client.post(
+        f"/api/v1/organizations/{org_id}/projects/{proj_id}/website-integrations",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "repository_owner": "acme",
+            "repository_name": "site",
+            "github_installation_id": INSTALLATION_ID,
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["github_installation_id"] == INSTALLATION_ID
+    assert body["has_credentials"] is True
+
+
+@pytest.mark.asyncio
+async def test_create_integration_rejects_a_foreign_installation(
+    client: AsyncClient, github_app: _FakeGitHub
+) -> None:
+    """The installation exists, but it belongs to another organization."""
+    token_a, org_a = await register_user(client, "e2_foreign_a@example.com", "E2ForeignA")
+    _token_b, org_b = await register_user(client, "e2_foreign_b@example.com", "E2ForeignB")
+    await _record_installation(org_b)  # the installation belongs to org B
+    proj_a = await create_project(client, token_a, org_a, "E2 Foreign A")
+
+    resp = await client.post(
+        f"/api/v1/organizations/{org_a}/projects/{proj_a}/website-integrations",
+        headers={"Authorization": f"Bearer {token_a}"},
+        json={
+            "repository_owner": "acme",
+            "repository_name": "site",
+            "github_installation_id": INSTALLATION_ID,
+        },
+    )
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_credential_resolver_refuses_when_the_app_is_unconfigured(
+    client: AsyncClient, github_app: _FakeGitHub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An App-linked integration cannot authenticate once the app is unconfigured: fail loud."""
+    token, org_id = await register_user(client, "e2_unconf@example.com", "E2Unconf")
+    await _record_installation(org_id)
+    proj_id = await create_project(client, token, org_id, "E2 Unconf")
+    created = await client.post(
+        f"/api/v1/organizations/{org_id}/projects/{proj_id}/website-integrations",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "repository_owner": "acme",
+            "repository_name": "site",
+            "github_installation_id": INSTALLATION_ID,
+        },
+    )
+    assert created.status_code == 201
+
+    from app.models.website_integration import WebsiteIntegration
+    from app.services.integration.credentials import GitHubCredentialError, resolve_github_token
+
+    monkeypatch.setattr(settings, "GITHUB_APP_ID", None)
+
+    async with get_session_factory()() as db:
+        integration = (
+            await db.execute(
+                select(WebsiteIntegration).where(
+                    WebsiteIntegration.project_id == uuid.UUID(proj_id)
+                )
+            )
+        ).scalar_one()
+        with pytest.raises(GitHubCredentialError):
+            await resolve_github_token(integration)
+
+
+@pytest.mark.asyncio
+async def test_credential_resolver_mints_for_an_app_linked_integration(
+    client: AsyncClient, github_app: _FakeGitHub
+) -> None:
+    token, org_id = await register_user(client, "e2_resolve@example.com", "E2Resolve")
+    await _record_installation(org_id)
+    proj_id = await create_project(client, token, org_id, "E2 Resolve")
+    created = await client.post(
+        f"/api/v1/organizations/{org_id}/projects/{proj_id}/website-integrations",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "repository_owner": "acme",
+            "repository_name": "site",
+            "github_installation_id": INSTALLATION_ID,
+        },
+    )
+    assert created.status_code == 201
+
+    from app.models.website_integration import WebsiteIntegration
+    from app.services.integration.credentials import resolve_github_token
+
+    async with get_session_factory()() as db:
+        integration = (
+            await db.execute(
+                select(WebsiteIntegration).where(
+                    WebsiteIntegration.project_id == uuid.UUID(proj_id)
+                )
+            )
+        ).scalar_one()
+        resolved = await resolve_github_token(integration)
+
+    assert resolved == "ghs_test_token"
+    assert any(request.endswith("/access_tokens") for request in github_app.requests)
+

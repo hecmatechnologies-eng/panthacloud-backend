@@ -29,6 +29,7 @@ class WebsiteIntegrationRead(BaseModel):
     widget_target_path: str
     status: WebsiteIntegrationStatus
     has_credentials: bool = False
+    github_installation_id: int | None = None
     public_key: str
     last_error: str | None = None
     last_success_at: datetime | None = None
@@ -77,6 +78,9 @@ class WebsiteIntegrationCreate(BaseModel):
     website_root_dir: str = Field("/", max_length=255)
     widget_target_path: str = Field("app/layout.tsx", max_length=255)
     github_token: str | None = Field(None, max_length=500)
+    # Set when connected through the GitHub App; then no token is needed. Validated to belong to
+    # the caller's organization by the endpoint.
+    github_installation_id: int | None = None
 
     _check_target = field_validator("widget_target_path")(_reject_unsafe_target)
     _check_skill = field_validator("framework_skill_id")(_reject_unknown_framework_skill)

@@ -23,6 +23,7 @@ import {
   WebsiteIntegrationConfig,
   WebsiteAnalysis,
 } from '@/lib/api/integration';
+import { githubApi } from '@/lib/api/github';
 import { knowledgeApi } from '@/lib/api/knowledge';
 import { assistantApi, AssistantConfig } from '@/lib/api/assistant';
 
@@ -64,6 +65,15 @@ vi.mock('@/lib/api/assistant', () => ({
     updateAssistant: vi.fn(),
     resetAssistant: vi.fn(),
     getAssistantPreview: vi.fn(),
+  },
+}));
+
+// Mock githubApi
+vi.mock('@/lib/api/github', () => ({
+  githubApi: {
+    installUrl: vi.fn(),
+    installations: vi.fn(),
+    repositories: vi.fn(),
   },
 }));
 
@@ -217,6 +227,18 @@ describe('Fussion Project Studio — Guided Sequential UX & Website Stage', () =
     });
     vi.mocked(websiteIntegrationApi.delete).mockImplementation(async () => {
       currentWebsiteConfig = null;
+    });
+
+    // GitHub App: no installation by default, so the "Connect GitHub" button shows.
+    vi.mocked(githubApi.installations).mockResolvedValue([]);
+    vi.mocked(githubApi.repositories).mockResolvedValue({
+      total_count: 0,
+      repositories: [],
+      page: 1,
+      per_page: 30,
+    });
+    vi.mocked(githubApi.installUrl).mockResolvedValue({
+      url: 'https://github.com/apps/fussion-test/installations/new?state=abc',
     });
   });
 
@@ -425,7 +447,32 @@ describe('Fussion Project Studio — Guided Sequential UX & Website Stage', () =
     expect(screen.getByTestId('website-stage-view')).toBeDefined();
   });
 
-  it('connects Website via form, updates lifecycle status, and unlocks Knowledge stage', async () => {
+  it('connects Website through the GitHub App picker and unlocks the Knowledge stage', async () => {
+    vi.mocked(githubApi.installations).mockResolvedValue([
+      {
+        id: 'inst-1',
+        installation_id: 555,
+        account_login: 'acme-corp',
+        account_type: 'Organization',
+        repository_selection: 'selected',
+      },
+    ]);
+    vi.mocked(githubApi.repositories).mockResolvedValue({
+      total_count: 1,
+      repositories: [
+        {
+          full_name: 'acme-corp/storefront-web',
+          name: 'storefront-web',
+          owner: 'acme-corp',
+          private: false,
+          default_branch: 'main',
+          installation_id: 555,
+        },
+      ],
+      page: 1,
+      per_page: 30,
+    });
+
     render(
       <ThemeProvider>
         <AuthProvider>
@@ -445,21 +492,16 @@ describe('Fussion Project Studio — Guided Sequential UX & Website Stage', () =
     // Navigate to Website stage
     fireEvent.click(screen.getByTestId('nav-website'));
     expect(screen.getByTestId('website-stage-view')).toBeDefined();
-
-    // Verify Not Connected state renders connection form
     await waitFor(() => {
       expect(screen.getByTestId('website-connection-form')).toBeDefined();
     });
 
-    // Fill form using sample demo button
-    fireEvent.click(screen.getByTestId('fill-demo-preset'));
-    expect((screen.getByTestId('repo-owner-input') as HTMLInputElement).value).toBe('acme-corp');
-    expect((screen.getByTestId('repo-name-input') as HTMLInputElement).value).toBe('storefront-web');
+    // The installation's repositories are shown as cards; the user selects one.
+    await waitFor(() => {
+      expect(screen.getByTestId('repo-card-acme-corp/storefront-web')).toBeDefined();
+    });
+    fireEvent.click(screen.getByTestId('select-repo-acme-corp/storefront-web'));
 
-    // Submit connection via form submit
-    fireEvent.submit(screen.getByTestId('website-connection-form'));
-
-    // Verify API called
     await waitFor(() => {
       expect(websiteIntegrationApi.create).toHaveBeenCalledWith(
         'org-123',
@@ -468,21 +510,21 @@ describe('Fussion Project Studio — Guided Sequential UX & Website Stage', () =
           repository_owner: 'acme-corp',
           repository_name: 'storefront-web',
           default_branch: 'main',
+          github_installation_id: 555,
         })
       );
     });
 
-    // Verify Connected state panel is now rendered
     await waitFor(() => {
       expect(screen.getByTestId('website-connected-panel')).toBeDefined();
-      expect(screen.getByTestId('connected-repo-name').textContent).toBe('acme-corp/storefront-web');
+      expect(screen.getByTestId('connected-repo-name').textContent).toBe(
+        'acme-corp/storefront-web'
+      );
       expect(screen.getByTestId('advance-to-knowledge')).toBeDefined();
     });
 
     // Advance to Knowledge
     fireEvent.click(screen.getByTestId('advance-to-knowledge'));
-
-    // Because Website is completed, Knowledge is now actionable and shows stage view, NOT dependency blocker!
     expect(screen.getByTestId('stage-view-knowledge')).toBeDefined();
     expect(screen.queryByTestId('stage-dependency-view')).toBeNull();
 
@@ -497,6 +539,34 @@ describe('Fussion Project Studio — Guided Sequential UX & Website Stage', () =
     await waitFor(() => {
       expect(websiteIntegrationApi.delete).toHaveBeenCalledWith('org-123', 'proj-1');
       expect(screen.getByTestId('website-connection-form')).toBeDefined();
+    });
+  });
+
+  it('shows a Connect GitHub button when the organization has no installation', async () => {
+    render(
+      <ThemeProvider>
+        <AuthProvider>
+          <ProjectProvider
+            initialProjects={[mockProject1]}
+            initialCurrentProject={mockProject1}
+            initialOrg={mockOrg}
+          >
+            <AppShell>
+              <StudioPage />
+            </AppShell>
+          </ProjectProvider>
+        </AuthProvider>
+      </ThemeProvider>
+    );
+
+    fireEvent.click(screen.getByTestId('nav-website'));
+    await waitFor(() => {
+      expect(screen.getByTestId('connect-github-button')).toBeDefined();
+    });
+
+    fireEvent.click(screen.getByTestId('connect-github-button'));
+    await waitFor(() => {
+      expect(githubApi.installUrl).toHaveBeenCalledWith('org-123');
     });
   });
 
@@ -565,6 +635,30 @@ describe('Fussion Project Studio — Guided Sequential UX & Website Stage', () =
     vi.mocked(websiteIntegrationApi.create).mockRejectedValueOnce(
       new Error('GitHub repository not found or insufficient permissions.')
     );
+    vi.mocked(githubApi.installations).mockResolvedValue([
+      {
+        id: 'inst-1',
+        installation_id: 555,
+        account_login: 'acme-corp',
+        account_type: 'Organization',
+        repository_selection: 'selected',
+      },
+    ]);
+    vi.mocked(githubApi.repositories).mockResolvedValue({
+      total_count: 1,
+      repositories: [
+        {
+          full_name: 'acme-corp/invalid-repo',
+          name: 'invalid-repo',
+          owner: 'acme-corp',
+          private: false,
+          default_branch: 'main',
+          installation_id: 555,
+        },
+      ],
+      page: 1,
+      per_page: 30,
+    });
 
     render(
       <ThemeProvider>
@@ -588,10 +682,10 @@ describe('Fussion Project Studio — Guided Sequential UX & Website Stage', () =
       expect(screen.getByTestId('website-connection-form')).toBeDefined();
     });
 
-    // Fill form and submit
-    fireEvent.change(screen.getByTestId('repo-owner-input'), { target: { value: 'invalid-owner' } });
-    fireEvent.change(screen.getByTestId('repo-name-input'), { target: { value: 'invalid-repo' } });
-    fireEvent.submit(screen.getByTestId('website-connection-form'));
+    await waitFor(() => {
+      expect(screen.getByTestId('repo-card-acme-corp/invalid-repo')).toBeDefined();
+    });
+    fireEvent.click(screen.getByTestId('select-repo-acme-corp/invalid-repo'));
 
     // Verify error banner is shown
     await waitFor(() => {
@@ -689,8 +783,7 @@ describe('Fussion Project Studio — Guided Sequential UX & Website Stage', () =
       expect(screen.getByTestId('website-connection-form')).toBeDefined();
     });
 
-    expect(screen.getByTestId('repo-owner-input')).toBeDefined();
-    expect(screen.getByTestId('repo-name-input')).toBeDefined();
+    expect(screen.getByTestId('connect-github-button')).toBeDefined();
   });
 
   it('renders StageDependencyView when Knowledge stage is selected before Website is connected', async () => {

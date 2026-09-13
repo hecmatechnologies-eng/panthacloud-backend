@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON, UUID
@@ -114,6 +114,12 @@ class WebsiteIntegration(BaseModel):
     )
     encrypted_secrets: Mapped[str | None] = mapped_column(
         Text,
+        nullable=True,
+    )
+    # Set when the integration was connected through the GitHub App (step E2). The credential is
+    # never stored: an installation token is minted on demand from this id.
+    github_installation_id: Mapped[int | None] = mapped_column(
+        BigInteger,
         nullable=True,
     )
     last_error: Mapped[str | None] = mapped_column(

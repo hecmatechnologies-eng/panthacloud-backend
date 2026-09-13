@@ -214,24 +214,31 @@ def _installation_headers(token: str) -> dict[str, str]:
 async def _request(
     method: str, url: str, *, headers: dict[str, str], params: dict[str, str] | None = None
 ) -> httpx.Response:
-    async with httpx.AsyncClient(transport=_transport) as client:
-        return await client.request(method, url, headers=headers, params=params, timeout=15.0)
+    try:
+        async with httpx.AsyncClient(transport=_transport) as client:
+            return await client.request(method, url, headers=headers, params=params, timeout=15.0)
+    except httpx.HTTPError as exc:
+        # A transport failure is a GitHub failure, not an unexpected one: callers map it to a 502.
+        raise GitHubAppError("Could not reach GitHub.", 502) from exc
 
 
 async def exchange_oauth_code(code: str) -> str:
     """Exchange a user-authorization code for a user-to-server token."""
     _require_configured()
-    async with httpx.AsyncClient(transport=_transport) as client:
-        resp = await client.post(
-            GITHUB_OAUTH_TOKEN_URL,
-            headers={"Accept": "application/json"},
-            data={
-                "client_id": settings.GITHUB_APP_CLIENT_ID,
-                "client_secret": settings.GITHUB_APP_CLIENT_SECRET,
-                "code": code,
-            },
-            timeout=15.0,
-        )
+    try:
+        async with httpx.AsyncClient(transport=_transport) as client:
+            resp = await client.post(
+                GITHUB_OAUTH_TOKEN_URL,
+                headers={"Accept": "application/json"},
+                data={
+                    "client_id": settings.GITHUB_APP_CLIENT_ID,
+                    "client_secret": settings.GITHUB_APP_CLIENT_SECRET,
+                    "code": code,
+                },
+                timeout=15.0,
+            )
+    except httpx.HTTPError as exc:
+        raise GitHubAppError("Could not reach GitHub.", 502) from exc
     if resp.status_code != 200:
         raise GitHubAppError("GitHub rejected the authorization code.", 400)
     token = resp.json().get("access_token")

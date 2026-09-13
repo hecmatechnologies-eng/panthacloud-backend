@@ -7,6 +7,7 @@ import {
   WebsiteIntegrationCreateInput,
   WebsiteAnalysis,
 } from '@/lib/api/integration';
+import { githubApi, GitHubInstallationRead, GitHubRepositoryRead } from '@/lib/api/github';
 
 export interface UseWebsiteStageProps {
   orgId?: string;
@@ -26,6 +27,10 @@ export function useWebsiteStage({
   const [isDisconnecting, setIsDisconnecting] = useState<boolean>(false);
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [isSelecting, setIsSelecting] = useState<boolean>(false);
+  const [installations, setInstallations] = useState<GitHubInstallationRead[]>([]);
+  const [repositories, setRepositories] = useState<GitHubRepositoryRead[]>([]);
+  const [isLoadingRepositories, setIsLoadingRepositories] = useState<boolean>(false);
+  const [isConnectingGitHub, setIsConnectingGitHub] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
   const onStatusChangeRef = useRef(onStatusChange);
@@ -41,6 +46,30 @@ export function useWebsiteStage({
     }
   }, []);
 
+  const loadGitHub = useCallback(async () => {
+    if (!orgId) return;
+    try {
+      const installs = await githubApi.installations(orgId);
+      setInstallations(installs);
+      if (installs.length > 0) {
+        setIsLoadingRepositories(true);
+        try {
+          const list = await githubApi.repositories(orgId, undefined, 1, 100);
+          setRepositories(list.repositories);
+        } catch {
+          setRepositories([]);
+        } finally {
+          setIsLoadingRepositories(false);
+        }
+      } else {
+        setRepositories([]);
+      }
+    } catch {
+      setInstallations([]);
+      setRepositories([]);
+    }
+  }, [orgId]);
+
   const loadConfig = useCallback(async () => {
     if (!orgId || !projectId) {
       setIsLoading(false);
@@ -49,6 +78,7 @@ export function useWebsiteStage({
 
     setIsLoading(true);
     setError(null);
+    void loadGitHub();
 
     try {
       const data = await websiteIntegrationApi.get(orgId, projectId);
@@ -69,7 +99,7 @@ export function useWebsiteStage({
     } finally {
       setIsLoading(false);
     }
-  }, [orgId, projectId, notifyStatus]);
+  }, [orgId, projectId, notifyStatus, loadGitHub]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -81,6 +111,7 @@ export function useWebsiteStage({
 
     setIsLoading(true);
     setError(null);
+    void loadGitHub();
 
     const load = async () => {
       try {
@@ -112,7 +143,7 @@ export function useWebsiteStage({
     return () => {
       isCancelled = true;
     };
-  }, [orgId, projectId, notifyStatus]);
+  }, [orgId, projectId, notifyStatus, loadGitHub]);
 
   const connect = useCallback(
     async (input: WebsiteIntegrationCreateInput): Promise<WebsiteIntegrationConfig> => {
@@ -184,6 +215,34 @@ export function useWebsiteStage({
     setError(null);
   }, []);
 
+  const startGitHubInstall = useCallback(async (): Promise<string> => {
+    if (!orgId) {
+      throw new Error('An active organization is required to connect GitHub.');
+    }
+    setIsConnectingGitHub(true);
+    setError(null);
+    try {
+      const { url } = await githubApi.installUrl(orgId);
+      return url;
+    } catch (err: any) {
+      setError(err?.message || 'Failed to start the GitHub connection.');
+      throw err;
+    } finally {
+      setIsConnectingGitHub(false);
+    }
+  }, [orgId]);
+
+  const connectRepository = useCallback(
+    async (repo: GitHubRepositoryRead): Promise<WebsiteIntegrationConfig> =>
+      connect({
+        repository_owner: repo.owner ?? repo.full_name.split('/')[0],
+        repository_name: repo.name,
+        default_branch: repo.default_branch,
+        github_installation_id: repo.installation_id,
+      }),
+    [connect]
+  );
+
   const selectTarget = useCallback(
     async (widgetTargetPath: string, frameworkSkillId: string | null): Promise<WebsiteIntegrationConfig> => {
       if (!orgId || !projectId) {
@@ -214,16 +273,22 @@ export function useWebsiteStage({
   return {
     config,
     analysis,
+    installations,
+    repositories,
     isLoading,
     isConnecting,
     isDisconnecting,
     isAnalyzing,
     isSelecting,
+    isLoadingRepositories,
+    isConnectingGitHub,
     error,
     connect,
     disconnect,
     analyze,
     selectTarget,
+    startGitHubInstall,
+    connectRepository,
     refresh: loadConfig,
     clearError,
   };

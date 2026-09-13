@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { useProject } from '../context';
 import { useWebsiteStage } from '../hooks/useWebsiteStage';
 import { Project } from '@/lib/api';
+import { GitHubRepositoryRead } from '@/lib/api/github';
 import {
   FolderGit2,
   GitBranch,
@@ -16,6 +17,7 @@ import {
   RefreshCw,
   Sparkles,
   ScanSearch,
+  Lock,
 } from 'lucide-react';
 
 export interface WebsiteStageViewProps {
@@ -42,16 +44,21 @@ export const WebsiteStageView: React.FC<WebsiteStageViewProps> = ({
   const {
     config,
     analysis,
+    installations,
+    repositories,
     isLoading,
     isConnecting,
     isDisconnecting,
     isAnalyzing,
     isSelecting,
+    isLoadingRepositories,
+    isConnectingGitHub,
     error,
-    connect,
     disconnect,
     analyze,
     selectTarget,
+    startGitHubInstall,
+    connectRepository,
     clearError,
   } = useWebsiteStage({
     orgId,
@@ -59,32 +66,20 @@ export const WebsiteStageView: React.FC<WebsiteStageViewProps> = ({
     onStatusChange: handleStatusChange,
   });
 
-  // Form local state
-  const [owner, setOwner] = useState('');
-  const [repo, setRepo] = useState('');
-  const [branch, setBranch] = useState('main');
-  const [token, setToken] = useState('');
+  const [repoQuery, setRepoQuery] = useState('');
 
-  const handleFillDemo = () => {
-    setOwner('acme-corp');
-    setRepo('storefront-web');
-    setBranch('main');
-    setToken('');
-    clearError();
+  const handleConnectGitHub = async () => {
+    try {
+      const url = await startGitHubInstall();
+      window.location.href = url;
+    } catch {
+      // Error handled by hook
+    }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!owner.trim() || !repo.trim()) return;
-
+  const handleSelectRepo = async (repo: GitHubRepositoryRead) => {
     try {
-      await connect({
-        repository_owner: owner.trim(),
-        repository_name: repo.trim(),
-        default_branch: branch.trim() || 'main',
-        website_root_dir: '/',
-        github_token: token.trim() || undefined,
-      });
+      await connectRepository(repo);
     } catch {
       // Error handled by hook
     }
@@ -108,6 +103,9 @@ export const WebsiteStageView: React.FC<WebsiteStageViewProps> = ({
 
   const isConnected = config?.status === 'CONNECTED';
   const topCandidate = analysis?.integration_candidates?.[0];
+  const filteredRepositories = repositories.filter((repo) =>
+    repo.full_name.toLowerCase().includes(repoQuery.trim().toLowerCase())
+  );
 
   return (
     <div
@@ -411,137 +409,113 @@ export const WebsiteStageView: React.FC<WebsiteStageViewProps> = ({
         </div>
       )}
 
-      {/* STATE A: Not Connected / Connection Form */}
+      {/* STATE A: Not Connected — GitHub App connection */}
       {!isLoading && !isConnected && (
-        <form
+        <div
           data-testid="website-connection-form"
-          onSubmit={handleSubmit}
           className="rounded-3xl bg-[var(--surface)] border border-[var(--border)] shadow-xs p-6 sm:p-8 space-y-6"
         >
-          {/* Form Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[var(--border)]/70 pb-4">
             <div className="flex items-center gap-2.5">
               <div className="w-9 h-9 rounded-xl bg-purple-50 text-purple-600 dark:bg-purple-950/60 dark:text-purple-300 border border-purple-200/60 dark:border-purple-900/40 flex items-center justify-center shrink-0">
                 <FolderGit2 className="w-4 h-4" />
               </div>
               <div>
-                <h3 className="text-sm font-bold text-[var(--text-primary)]">
-                  Connect GitHub Repository
-                </h3>
+                <h3 className="text-sm font-bold text-[var(--text-primary)]">Connect GitHub</h3>
                 <p className="text-xs text-[var(--text-muted)]">
-                  Specify your public or private website repository.
+                  {installations.length === 0
+                    ? 'Install the Fussion GitHub App and choose which repositories it may access.'
+                    : 'Select the repository Fussion should integrate.'}
                 </p>
               </div>
             </div>
-
-            <button
-              type="button"
-              data-testid="fill-demo-preset"
-              onClick={handleFillDemo}
-              className="px-3 py-1 rounded-full bg-[var(--surface-elevated)] hover:bg-[var(--surface)] border border-[var(--border)] text-[11px] font-mono text-[var(--color-purple)] hover:border-[var(--color-purple)]/40 transition-colors cursor-pointer self-start sm:self-center"
-            >
-              Fill Sample Demo
-            </button>
           </div>
 
-          {/* Form Inputs */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {/* Repository Owner */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-[var(--text-secondary)]">
-                GitHub Owner / Organization
-              </label>
-              <input
-                type="text"
-                required
-                data-testid="repo-owner-input"
-                value={owner}
-                onChange={(e) => setOwner(e.target.value)}
-                placeholder="e.g. acme-corp"
-                className="w-full bg-[var(--surface-elevated)] border border-[var(--border)] focus:border-[var(--color-purple)] rounded-xl px-3.5 py-2.5 text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none transition-colors font-mono"
-              />
-            </div>
-
-            {/* Repository Name */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-[var(--text-secondary)]">
-                Repository Name
-              </label>
-              <input
-                type="text"
-                required
-                data-testid="repo-name-input"
-                value={repo}
-                onChange={(e) => setRepo(e.target.value)}
-                placeholder="e.g. storefront-web"
-                className="w-full bg-[var(--surface-elevated)] border border-[var(--border)] focus:border-[var(--color-purple)] rounded-xl px-3.5 py-2.5 text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none transition-colors font-mono"
-              />
-            </div>
-
-            {/* Default Branch */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-[var(--text-secondary)]">
-                Default Branch
-              </label>
-              <input
-                type="text"
-                required
-                data-testid="repo-branch-input"
-                value={branch}
-                onChange={(e) => setBranch(e.target.value)}
-                placeholder="main"
-                className="w-full bg-[var(--surface-elevated)] border border-[var(--border)] focus:border-[var(--color-purple)] rounded-xl px-3.5 py-2.5 text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none transition-colors font-mono"
-              />
-            </div>
-
-            {/* GitHub Access Token */}
-            <div className="space-y-1.5 sm:col-span-2">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-semibold text-[var(--text-secondary)]">
-                  GitHub Personal Access Token (Optional for public repositories)
-                </label>
-                <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
-                  <ShieldCheck className="w-3 h-3" />
-                  <span>Encrypted via Vault</span>
-                </span>
-              </div>
-              <input
-                type="password"
-                data-testid="github-token-input"
-                value={token}
-                onChange={(e) => setToken(e.target.value)}
-                placeholder="ghp_****************************************"
-                className="w-full bg-[var(--surface-elevated)] border border-[var(--border)] focus:border-[var(--color-purple)] rounded-xl px-3.5 py-2.5 text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none transition-colors font-mono"
-              />
-              <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
-                The framework, app shell and integration point are detected from the repository by
-                the analyst. No framework selection or target path is required.
+          {installations.length === 0 ? (
+            <div className="space-y-4">
+              <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
+                Fussion never stores a password or a personal access token. The GitHub App grants
+                access to the repositories you choose, and Fussion mints a short-lived token only
+                when it needs one.
               </p>
-            </div>
-          </div>
-
-          {/* Submit Action */}
-          <div className="pt-3 border-t border-[var(--border)]/70 flex justify-end">
-            <button
-              type="submit"
-              data-testid="connect-website-submit"
-              disabled={isConnecting}
-              className="px-5 py-2.5 rounded-xl bg-[var(--color-purple)] hover:bg-[var(--color-purple)]/90 text-white font-medium text-xs shadow-xs transition-all cursor-pointer flex items-center gap-2 group disabled:opacity-50"
-            >
-              {isConnecting ? (
-                <>
+              <button
+                type="button"
+                data-testid="connect-github-button"
+                onClick={handleConnectGitHub}
+                disabled={isConnectingGitHub}
+                className="px-5 py-2.5 rounded-xl bg-[var(--color-purple)] hover:bg-[var(--color-purple)]/90 text-white font-medium text-xs shadow-xs transition-all cursor-pointer flex items-center gap-2 group disabled:opacity-50"
+              >
+                {isConnectingGitHub ? (
                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  <span>Connecting repository...</span>
-                </>
+                ) : (
+                  <FolderGit2 className="w-3.5 h-3.5" />
+                )}
+                <span>{isConnectingGitHub ? 'Opening GitHub…' : 'Connect GitHub'}</span>
+                <ArrowRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" />
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <input
+                type="text"
+                data-testid="repo-search"
+                value={repoQuery}
+                onChange={(e) => setRepoQuery(e.target.value)}
+                placeholder="Search repositories…"
+                className="w-full bg-[var(--surface-elevated)] border border-[var(--border)] focus:border-[var(--color-purple)] rounded-xl px-3.5 py-2.5 text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none transition-colors font-mono"
+              />
+
+              {isLoadingRepositories ? (
+                <div
+                  data-testid="repositories-loading"
+                  className="p-6 rounded-2xl bg-[var(--surface-elevated)] border border-[var(--border)]/80 flex items-center justify-center gap-2 text-xs text-[var(--text-muted)] font-mono"
+                >
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>Loading repositories…</span>
+                </div>
+              ) : filteredRepositories.length === 0 ? (
+                <p
+                  data-testid="repositories-empty"
+                  className="text-xs text-[var(--text-muted)] text-center py-6"
+                >
+                  No repositories match.
+                </p>
               ) : (
-                <>
-                  <span>Connect Website</span>
-                  <ArrowRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" />
-                </>
+                <ul className="space-y-2">
+                  {filteredRepositories.map((repo) => (
+                    <li
+                      key={repo.full_name}
+                      data-testid={`repo-card-${repo.full_name}`}
+                      className="flex items-center justify-between gap-3 p-3.5 rounded-2xl bg-[var(--surface-elevated)] border border-[var(--border)]/80"
+                    >
+                      <div className="min-w-0 space-y-0.5">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-semibold font-mono text-[var(--text-primary)] truncate">
+                            {repo.full_name}
+                          </span>
+                          {repo.private && <Lock className="w-3 h-3 text-[var(--text-muted)]" />}
+                        </div>
+                        <div className="flex items-center gap-1.5 text-[10px] font-mono text-[var(--text-muted)]">
+                          <GitBranch className="w-3 h-3" />
+                          <span>{repo.default_branch}</span>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        data-testid={`select-repo-${repo.full_name}`}
+                        onClick={() => handleSelectRepo(repo)}
+                        disabled={isConnecting}
+                        className="px-3 py-1.5 rounded-xl bg-[var(--color-purple)] hover:bg-[var(--color-purple)]/90 text-white text-[11px] font-medium transition-all cursor-pointer disabled:opacity-50 shrink-0"
+                      >
+                        {isConnecting ? 'Connecting…' : 'Select'}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
               )}
-            </button>
-          </div>
-        </form>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

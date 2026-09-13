@@ -33,6 +33,7 @@ export interface WebsiteIntegrationConfig {
   widget_target_path: string;
   status: WebsiteIntegrationStatus;
   has_credentials: boolean;
+  github_installation_id?: number | null;
   last_error?: string | null;
   last_success_at?: string | null;
   created_at: string;
@@ -47,6 +48,7 @@ export interface WebsiteIntegrationCreateInput {
   website_root_dir?: string;
   widget_target_path?: string;
   github_token?: string;
+  github_installation_id?: number;
 }
 
 export interface WebsiteIntegrationUpdateInput {

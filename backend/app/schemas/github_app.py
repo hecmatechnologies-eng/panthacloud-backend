@@ -25,6 +25,8 @@ class GitHubRepositoryRead(BaseModel):
     owner: str | None = None
     private: bool
     default_branch: str
+    # The installation that grants access; the picker links the integration to it.
+    installation_id: int
 
 
 class GitHubRepositoryList(BaseModel):

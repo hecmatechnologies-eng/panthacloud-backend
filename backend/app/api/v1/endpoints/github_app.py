@@ -312,7 +312,10 @@ async def github_repositories(
             )
             total += int(result["total_count"])
             repositories.extend(
-                GitHubRepositoryRead.model_validate(repo) for repo in result["repositories"]
+                GitHubRepositoryRead.model_validate(
+                    {**repo, "installation_id": installation.installation_id}
+                )
+                for repo in result["repositories"]
             )
     except GitHubAppNotConfiguredError as exc:
         raise HTTPException(

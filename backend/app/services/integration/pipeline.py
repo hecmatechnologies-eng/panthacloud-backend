@@ -7,7 +7,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.protected_paths import protected_reason
-from app.core.secrets import SecretStoreError, secret_store
 from app.models.assistant import Assistant
 from app.models.audit_event import AuditEvent
 from app.models.knowledge import KnowledgeBase
@@ -21,6 +20,7 @@ from app.models.website_integration import (
 from app.services.analysis.queries import get_latest_analysis
 from app.services.integration.artifacts import WidgetInjectionError, generate_artifacts
 from app.services.integration.changeset import build_change_set
+from app.services.integration.credentials import GitHubCredentialError, resolve_github_token
 from app.services.integration.github import get_git_provider
 from app.services.integration.planner import IntegrationPlanner
 from app.services.integration.sandbox import LocalWorkspaceProvider
@@ -72,14 +72,12 @@ class IntegrationPipeline:
         integration: WebsiteIntegration,
         user_id: uuid.UUID | None = None,
     ) -> IntegrationRun:
-        # Decrypt credentials if present
-        raw_token: str | None = None
-        if integration.encrypted_secrets:
-            try:
-                decrypted = secret_store.decrypt(integration.encrypted_secrets)
-                raw_token = decrypted.get("github_token")
-            except SecretStoreError as exc:
-                logger.warning(f"Failed to decrypt stored credentials for integration {integration.id}: {exc}")
+        # Resolve the credential: an installation token for an App-linked integration, else the
+        # decrypted PAT. A failure here is a configuration problem, refused before any work.
+        try:
+            raw_token = await resolve_github_token(integration)
+        except GitHubCredentialError as exc:
+            raise IntegrationRefusedError(str(exc)) from exc
 
         # Fetch assistant configuration
         stmt_asst = select(Assistant).where(Assistant.project_id == project.id)

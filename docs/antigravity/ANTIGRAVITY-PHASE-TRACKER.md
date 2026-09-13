@@ -19,7 +19,7 @@ third, different numbering and is archived under `docs/archive/`.
 | **B. Runtime plane** | `STEP-B-SLICES.md` B1–B8 | **IN PROGRESS** — B1 (`95b63eb`) through B6 done; **B7 (SSE) and B8 (real widget + customer-origin CORS) remain**. The owner's B7 deferral is re-scoped as an MVP gap in `GAP-CLOSURE-PLAN.md` (acceptance #8 names a *streamed* answer); B7 precedes B8 |
 | **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **COMPLETE** — C1–C15 done. The remaining MVP gaps are step B (B7 SSE, B8 widget) per `GAP-CLOSURE-PLAN.md`; step D stays post-MVP |
 | **D. Coding agent** | write capability, generated-code scan, ChangeSet → PR, bounded repair | NOT STARTED — no slice breakdown yet; post-MVP per `FEASIBILITY.md` §4 (the deterministic PR path already covers acceptance #6) |
-| **E. GitHub App connection** | `STEP-E-SLICES.md` E1–E2 (planned) | **IN PROGRESS** — E1 done (install + callback + OAuth access check + token minting + repository listing). **E2** remains: the Studio repository picker replacing the PAT form. Post-MVP per `MVP-REQUIREMENTS-V2.md` scope item #3 |
+| **E. GitHub App connection** | `STEP-E-SLICES.md` E1–E2 (planned) | **COMPLETE** — E1 (install + callback + OAuth access check + token minting + repository listing) and E2 (Studio repository picker, no PAT). The Railway-style connect flow is usable end to end |
 
 The gap between the code and the Part C acceptance criteria, and the ordered path to close it, is
 `docs/implementation/GAP-CLOSURE-PLAN.md`. Slice definitions live in the `STEP-*-SLICES.md` files;
@@ -2962,3 +2962,64 @@ broader than per-repository permission — inherent to GitHub.
   database**. No seed (new table).
 - Backend suite, from the repository root: **578 passed, 2 skipped**. (The suite now runs in ~3 min
   after the harness change; it was ~15 min.)
+
+## Step E (GAP-CLOSURE Phase 6) · Slice E2 — the Studio repository picker
+
+**Rigour tier: 1 — Maximum** (CLAUDE.md §9.0), declared in `STEP-E-SLICES.md`. It creates an
+integration from a selected repository and resolves the credential.
+
+**Status: COMPLETED** — the reviewer returned **PASS WITH FINDINGS**, no BLOCKING; both SHOULD FIX
+items were reachable and are fixed. Committed with this entry.
+
+### Objective
+Replace the PAT form with the Railway experience: Connect GitHub → install → a searchable repository
+card list → select → the integration is created with the repository's default branch. No PAT is
+entered.
+
+### Completed Work
+- **`WebsiteIntegration.github_installation_id`** + migration `0022` — nullable; an App-linked
+  integration records the installation instead of a token.
+- **`app/services/integration/credentials.py`** — `resolve_github_token`: an installation token for
+  an App-linked integration, else the decrypted PAT. Used by the analyze service, the plan endpoint
+  and the pipeline; the old PAT-only helpers are gone.
+- **Create endpoint** — accepts `github_installation_id`, validated to belong to the caller's
+  organization; `has_credentials` is true when either a PAT or an installation is present.
+- **Studio** — the Website stage now shows **Connect GitHub** (no installation) or a searchable
+  repository card list (installation present). Selecting a card creates the integration.
+- **Tests** — the App-linked create, the cross-tenant rejection, the unconfigured-app refusal, the
+  credential resolver, and the picker flow in the frontend.
+
+### Architectural & Technology Decisions
+1. **One credential resolver, two sources.** App-linked integrations mint; PAT integrations decrypt.
+   Callers no longer know which, and the token still never reaches the model (`CLAUDE.md` §4.2).
+2. **The backend re-validates the installation.** The client sends an installation id, but the
+   create endpoint requires it to belong to the caller's organization, so tampering cannot attach a
+   foreign installation.
+3. **The repository list carries its installation id**, so the picker links the integration to the
+   installation that actually grants access.
+
+### Review history
+One round (Tier 1), fresh reviewer — **PASS WITH FINDINGS**, no BLOCKING. SHOULD FIX, both fixed:
+1. A transport failure (DNS/timeout) escaped the resolver as an unhandled 500/400 — `_request` and
+   the OAuth exchange now wrap `httpx.HTTPError` as `GitHubAppError`, so callers map it to 502.
+2. The tenant-scoping test did not actually test cross-tenant rejection — it now records the
+   installation for another organization and asserts a 400.
+CONSIDER logged: a foreign installation returns 400 rather than 404 (same for both cases, so not an
+enumeration oracle); the picker fetches one page of up to 100 repositories; the dead PAT form still
+exists in the unrouted `integrations` feature.
+
+### Deviations
+- **The older `integrations` feature keeps a PAT form** (`RepositoryConnectionForm`), reachable only
+  from an unrouted view. The Studio Website stage no longer offers a PAT; removing the dead feature
+  is a cleanup, not part of E2.
+
+### Blockers / Deferred
+- **Webhook-driven repository sync** — still not built; the list is fetched live.
+- **Repository pagination in the picker** — one page of up to 100; a large installation may truncate.
+
+### Verification (2026-09-13)
+- Ruff, from `backend/`: `All checks passed!`
+- Migration 0022: `upgrade → downgrade → upgrade` verified on **both SQLite and a scratch Postgres
+  database**. No seed (nullable column, no backfill).
+- Backend suite, from the repository root: **582 passed, 2 skipped**.
+- Frontend, from `frontend/`: `pnpm build` clean; `pnpm test` — **110 passed** (9 files).
