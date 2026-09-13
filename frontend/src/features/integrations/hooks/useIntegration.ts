@@ -4,7 +4,6 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   websiteIntegrationApi,
   WebsiteIntegrationConfig,
-  WebsiteAnalysis,
   IntegrationRun,
   IntegrationPlanPayload,
   ValidationResultPayload,
@@ -24,7 +23,6 @@ const DEFAULT_FORM: IntegrationFormState = {
 export function useIntegration(orgId?: string, projectId?: string) {
   const [config, setConfig] = useState<WebsiteIntegrationConfig | null>(null);
   const [form, setForm] = useState<IntegrationFormState>(DEFAULT_FORM);
-  const [analysis, setAnalysis] = useState<WebsiteAnalysis | null>(null);
   const [plan, setPlan] = useState<IntegrationPlanPayload | null>(null);
   const [validation, setValidation] = useState<ValidationResultPayload | null>(null);
   const [runs, setRuns] = useState<IntegrationRun[]>([]);
@@ -33,7 +31,6 @@ export function useIntegration(orgId?: string, projectId?: string) {
 
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isSaving, setIsSaving] = useState<boolean>(false);
-  const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [isValidating, setIsValidating] = useState<boolean>(false);
   const [isPlanning, setIsPlanning] = useState<boolean>(false);
   const [isExecuting, setIsExecuting] = useState<boolean>(false);
@@ -61,14 +58,6 @@ export function useIntegration(orgId?: string, projectId?: string) {
         github_token: '',
       });
 
-      // Load the persisted analysis, if the analyst has run for this integration.
-      try {
-        const latestAnalysis = await websiteIntegrationApi.getLatestAnalysis(orgId, projectId);
-        setAnalysis(latestAnalysis);
-      } catch {
-        // Analysis optional
-      }
-
       // Load runs
       try {
         const runList = await websiteIntegrationApi.listRuns(orgId, projectId);
@@ -80,7 +69,6 @@ export function useIntegration(orgId?: string, projectId?: string) {
       // 404 indicates not yet configured
       setConfig(null);
       setForm(DEFAULT_FORM);
-      setAnalysis(null);
       setRuns([]);
     } finally {
       setIsLoading(false);
@@ -156,34 +144,6 @@ export function useIntegration(orgId?: string, projectId?: string) {
       setError(err instanceof Error ? err.message : 'Repository validation check failed.');
     } finally {
       setIsValidating(false);
-    }
-  }, [orgId, projectId]);
-
-  const analyzeWebsite = useCallback(async () => {
-    if (!orgId || !projectId) return;
-    setIsAnalyzing(true);
-    setError(null);
-    setSuccessMessage(null);
-
-    try {
-      const res = await websiteIntegrationApi.analyze(orgId, projectId);
-      setAnalysis(res);
-      if (res.unsupported_reason) {
-        setError(res.unsupported_reason);
-      } else {
-        setSuccessMessage('Repository analysed: framework, shell and integration point detected.');
-      }
-      // The plan depends on the detected profile, so refresh it.
-      try {
-        const newPlan = await websiteIntegrationApi.getPlan(orgId, projectId);
-        setPlan(newPlan);
-      } catch {
-        // Plan will be generated on demand
-      }
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to analyse the repository.');
-    } finally {
-      setIsAnalyzing(false);
     }
   }, [orgId, projectId]);
 
@@ -263,7 +223,6 @@ export function useIntegration(orgId?: string, projectId?: string) {
       await websiteIntegrationApi.delete(orgId, projectId);
       setConfig(null);
       setForm(DEFAULT_FORM);
-      setAnalysis(null);
       setPlan(null);
       setValidation(null);
       setRuns([]);
@@ -280,7 +239,6 @@ export function useIntegration(orgId?: string, projectId?: string) {
   return {
     config,
     form,
-    analysis,
     plan,
     validation,
     runs,
@@ -289,7 +247,6 @@ export function useIntegration(orgId?: string, projectId?: string) {
     selectedPR,
     isLoading,
     isSaving,
-    isAnalyzing,
     isValidating,
     isPlanning,
     isExecuting,
@@ -297,7 +254,6 @@ export function useIntegration(orgId?: string, projectId?: string) {
     successMessage,
     updateFormField,
     saveConfiguration,
-    analyzeWebsite,
     validateConnection,
     generatePlan,
     executePipelineRun,

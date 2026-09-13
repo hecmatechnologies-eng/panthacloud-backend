@@ -8,9 +8,15 @@ from app.core.origins import MAX_ORIGIN_LENGTH, normalize_origin
 from app.core.protected_paths import protected_reason
 from app.models.website_integration import (
     DEFAULT_FRAMEWORK_SKILL_ID,
+    GENERIC_HTML_SKILL_ID,
     IntegrationRunStatus,
     WebsiteIntegrationStatus,
 )
+
+# The skill ids the generator can actually build. An unknown id would otherwise reach the planner
+# and produce an empty plan — a run that changes nothing rather than a refusal. This is the earliest
+# gate, exactly as `_reject_protected_target` is for a protected path.
+KNOWN_FRAMEWORK_SKILL_IDS = frozenset({DEFAULT_FRAMEWORK_SKILL_ID, GENERIC_HTML_SKILL_ID})
 
 
 class WebsiteIntegrationRead(BaseModel):
@@ -53,28 +59,44 @@ def _reject_protected_target(path: str | None) -> str | None:
     return path
 
 
+def _reject_unknown_framework_skill(skill_id: str | None) -> str | None:
+    """Refuse an unknown skill id at configuration time (FR-082).
+
+    The stored value is a free string, but only ids the generator can build are meaningful: an
+    unknown one would reach the planner and yield a plan with no files instead of an error.
+    """
+    if skill_id is not None and skill_id not in KNOWN_FRAMEWORK_SKILL_IDS:
+        raise ValueError(
+            f"Unknown framework skill id '{skill_id}'. Known ids: "
+            f"{', '.join(sorted(KNOWN_FRAMEWORK_SKILL_IDS))}."
+        )
+    return skill_id
+
+
 class WebsiteIntegrationCreate(BaseModel):
     repository_owner: str = Field(..., min_length=1, max_length=255)
     repository_name: str = Field(..., min_length=1, max_length=255)
     default_branch: str = Field("main", min_length=1, max_length=100)
-    framework_skill_id: str = DEFAULT_FRAMEWORK_SKILL_ID
+    framework_skill_id: str = Field(DEFAULT_FRAMEWORK_SKILL_ID, max_length=100)
     website_root_dir: str = Field("/", max_length=255)
     widget_target_path: str = Field("app/layout.tsx", max_length=255)
     github_token: str | None = Field(None, max_length=500)
 
     _check_target = field_validator("widget_target_path")(_reject_protected_target)
+    _check_skill = field_validator("framework_skill_id")(_reject_unknown_framework_skill)
 
 
 class WebsiteIntegrationUpdate(BaseModel):
     repository_owner: str | None = Field(None, min_length=1, max_length=255)
     repository_name: str | None = Field(None, min_length=1, max_length=255)
     default_branch: str | None = Field(None, min_length=1, max_length=100)
-    framework_skill_id: str | None = None
+    framework_skill_id: str | None = Field(None, max_length=100)
     website_root_dir: str | None = Field(None, max_length=255)
     widget_target_path: str | None = Field(None, max_length=255)
     github_token: str | None = Field(None, max_length=500)
 
     _check_target = field_validator("widget_target_path")(_reject_protected_target)
+    _check_skill = field_validator("framework_skill_id")(_reject_unknown_framework_skill)
 
 
 class AllowedOriginCreate(BaseModel):

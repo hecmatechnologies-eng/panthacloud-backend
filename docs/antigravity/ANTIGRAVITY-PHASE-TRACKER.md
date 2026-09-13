@@ -2584,12 +2584,32 @@ typed path.
   panel renders the detected framework and integration point after the action runs.
 
 ### Architectural & Technology Decisions
-1. **The stored identifier is a skill id string, not a database enum.** Adding a framework is now a
-   skill package plus a folder, satisfying the OCP failure named in CLAUDE.md §6.
+1. **The stored identifier is a skill id string, not a database enum.** Adding a framework no longer
+   means an enum value and a migration. Full skill-registry dispatch is not yet in place — the
+   generator still branches on the id in `planner.py`, `artifacts.py` and `validation.py`, so adding
+   a framework still edits those three. That is a gate on step D, not a claim this slice satisfies
+   the OCP failure in CLAUDE.md §6.
 2. **The Studio shows a ranked list, not a single guess.** The panel renders the analyst's ranked
    `integration_candidates`; the top candidate is displayed, the rest remain visible.
-3. **The analysis panel is the only place a framework is shown.** `config.framework_skill_id` is the
-   persisted default until the analyst runs; the panel is the source of truth once it has.
+3. **The analysis drives the displayed framework and integration point.** The connected panel shows
+   `analysis.framework_skill_id` and the top candidate, falling back to the persisted
+   `config.framework_skill_id` / `widget_target_path` only before the analyst has run.
+4. **An unknown skill id is refused at configuration time** (FR-082). The stored value is a free
+   string, so the create/update schema rejects an id the generator cannot build and bounds its
+   length, rather than letting it reach the planner and produce a plan with no files.
+
+### Review history
+One round (Tier 1), fresh reviewer — **PASS WITH FINDINGS**, no BLOCKING. SHOULD FIX, all fixed:
+1. The connected panel showed `config.framework_skill_id`, never the analysis, so a `generic-html`
+   repo still displayed `nextjs-app-router` — the panel now prefers `analysis.framework_skill_id`.
+2. `framework_skill_id` was an unbounded string against a `String(100)` column, and an unknown id
+   produced an empty plan — the schema now bounds the length and rejects unknown ids.
+3. Framework knowledge is still `if framework_skill_id ==` branches in three core modules — recorded
+   above as a step-D gate, not a defect this slice can close.
+4. The frontend test was vacuous (config and analysis shared the same value) — the fixture now makes
+   the analyst disagree with the config, so the assertion proves the analysis drives the display.
+CONSIDER logged: the migration verifier checks schema/counts but not the backfill mapping; the
+analysis is served but not yet fed into planning (step D).
 
 ### Deviations
 - **The plan/generation path still reads `integration.framework_skill_id`.** Feeding the analysis
@@ -2599,10 +2619,12 @@ typed path.
 
 ### Blockers / Deferred
 - **Feeding the analysis into the plan/generation path** — step D, as recorded in part 1.
+- **Skill-registry dispatch instead of `if framework_skill_id ==`** — step D, so adding a framework
+  is genuinely a new folder rather than edits to planner/artifacts/validation.
 
 ### Verification (2026-09-13)
 - Ruff, from `backend/`: `All checks passed!`
 - Migration 0019 with its seed: `upgrade → downgrade → upgrade` verified on **both SQLite and a
   scratch Postgres database**.
-- Backend suite, from the repository root: **525 passed, 2 skipped**.
+- Backend suite, from the repository root: **526 passed, 2 skipped**.
 - Frontend, from `frontend/`: `pnpm build` clean; `pnpm test` — **109 passed** (9 files).

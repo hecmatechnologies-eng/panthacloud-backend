@@ -116,13 +116,13 @@ const mockAnalysis: WebsiteAnalysis = {
   id: 'analysis-1',
   integration_id: 'integ-1',
   commit_sha: 'abc123',
-  framework_skill_id: 'nextjs-app-router',
-  router: 'app',
-  language: 'typescript',
-  package_manager: 'pnpm',
-  build_command: 'pnpm build',
-  entry_points: ['src/app/layout.tsx'],
-  integration_candidates: [{ path: 'app/layout.tsx', confidence: 0.95, reason: 'Root layout' }],
+  framework_skill_id: 'generic-html',
+  router: 'static',
+  language: 'html',
+  package_manager: null,
+  build_command: null,
+  entry_points: ['index.html'],
+  integration_candidates: [{ path: 'index.html', confidence: 0.9, reason: 'Static entry page' }],
   design_tokens: {},
   protected_paths: [],
   unsupported_reason: null,
@@ -535,8 +535,10 @@ describe('Fussion Project Studio — Guided Sequential UX & Website Stage', () =
 
     await waitFor(() => {
       expect(websiteIntegrationApi.analyze).toHaveBeenCalledWith('org-123', 'proj-1');
-      expect(screen.getByTestId('detected-framework').textContent).toBe('nextjs-app-router');
-      expect(screen.getByTestId('detected-target').textContent).toBe('app/layout.tsx');
+      // The analysis drives the display: config says nextjs-app-router, the analyst says
+      // generic-html, and the detected values must be the analyst's.
+      expect(screen.getByTestId('detected-framework').textContent).toBe('generic-html');
+      expect(screen.getByTestId('detected-target').textContent).toBe('index.html');
     });
   });
 

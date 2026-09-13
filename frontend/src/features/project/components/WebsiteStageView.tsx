@@ -222,7 +222,7 @@ export const WebsiteStageView: React.FC<WebsiteStageViewProps> = ({
                   data-testid="detected-framework"
                   className="text-xs font-semibold text-[var(--text-primary)] font-mono truncate"
                 >
-                  {config.framework_skill_id || 'Not detected'}
+                  {analysis?.framework_skill_id || config.framework_skill_id || 'Not detected'}
                 </p>
               </div>
 

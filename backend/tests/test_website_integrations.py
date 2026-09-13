@@ -189,6 +189,36 @@ async def test_website_integration_crud_and_secrets(client: AsyncClient) -> None
     assert get_after.status_code == 404
 
 
+@pytest.mark.asyncio
+async def test_website_integration_rejects_unknown_framework_skill(client: AsyncClient) -> None:
+    """FR-082: an unknown skill id is refused at configuration time, not planned as an empty run."""
+    token, _, org_id = await register_user(client, "web_integ_skill@example.com", "SkillOwner")
+    hdr = {"Authorization": f"Bearer {token}"}
+    proj_id = await create_project(client, token, org_id, "Skill Proj", "skill-proj")
+
+    unknown = await client.post(
+        f"/api/v1/organizations/{org_id}/projects/{proj_id}/website-integrations",
+        headers=hdr,
+        json={
+            "repository_owner": "fussion-org",
+            "repository_name": "storefront",
+            "framework_skill_id": "django-magic",
+        },
+    )
+    assert unknown.status_code == 422
+
+    too_long = await client.post(
+        f"/api/v1/organizations/{org_id}/projects/{proj_id}/website-integrations",
+        headers=hdr,
+        json={
+            "repository_owner": "fussion-org",
+            "repository_name": "storefront",
+            "framework_skill_id": "x" * 101,
+        },
+    )
+    assert too_long.status_code == 422
+
+
 # ============================================================
 # 2. REPOSITORY VALIDATION & ERROR HANDLING
 # ============================================================
