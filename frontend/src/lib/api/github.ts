@@ -33,6 +33,10 @@ export const githubApi = {
     fetchApi<GitHubInstallUrlRead>(`/api/v1/organizations/${orgId}/github/install-url`, {
       token,
       cache: 'no-store',
+      // The install flow is bound to a nonce cookie set by this response. The API is a different
+      // origin (port), so without `include` the browser drops the Set-Cookie and the callback's
+      // browser check fails.
+      credentials: 'include',
     }),
 
   installations: async (orgId: string, token?: string): Promise<GitHubInstallationRead[]> =>
