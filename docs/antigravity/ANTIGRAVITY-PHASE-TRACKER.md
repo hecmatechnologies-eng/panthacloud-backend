@@ -15,10 +15,14 @@ third, different numbering and is archived under `docs/archive/`.
 
 | Step | Scope | Status |
 | :--- | :--- | :--- |
-| **A. Truth & safety** | layout-overwrite fix, workspace clone+read, one roadmap, key removal, 05–08 decision | **IN PROGRESS** — layout-overwrite fix (`dd10167`), roadmap reconciliation (`d91d821`), dev-secret removal from source and the git-history rewrite (2026-09-12) done. Remaining items and their triggers are tabled in `CLAUDE.md` §3: `@/` alias before B8, the 05–08 decision before step C, and `SandboxProvider` with B5 or later |
-| **B. Runtime plane** | `STEP-B-SLICES.md` B1–B8 | **IN PROGRESS** — B1 done (`95b63eb`); B2 done; B3 done; B4 done; B5 done; B6 done; **B7 (SSE) deferred by owner**; B8 next |
-| **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **IN PROGRESS** — C1–C9 done; C10 **backend wiring done**; C10 Studio surface + FR-082 enum retirement remain |
-| **D. Coding agent** | write capability, generated-code scan, ChangeSet → PR, bounded repair | NOT STARTED — no slice breakdown yet |
+| **A. Truth & safety** | layout-overwrite fix, workspace clone+read, one roadmap, key removal, 05–08 decision | **IN PROGRESS** — layout-overwrite fix (`dd10167`), roadmap reconciliation (`d91d821`), dev-secret removal from source and the git-history rewrite (2026-09-12), the `@/` alias fix (B8-gated) and the 05–08 decision are done. The one item left, `SandboxProvider` + workspace rename, is now slice **C14** (the B5-or-later trigger has passed) |
+| **B. Runtime plane** | `STEP-B-SLICES.md` B1–B8 | **IN PROGRESS** — B1 (`95b63eb`) through B6 done; **B7 (SSE) and B8 (real widget + customer-origin CORS) remain**. The owner's B7 deferral is re-scoped as an MVP gap in `GAP-CLOSURE-PLAN.md` (acceptance #8 names a *streamed* answer); B7 precedes B8 |
+| **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **IN PROGRESS** — C1–C10 done (`acda350`, `16a13a0`, `d697e7d`). **C11–C15** are planned in `GAP-CLOSURE-PLAN.md`: C11 detection becomes the configuration (critical path), C12 run change set, C13 Studio SSE leak, C14 contract closeout, C15 memory reconciliation |
+| **D. Coding agent** | write capability, generated-code scan, ChangeSet → PR, bounded repair | NOT STARTED — no slice breakdown yet; post-MVP per `FEASIBILITY.md` §4 (the deterministic PR path already covers acceptance #6) |
+
+The gap between the code and the Part C acceptance criteria, and the ordered path to close it, is
+`docs/implementation/GAP-CLOSURE-PLAN.md`. Slice definitions live in the `STEP-*-SLICES.md` files;
+the plan only sequences them.
 
 ## Phase history (legacy numbering — record only, never cited for new work)
 

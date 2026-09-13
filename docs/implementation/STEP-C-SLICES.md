@@ -40,8 +40,18 @@ Still to arrange, each gating the slice that needs it:
 | C8 | `WebsiteAnalyst` + `WebsiteProfile` | 1 | Detects framework, router, app shell, entry points and design tokens, or returns `unsupported_reason`; `integration_candidates` is a ranked list |
 | C9 | Eval corpus + runner | 1 | 5 fixtures (at least one refusal); assertions on structured fields; per-case and aggregate outcome, cost and wall time; gates C8 |
 | C10 | Control-plane wiring + Studio surface | 1 | Framework, shell and integration point are auto-detected and persisted; no framework dropdown, no typed path |
+| C11 | Commit the detected profile onto the integration | 1 | The analyst's ranked result becomes the integration's `framework_skill_id` and `widget_target_path`, so the plan and the pull request use what was detected; an unsupported repository refuses; a model-authored target is path-checked |
+| C12 | Persist the run change set; serve `GET /runs/{id}/diff` from it | 2 | The generated change set is stored on `IntegrationRun` at generation time and served, never re-derived (closes `CLAUDE.md` §3.7) |
+| C13 | Fix the Studio SSE session leak | 2 | `studio_events.py` never holds an `AsyncSession` for a connection's lifetime (closes `CLAUDE.md` §3.6) |
+| C14 | `SandboxProvider` Protocol, workspace rename, `AgentRun.skill_versions` | 2 | `SandboxManager` → `LocalWorkspaceProvider`; `SandboxProvider.run()` raises; skill versions recorded (FR-089, `CLAUDE.md` §3) |
+| C15 | Reconcile FR-058–062 (project memory) | 3 | Plan and tracker state one position: the commit-keyed `WebsiteAnalysis` is the analyst's project memory at MVP; richer tiers are step D |
 
 ## Notes
+
+**C11–C15 close what C10 left and the step-A leftovers.** They are sequenced, with the cross-step
+acceptance mapping, in `docs/implementation/GAP-CLOSURE-PLAN.md`: C11 first (detection becomes the
+configuration), then the Studio/run truth (C12, C13), then the contract closeout (C14, C15). B7 and
+B8 are step-B slices and already exist in `STEP-B-SLICES.md`.
 
 **Evals gate C8, not a later phase.** The corpus and runner are required from agent #1
 (AGENT-ARCHITECTURE §12). C8 is not "done" until C9 is green against it.
