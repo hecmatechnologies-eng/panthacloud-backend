@@ -5,9 +5,9 @@ The harness depends on this Protocol; the Pydantic AI implementation lives behin
 agent framework or a provider SDK. Swapping frameworks is one adapter file, not a rewrite.
 """
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 from pydantic import BaseModel
 
@@ -22,8 +22,25 @@ class StructuredOutputError(Exception):
     """
 
 
+class HarnessError(Exception):
+    """Base for errors the harness raises from inside tool execution.
+
+    These must reach the harness loop unchanged: an agent framework must never rewrite a policy
+    denial or a budget breach into a generic provider failure (FR-066, FR-100).
+    """
+
+
+class ToolDeniedError(HarnessError):
+    """A tool call was refused on policy grounds; the run stops rather than let the model retry
+    its way around authorization (FR-066)."""
+
+
 class AgentRunnerError(Exception):
     """The runner could not complete the call — a provider, configuration or transport failure."""
+
+
+class AgentBudgetExceededError(Exception):
+    """The agent framework stopped the run because a declared usage limit was reached (FR-053)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +54,18 @@ class AgentRunResult:
     model_version_reported: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class ToolSpec:
+    """A tool exposed to the model: enough for the framework to build its schema."""
+
+    name: str
+    description: str
+    input_schema: type[BaseModel]
+
+
+# Called with (tool_name, validated-or-raw arguments) and returns a model-readable observation.
+ToolExecutor = Callable[[str, dict[str, Any]], Awaitable[str]]
+
 # Called with the result so the harness can meter the call through the model gateway (FR-073).
 UsageRecorder = Callable[[AgentRunResult], Awaitable[None]]
 
@@ -48,5 +77,7 @@ class AgentRunner(Protocol):
         context: ExecutionContext,
         *,
         prompt: str,
+        tools: Sequence[ToolSpec] = (),
+        tool_executor: ToolExecutor | None = None,
         usage_recorder: UsageRecorder | None = None,
     ) -> AgentRunResult: ...

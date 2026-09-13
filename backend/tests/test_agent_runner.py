@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import BaseModel
-from pydantic_ai.messages import ModelResponse, TextPart
+from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
 from sqlalchemy import select
@@ -19,11 +19,21 @@ from sqlalchemy import select
 from app.agents.base import AgentDefinition, Budget
 from app.core.database import get_session_factory
 from app.harness.context import ExecutionContext
-from app.harness.runner import AgentRunResult, StructuredOutputError
+from app.harness.runner import (
+    AgentBudgetExceededError,
+    AgentRunResult,
+    StructuredOutputError,
+    ToolDeniedError,
+    ToolSpec,
+)
 from app.llm.adapters.pydantic_ai_runner import PydanticAIAgentRunner, gateway_usage_recorder
 from app.llm.gateway import ModelGateway
 from app.llm.providers.fake import FakeModelProvider
 from app.models.model_usage import ModelUsage
+
+
+class TreeArgs(BaseModel):
+    path: str = "."
 
 
 class Profile(BaseModel):
@@ -31,7 +41,9 @@ class Profile(BaseModel):
     confident: bool
 
 
-def _definition(output_schema: type[BaseModel] | None = Profile) -> AgentDefinition:
+def _definition(
+    output_schema: type[BaseModel] | None = Profile, *, tokens: int = 1000
+) -> AgentDefinition:
     return AgentDefinition(
         name="website_analyst",
         version="1.0.0",
@@ -39,7 +51,7 @@ def _definition(output_schema: type[BaseModel] | None = Profile) -> AgentDefinit
         capabilities=frozenset({"repository.read"}),
         tools=(),
         output_schema=output_schema,
-        budget=Budget(tool_calls=10, tokens=1000, seconds=30, cost_usd=Decimal("0.10")),
+        budget=Budget(tool_calls=10, tokens=tokens, seconds=30, cost_usd=Decimal("0.10")),
     )
 
 
@@ -118,6 +130,45 @@ def test_pydantic_ai_is_imported_only_in_the_adapter() -> None:
         if "adapters" not in path.parts and "pydantic_ai" in path.read_text(encoding="utf-8")
     ]
     assert offenders == []
+
+
+@pytest.mark.asyncio
+async def test_a_denied_tool_propagates_through_the_adapter() -> None:
+    """A policy denial raised in a tool must not be rewritten as a provider failure (FR-066)."""
+
+    def model(_messages: list, _info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[ToolCallPart("read_tree", {})])
+
+    async def executor(_name: str, _arguments: dict) -> str:
+        raise ToolDeniedError("Not permitted: this agent lacks the capability.")
+
+    runner = PydanticAIAgentRunner(model=FunctionModel(model))
+    with pytest.raises(ToolDeniedError):
+        await runner.run(
+            _definition(),
+            _context(),
+            prompt="hi",
+            tools=[ToolSpec(name="read_tree", description="List files.", input_schema=TreeArgs)],
+            tool_executor=executor,
+        )
+
+
+@pytest.mark.asyncio
+async def test_framework_limit_is_a_budget_error_with_partial_usage() -> None:
+    """A limit breach is a budget error, and the spend before it is still reported (FR-053/073)."""
+    recorded: list[AgentRunResult] = []
+
+    async def recorder(result: AgentRunResult) -> None:
+        recorded.append(result)
+
+    runner = PydanticAIAgentRunner(model=TestModel())
+    with pytest.raises(AgentBudgetExceededError):
+        await runner.run(
+            _definition(tokens=1), _context(), prompt="hi", usage_recorder=recorder
+        )
+
+    assert recorded
+    assert recorded[0].input_tokens > 0
 
 
 @pytest.mark.asyncio

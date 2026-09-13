@@ -17,7 +17,7 @@ third, different numbering and is archived under `docs/archive/`.
 | :--- | :--- | :--- |
 | **A. Truth & safety** | layout-overwrite fix, workspace clone+read, one roadmap, key removal, 05–08 decision | **IN PROGRESS** — layout-overwrite fix (`dd10167`), roadmap reconciliation (`d91d821`), dev-secret removal from source and the git-history rewrite (2026-09-12) done. Remaining items and their triggers are tabled in `CLAUDE.md` §3: `@/` alias before B8, the 05–08 decision before step C, and `SandboxProvider` with B5 or later |
 | **B. Runtime plane** | `STEP-B-SLICES.md` B1–B8 | **IN PROGRESS** — B1 done (`95b63eb`); B2 done; B3 done; B4 done; B5 done; B6 done; **B7 (SSE) deferred by owner**; B8 next |
-| **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **IN PROGRESS** — `STEP-C-SLICES.md` C1–C10; C1 done; C2 done; C3 done; C4 done; C5 done; C6 next |
+| **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **IN PROGRESS** — `STEP-C-SLICES.md` C1–C10; C1 done; C2 done; C3 done; C4 done; C5 done; C6 done; C7 next |
 | **D. Coding agent** | write capability, generated-code scan, ChangeSet → PR, bounded repair | NOT STARTED — no slice breakdown yet |
 
 ## Phase history (legacy numbering — record only, never cited for new work)
@@ -2254,3 +2254,75 @@ Checked against `STEP-C-SLICES.md` C5:
 - Backend suite, from the repository root: **481 passed, 2 skipped**.
 - No migration in this slice. No test hits a paid API; pydantic_ai's `TestModel`/`FunctionModel` are
   used, and the fake runner substitutes.
+
+---
+
+## Step C (FEASIBILITY §3) · Slice C6 — the harness loop and budgets
+
+**Rigour tier: 1 — Maximum** (CLAUDE.md §9.0), declared in `STEP-C-SLICES.md` and unchanged. The
+loop is where tenancy, authorization, budget and audit meet the model.
+
+**Status: COMPLETED** — fussion-reviewer **BLOCKED** on rounds 1 and 2, then **PASS WITH FINDINGS**
+on round 3; every finding fixed and re-verified. Committed with this entry.
+
+### Objective
+FR-050, FR-053, FR-054: one harness loop that runs an agent through the framework, exposes its
+declared tools through the gateway, enforces per-run budgets (tool calls, tokens, wall clock, cost),
+and finishes the run record with a classified failure.
+
+### Completed Work
+- **`app/harness/budget.py`** — `BudgetTracker` and `RunBudgetExceeded`, enforcing all four ceilings.
+- **`app/harness/loop.py`** — `run_agent`: build the run, bind the run id onto the context, check the
+  organization budget, expose the agent's declared tools, run via `AgentRunner`, meter usage into
+  the ledger, and finish `COMPLETED`/`FAILED` with a `FailureClass`.
+- **`app/harness/runner.py`** — `HarnessError` base, `ToolDeniedError`, `AgentBudgetExceededError`,
+  `ToolSpec`, `ToolExecutor`.
+- **`app/llm/adapters/pydantic_ai_runner.py`** — builds pydantic_ai tools from Fussion schemas via
+  `Tool.from_schema`, passes `UsageLimits`, and reports partial usage when the run fails.
+- **Tests** (`tests/test_harness_loop.py` + the adapter test) — success, declared-tools-only, all
+  four budget breaches, denial, structured-output, runner failure, and usage-on-failure.
+
+### Architectural & Technology Decisions
+1. **Pydantic AI owns the model loop; the harness owns the orchestration.** The loop is the
+   framework's, behind `AgentRunner`; tenancy, authorization, budgets and the run record are the
+   harness's — never the model's (FR-054).
+2. **Harness errors survive the framework.** A policy denial or budget breach raised inside a tool
+   is a `HarnessError`; the adapter re-raises it untouched, so a denial is recorded `REFUSED`, not
+   rewritten into a provider failure.
+3. **Usage is never lost.** The adapter accumulates usage as calls happen and reports it on failure;
+   the harness writes the ledger before enforcing the budget and writes `tokens_used`/`cost_usd`
+   onto the `AgentRun` on both success and failure.
+4. **Every failure finishes the run.** Each classified branch, plus a catch-all, calls `_fail`; a
+   run is never left `RUNNING` by a handled failure.
+5. **The organization budget is checked before the call** (`ModelGateway.ensure_budget`), so an
+   over-budget tenant cannot incur agent cost.
+
+### Review history
+Three rounds (Tier 1). Rounds 1 and 2 returned **BLOCKED**; round 3 passed.
+1. **Round 1 BLOCKED** — `ToolDeniedError` was swallowed by the adapter's catch-all (denial
+   misclassified as terminal), and usage was recorded only after a successful run, so failures lost
+   it. Fixed with the `HarnessError` base and usage accumulation reported on failure.
+2. **Round 2 BLOCKED** — usage reached the ledger but `AgentRun.tokens_used`/`cost_usd` stayed 0 for
+   failed runs, and `prompt_hash`/`model_id` were success-only. Fixed: `_fail` writes the usage, and
+   reproducibility is recorded before the run.
+3. **Round 3 PASS WITH FINDINGS** — `ensure_budget` was never called (dead code) and cancellation
+   lost usage. Fixed: the org budget is checked before the call, the adapter reports partial usage
+   on cancellation, and the run id is bound onto the context so the gateway's ownership check is
+   live.
+
+### Deviations
+Checked against `STEP-C-SLICES.md` C6:
+- The slice named `loop.py` and `budget.py`; the adapter and runner gained the tool/error plumbing
+  the loop needs.
+- External cancellation (client disconnect, worker shutdown) still leaves a run `RUNNING`; there is
+  no production caller yet, so it is logged as a gate on that caller.
+
+### Blockers / Deferred
+- **External cancellation / kill switch (FR-055)** — gate on a worker or request driving the loop.
+- **`skill_versions`** is empty until C7 packages exist.
+- The eval corpus (C9) is not applicable to this slice.
+
+### Verification (2026-09-13)
+- Ruff, from `backend/`: `All checks passed!`
+- Backend suite, from the repository root: **493 passed, 2 skipped**.
+- No migration in this slice.
