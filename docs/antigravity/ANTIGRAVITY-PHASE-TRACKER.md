@@ -17,7 +17,7 @@ third, different numbering and is archived under `docs/archive/`.
 | :--- | :--- | :--- |
 | **A. Truth & safety** | layout-overwrite fix, workspace clone+read, one roadmap, key removal, 05–08 decision | **IN PROGRESS** — layout-overwrite fix (`dd10167`), roadmap reconciliation (`d91d821`), dev-secret removal from source and the git-history rewrite (2026-09-12), the `@/` alias fix (B8-gated) and the 05–08 decision are done. The one item left, `SandboxProvider` + workspace rename, is now slice **C14** (the B5-or-later trigger has passed) |
 | **B. Runtime plane** | `STEP-B-SLICES.md` B1–B8 | **IN PROGRESS** — B1 (`95b63eb`) through B6 done; **B7 (SSE) and B8 (real widget + customer-origin CORS) remain**. The owner's B7 deferral is re-scoped as an MVP gap in `GAP-CLOSURE-PLAN.md` (acceptance #8 names a *streamed* answer); B7 precedes B8 |
-| **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **IN PROGRESS** — C1–C14 done. **C15** remains, per `GAP-CLOSURE-PLAN.md`: reconcile FR-058–062 (project memory) in the plan and tracker |
+| **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **COMPLETE** — C1–C15 done. The remaining MVP gaps are step B (B7 SSE, B8 widget) per `GAP-CLOSURE-PLAN.md`; step D stays post-MVP |
 | **D. Coding agent** | write capability, generated-code scan, ChangeSet → PR, bounded repair | NOT STARTED — no slice breakdown yet; post-MVP per `FEASIBILITY.md` §4 (the deterministic PR path already covers acceptance #6) |
 
 The gap between the code and the Part C acceptance criteria, and the ordered path to close it, is
@@ -2868,3 +2868,28 @@ Protocol a real backend must satisfy.
   `test_website_integrations.py` + `test_sandbox_provider.py` + `test_integration_safety.py` —
   **186 passed**. The full suite should be re-run before the next release.
 - Frontend: no change.
+
+## Step C (FEASIBILITY §3) · Slice C15 — project memory reconciled
+
+**Rigour tier: 3 — Light** (CLAUDE.md §9.0), declared in `STEP-C-SLICES.md`. Documentation only.
+
+**Status: COMPLETED.** The plan and the code now state one position on FR-058–062.
+
+### Objective
+C2/C6 notes said project memory "lands within C2/C6", but no memory model exists. Reconcile the
+claim with reality rather than leaving a silent gap.
+
+### Completed Work
+- **`STEP-C-SLICES.md` Notes** — FR-058–062 is the persisted, `commit_sha`-keyed `WebsiteAnalysis`,
+  not a separate tier. A durable memory tier is deliberately deferred under the Part D YAGNI
+  register (working-memory compaction, cross-session memory) until a run demonstrates the need.
+- **This entry** — the position is recorded where the step's status is read.
+
+### Architectural & Technology Decisions
+1. **The analysis is the MVP's project memory.** It is commit-keyed, tenant-scoped and staleness-
+   aware, which is what the requirement needs at this scope.
+2. **No durable memory tier is built.** Adding one now would be speculative; the trigger is a run
+   that exceeds the context window despite bounded tool calls.
+
+### Verification (2026-09-13)
+- Documentation only: no code, no migration, no test change.

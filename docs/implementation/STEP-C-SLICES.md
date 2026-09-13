@@ -69,5 +69,9 @@ that drops the retired tables — deleting an applied migration would break `upg
 **pgvector is not a step-C slice.** Full-scan cosine is adequate at a few hundred chunks
 (`STEP-B-SLICES` Notes).
 
-**Project memory (FR-058–062) is thin and derived** — fingerprinted by `commit_sha`, tenant-scoped,
-fenced as data on read-back, purgeable. It lands within C2/C6 rather than as its own slice.
+**Project memory (FR-058–062) is the persisted analysis, not a separate tier (C15).** The
+`WebsiteAnalysis` row is the analyst's project memory at MVP: keyed to the `commit_sha` it was
+produced from, tenant-scoped through the integration, and treated as stale on a SHA mismatch (a
+`GET /plan` warning). A durable, cross-run memory tier is deliberately not built — the Part D YAGNI
+register excludes working-memory compaction and cross-session memory until a run demonstrates the
+need. Revisit when an eval or a real run shows the context window is the limit.
