@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from app.models.allowed_origin import AllowedOrigin
     from app.models.conversation import VisitorSession
     from app.models.project import Project
+    from app.models.website_analysis import WebsiteAnalysis
 
 PUBLIC_KEY_PREFIX = "fussion_pk_"
 
@@ -150,6 +151,13 @@ class WebsiteIntegration(BaseModel):
         "VisitorSession",
         back_populates="integration",
         cascade="all, delete-orphan",
+    )
+    # Persisted analyst results (C10); deleted with the integration.
+    analyses: Mapped[list["WebsiteAnalysis"]] = relationship(
+        "WebsiteAnalysis",
+        back_populates="integration",
+        cascade="all, delete-orphan",
+        order_by="WebsiteAnalysis.created_at.desc()",
     )
 
 

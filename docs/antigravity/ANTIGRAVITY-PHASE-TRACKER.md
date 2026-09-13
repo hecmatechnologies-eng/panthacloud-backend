@@ -17,7 +17,7 @@ third, different numbering and is archived under `docs/archive/`.
 | :--- | :--- | :--- |
 | **A. Truth & safety** | layout-overwrite fix, workspace clone+read, one roadmap, key removal, 05–08 decision | **IN PROGRESS** — layout-overwrite fix (`dd10167`), roadmap reconciliation (`d91d821`), dev-secret removal from source and the git-history rewrite (2026-09-12) done. Remaining items and their triggers are tabled in `CLAUDE.md` §3: `@/` alias before B8, the 05–08 decision before step C, and `SandboxProvider` with B5 or later |
 | **B. Runtime plane** | `STEP-B-SLICES.md` B1–B8 | **IN PROGRESS** — B1 done (`95b63eb`); B2 done; B3 done; B4 done; B5 done; B6 done; **B7 (SSE) deferred by owner**; B8 next |
-| **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **IN PROGRESS** — `STEP-C-SLICES.md` C1–C10; C1–C9 done; C10 next |
+| **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **IN PROGRESS** — C1–C9 done; C10 **backend wiring done**; C10 Studio surface + FR-082 enum retirement remain |
 | **D. Coding agent** | write capability, generated-code scan, ChangeSet → PR, bounded repair | NOT STARTED — no slice breakdown yet |
 
 ## Phase history (legacy numbering — record only, never cited for new work)
@@ -2471,3 +2471,78 @@ Checked against `STEP-C-SLICES.md` C8/C9:
 - Ruff, from `backend/`: `All checks passed!`
 - Backend suite, from the repository root: **522 passed, 2 skipped**.
 - No migration in this slice.
+
+---
+
+## Step C (FEASIBILITY §3) · Slice C10 — control-plane wiring (backend)
+
+**Rigour tier: 1 — Maximum** (CLAUDE.md §9.0), declared in `STEP-C-SLICES.md` and unchanged. The
+analyst becomes reachable from the product and its result is persisted.
+
+**Status: PARTIAL — backend done; the Studio surface and FR-082 remain.** The reviewer's
+`PASS WITH FINDINGS` explicitly states this change does not meet the slice's stated done-when
+("no framework dropdown, no typed path"), because the frontend and the `WebsiteFramework` enum are
+untouched. It is recorded here as partial rather than complete. Committed with this entry.
+
+### Objective
+FR-082, FR-058–062, MVP acceptance #4: auto-detect the framework, shell and integration point and
+persist the result keyed to a pinned commit.
+
+### Completed Work
+- **`app/models/website_analysis.py` + migration 0018** — one row per analysis, keyed to
+  `commit_sha`, cascading from the integration.
+- **`app/services/analysis/clone.py`** — shallow-clone the integration's repository at its default
+  branch, resolve the commit SHA, sanitize git output.
+- **`app/services/analysis/analysis_service.py`** — resolve the model gateway, clone, build the
+  trusted context (workspace reference + commit), run the analyst through the harness with the
+  repository tools bound to the workspace, persist the profile, and tear the workspace down.
+- **`POST /website-integrations/analyze`** and **`GET /website-integrations/analysis`**, with
+  tenancy via the existing dependency chain, `INTEGRATION_UPDATE`, an audit event, and error
+  mapping (503 no model, 402 budget, 502 clone/analyst failure).
+- **Tests** — the endpoint runs and persists, is tenant-scoped (404), and cascades on delete.
+
+### Architectural & Technology Decisions
+1. **The read substrate is now wired.** `workspace_reference` on the context finally has a
+   production resolver: the workspace path a `LocalWorkspaceReader` reads. This is the C4 gate.
+2. **The gateway is resolved before the clone**, so a no-model deployment fails without touching
+   the repository.
+3. **A failed run is committed, not rolled back.** `get_db` rolls back on a propagating exception,
+   so the service commits the harness's FAILED `AgentRun` before re-raising (FR-089).
+4. **Teardown reports its outcome.** `cleanup_workspace` returns whether the directory is gone and
+   logs a survivor — a workspace holds a clone whose `.git/config` may embed a token.
+
+### Review history
+One round (Tier 1), fresh reviewer — **PASS WITH FINDINGS**, no BLOCKING finding. Five SHOULD FIX:
+1. A failed run's record was lost to `get_db`'s rollback — fixed (decision 3).
+2. Only `ModelNotConfiguredError` was mapped — the clone/analyst/budget failures now return legible
+   502/402/503 instead of a generic 500.
+3. Teardown was best-effort and silent — it now reports success and logs a survivor.
+4. The tracker was not updated — this entry.
+5. **FR-082 / the slice done-when is not met** — the analysis stores a `framework_skill_id` string,
+   but `WebsiteIntegration.framework` is still the `WebsiteFramework` enum, and the create schema
+   still accepts a framework and a typed `widget_target_path`. **Recorded as remaining, not done.**
+
+CONSIDER logged: `/analyze` uses `INTEGRATION_UPDATE` where `POST /runs` uses `INTEGRATION_EXECUTE`
+(same roles today); `GET /analysis` returns no staleness signal against current HEAD; the
+`pydantic_ai`-isolation test matches substrings, so a dynamic import would evade it.
+
+### Deviations
+Checked against `STEP-C-SLICES.md` C10:
+- **The slice is delivered in two parts.** This commit is the backend: detection runs and is
+  persisted, and the endpoint is reachable. The **Studio surface** (removing the framework dropdown
+  and the typed path, showing the detected profile) and **FR-082** (replacing the `WebsiteFramework`
+  enum with a skill id string) are **not** in this change and remain the rest of C10.
+- No customer code executes: the only subprocesses are `git clone` and the Fussion-authored
+  `skills/.../scripts/detect.py`.
+
+### Blockers / Deferred
+- **Studio surface + FR-082 enum retirement** — the remainder of C10.
+- **Feeding the analysis into the plan/generation path** — step D; today the analysis is served but
+  the pipeline still uses the manually configured framework.
+- **Tool versions on `AgentRun` (FR-089)** — pre-existing.
+
+### Verification (2026-09-13)
+- Ruff, from `backend/`: `All checks passed!`
+- Migration 0018: `upgrade → downgrade → upgrade` verified on **both SQLite and a scratch Postgres
+  database**.
+- Backend suite, from the repository root: **525 passed, 2 skipped**.

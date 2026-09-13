@@ -22,12 +22,14 @@ from app.models.membership import Membership, RoleEnum
 from app.models.organization import Organization
 from app.models.project import Project
 from app.models.user import User
+from app.models.website_analysis import WebsiteAnalysis
 from app.models.website_integration import (
     IntegrationRun,
     IntegrationRunStatus,
     WebsiteIntegration,
     WebsiteIntegrationStatus,
 )
+from app.schemas.website_analysis import WebsiteAnalysisRead
 from app.schemas.website_integration import (
     DiffFileItem,
     IntegrationPlanPayload,
@@ -40,6 +42,7 @@ from app.schemas.website_integration import (
     WebsiteIntegrationRead,
     WebsiteIntegrationUpdate,
 )
+from app.services.analysis.analysis_service import analyze_website_integration
 from app.services.audit import record_audit
 from app.services.integration.github import (
     GitHubAPIError,
@@ -638,3 +641,83 @@ async def get_run_pull_request(
         title="Integrate Fussion Assistant",
         status="open",
     )
+
+
+@router.post(
+    "/analyze",
+    response_model=WebsiteAnalysisRead,
+    summary="Analyse the repository and detect the integration profile",
+)
+async def analyze_website_integration_endpoint(
+    integration: Annotated[WebsiteIntegration, Depends(get_current_website_integration)],
+    project: Annotated[Project, Depends(get_current_project)],
+    tenant: Annotated[
+        tuple[Organization, Membership],
+        Depends(require_permission(Permission.INTEGRATION_UPDATE)),
+    ],
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> WebsiteAnalysisRead:
+    """Clone the repository at a pinned revision, run the analyst, and persist the detected profile."""
+    from app.harness.runner import AgentRunnerError, StructuredOutputError
+    from app.llm.gateway import BudgetExceededError, ModelNotConfiguredError
+    from app.services.analysis.clone import RepositoryCloneError
+
+    try:
+        analysis = await analyze_website_integration(
+            db, integration=integration, organization=tenant[0], project=project
+        )
+    except ModelNotConfiguredError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="No model provider is configured; the analysis cannot run.",
+        ) from None
+    except BudgetExceededError:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="This organization has reached its model spend budget.",
+        ) from None
+    except (RepositoryCloneError, TimeoutError):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="The repository could not be read. Check the repository, branch and token.",
+        ) from None
+    except (StructuredOutputError, AgentRunnerError):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="The analyst could not produce a valid profile. Please try again.",
+        ) from None
+
+    await record_audit(
+        db,
+        tenant[0].id,
+        project.id,
+        user.id,
+        "website.analysis.completed",
+        integration.id,
+        {"commit_sha": analysis.commit_sha, "framework_skill_id": analysis.framework_skill_id},
+    )
+    return WebsiteAnalysisRead.model_validate(analysis)
+
+
+@router.get(
+    "/analysis",
+    response_model=WebsiteAnalysisRead | None,
+    summary="Get the latest analysis for this integration",
+)
+async def get_latest_website_analysis(
+    integration: Annotated[WebsiteIntegration, Depends(get_current_website_integration)],
+    tenant: Annotated[
+        tuple[Organization, Membership],
+        Depends(require_permission(Permission.INTEGRATION_VIEW)),
+    ],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> WebsiteAnalysisRead | None:
+    stmt = (
+        select(WebsiteAnalysis)
+        .where(WebsiteAnalysis.integration_id == integration.id)
+        .order_by(WebsiteAnalysis.created_at.desc(), WebsiteAnalysis.id.desc())
+        .limit(1)
+    )
+    analysis = (await db.execute(stmt)).scalar_one_or_none()
+    return WebsiteAnalysisRead.model_validate(analysis) if analysis else None

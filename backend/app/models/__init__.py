@@ -19,6 +19,7 @@ from app.models.project import Project
 from app.models.repository import Repository, RepositoryProvider, RepositoryStatus
 from app.models.repository_snapshot import RepositorySnapshot, SnapshotStatus
 from app.models.user import User
+from app.models.website_analysis import WebsiteAnalysis
 from app.models.website_integration import (
     IntegrationRun,
     IntegrationRunStatus,
@@ -63,6 +64,7 @@ __all__ = [
     "SnapshotStatus",
     "User",
     "VisitorSession",
+    "WebsiteAnalysis",
     "WebsiteFramework",
     "WebsiteIntegration",
     "WebsiteIntegrationStatus",

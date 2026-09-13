@@ -1,9 +1,12 @@
+import logging
 import os
 import shutil
 import uuid
 from pathlib import Path
 
 from app.core.config import settings
+
+logger = logging.getLogger("fussion.workspace")
 
 
 class SecurityViolationError(Exception):
@@ -140,18 +143,29 @@ class WorkspaceManager:
                 except OSError:
                     continue
 
-    def cleanup_workspace(self, workspace_path: Path) -> None:
-        """Safely removes an allocated workspace directory."""
-        if workspace_path.exists():
-            # In Windows, read-only files (like .git objects) can cause rmtree to fail unless handled
-            def on_rm_error(func, path, exc_info):
-                try:
-                    os.chmod(path, 0o777)
-                    func(path)
-                except (OSError, PermissionError):
-                    pass
+    def cleanup_workspace(self, workspace_path: Path) -> bool:
+        """Safely removes an allocated workspace directory; returns True when it is gone.
 
-            shutil.rmtree(workspace_path, onerror=on_rm_error)
+        A workspace holds a cloned repository whose ``.git/config`` may embed a clone token, so a
+        survivor is a credential left on disk. Teardown reports its own outcome rather than
+        assuming success.
+        """
+        if not workspace_path.exists():
+            return True
+
+        # In Windows, read-only files (like .git objects) can cause rmtree to fail unless handled
+        def on_rm_error(func, path, exc_info):
+            try:
+                os.chmod(path, 0o777)
+                func(path)
+            except (OSError, PermissionError):
+                pass
+
+        shutil.rmtree(workspace_path, onerror=on_rm_error)
+        if workspace_path.exists():
+            logger.warning("Workspace %s survived teardown and must be removed manually.", workspace_path)
+            return False
+        return True
 
 
 workspace_manager = WorkspaceManager()

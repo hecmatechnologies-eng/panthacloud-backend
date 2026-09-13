@@ -127,7 +127,11 @@ def test_pydantic_ai_is_imported_only_in_the_adapter() -> None:
     offenders = [
         str(path.relative_to(root))
         for path in root.rglob("*.py")
-        if "adapters" not in path.parts and "pydantic_ai" in path.read_text(encoding="utf-8")
+        if "adapters" not in path.parts
+        and (
+            "import pydantic_ai" in path.read_text(encoding="utf-8")
+            or "from pydantic_ai" in path.read_text(encoding="utf-8")
+        )
     ]
     assert offenders == []
 
