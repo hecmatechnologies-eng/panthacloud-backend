@@ -5,6 +5,7 @@ import {
   websiteIntegrationApi,
   WebsiteIntegrationConfig,
   WebsiteIntegrationCreateInput,
+  WebsiteAnalysis,
 } from '@/lib/api/integration';
 
 export interface UseWebsiteStageProps {
@@ -19,9 +20,11 @@ export function useWebsiteStage({
   onStatusChange,
 }: UseWebsiteStageProps = {}) {
   const [config, setConfig] = useState<WebsiteIntegrationConfig | null>(null);
+  const [analysis, setAnalysis] = useState<WebsiteAnalysis | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isConnecting, setIsConnecting] = useState<boolean>(false);
   const [isDisconnecting, setIsDisconnecting] = useState<boolean>(false);
+  const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
   const onStatusChangeRef = useRef(onStatusChange);
@@ -51,9 +54,16 @@ export function useWebsiteStage({
       setConfig(data);
       const isConnected = data?.status === 'CONNECTED';
       notifyStatus(isConnected);
+      try {
+        const latestAnalysis = await websiteIntegrationApi.getLatestAnalysis(orgId, projectId);
+        setAnalysis(latestAnalysis);
+      } catch {
+        setAnalysis(null);
+      }
     } catch {
       // 404 is normal for projects with no website yet
       setConfig(null);
+      setAnalysis(null);
       notifyStatus(false);
     } finally {
       setIsLoading(false);
@@ -71,26 +81,32 @@ export function useWebsiteStage({
     setIsLoading(true);
     setError(null);
 
-    websiteIntegrationApi
-      .get(orgId, projectId)
-      .then((data) => {
-        if (!isCancelled) {
-          setConfig(data);
-          const isConnected = data?.status === 'CONNECTED';
-          notifyStatus(isConnected);
+    const load = async () => {
+      try {
+        const data = await websiteIntegrationApi.get(orgId, projectId);
+        if (isCancelled) return;
+        setConfig(data);
+        notifyStatus(data?.status === 'CONNECTED');
+        try {
+          const latestAnalysis = await websiteIntegrationApi.getLatestAnalysis(orgId, projectId);
+          if (!isCancelled) setAnalysis(latestAnalysis);
+        } catch {
+          if (!isCancelled) setAnalysis(null);
         }
-      })
-      .catch(() => {
+      } catch {
         if (!isCancelled) {
           setConfig(null);
+          setAnalysis(null);
           notifyStatus(false);
         }
-      })
-      .finally(() => {
+      } finally {
         if (!isCancelled) {
           setIsLoading(false);
         }
-      });
+      }
+    };
+
+    load();
 
     return () => {
       isCancelled = true;
@@ -131,6 +147,7 @@ export function useWebsiteStage({
     try {
       await websiteIntegrationApi.delete(orgId, projectId);
       setConfig(null);
+      setAnalysis(null);
       notifyStatus(false);
     } catch (err: any) {
       const msg = err?.message || 'Failed to disconnect website.';
@@ -141,18 +158,42 @@ export function useWebsiteStage({
     }
   }, [orgId, projectId, notifyStatus]);
 
+  const analyze = useCallback(async (): Promise<WebsiteAnalysis> => {
+    if (!orgId || !projectId) {
+      throw new Error('Active organization and project are required to analyse a website.');
+    }
+
+    setIsAnalyzing(true);
+    setError(null);
+
+    try {
+      const result = await websiteIntegrationApi.analyze(orgId, projectId);
+      setAnalysis(result);
+      return result;
+    } catch (err: any) {
+      const msg = err?.message || 'Failed to analyse the repository.';
+      setError(msg);
+      throw err;
+    } finally {
+      setIsAnalyzing(false);
+    }
+  }, [orgId, projectId]);
+
   const clearError = useCallback(() => {
     setError(null);
   }, []);
 
   return {
     config,
+    analysis,
     isLoading,
     isConnecting,
     isDisconnecting,
+    isAnalyzing,
     error,
     connect,
     disconnect,
+    analyze,
     refresh: loadConfig,
     clearError,
   };

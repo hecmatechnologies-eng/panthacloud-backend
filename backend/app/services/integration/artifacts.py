@@ -5,7 +5,10 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
-from app.models.website_integration import WebsiteFramework
+from app.models.website_integration import (
+    DEFAULT_FRAMEWORK_SKILL_ID,
+    GENERIC_HTML_SKILL_ID,
+)
 
 # Wraps the assistant's configuration values inside generated files. The security scan (FR-097)
 # checks code; these are the tenant's own settings — an avatar hosted on their CDN is not an
@@ -333,7 +336,7 @@ def patch_html_index(content: str, script_src: str = "./fussion-assistant.js") -
 def generate_artifacts(
     project_id: uuid.UUID | str,
     assistant_data: dict[str, Any],
-    framework: WebsiteFramework,
+    framework_skill_id: str,
     widget_target_path: str,
     existing_target_content: str,
 ) -> dict[str, str]:
@@ -344,7 +347,7 @@ def generate_artifacts(
     """
     files: dict[str, str] = {}
 
-    if framework == WebsiteFramework.REACT_NEXTJS:
+    if framework_skill_id == DEFAULT_FRAMEWORK_SKILL_ID:
         # Generated files sit beside the project's app/ or pages/ tree, and the imports between
         # them are relative, so neither depends on a `@/` alias Fussion has not verified.
         root = source_root_for(widget_target_path)
@@ -362,7 +365,7 @@ def generate_artifacts(
             existing_target_content,
         )
 
-    elif framework == WebsiteFramework.GENERIC_HTML:
+    elif framework_skill_id == GENERIC_HTML_SKILL_ID:
         # Patch the file that was read. Substituting `index.html` for any other target generated a
         # file the plan never declared, so the run failed with the plan taking the blame.
         if not widget_target_path.lower().endswith(HTML_SUFFIXES):

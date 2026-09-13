@@ -23,7 +23,6 @@ from app.models.website_analysis import WebsiteAnalysis
 from app.models.website_integration import (
     IntegrationRun,
     IntegrationRunStatus,
-    WebsiteFramework,
     WebsiteIntegration,
     WebsiteIntegrationStatus,
 )
@@ -65,7 +64,6 @@ __all__ = [
     "User",
     "VisitorSession",
     "WebsiteAnalysis",
-    "WebsiteFramework",
     "WebsiteIntegration",
     "WebsiteIntegrationStatus",
 ]

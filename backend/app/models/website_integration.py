@@ -19,6 +19,11 @@ if TYPE_CHECKING:
 
 PUBLIC_KEY_PREFIX = "fussion_pk_"
 
+# The stored framework identifier is a skill id string, not a database enum (FR-082), so adding a
+# framework is a new skill package rather than an enum value and a migration.
+DEFAULT_FRAMEWORK_SKILL_ID = "nextjs-app-router"
+GENERIC_HTML_SKILL_ID = "generic-html"
+
 
 def generate_public_key() -> str:
     """A widget's public client key (FR-107). Not a secret: it ships in the customer's page.
@@ -49,11 +54,6 @@ class IntegrationRunStatus(str, enum.Enum):
     PR_CREATED = "PR_CREATED"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
-
-
-class WebsiteFramework(str, enum.Enum):
-    REACT_NEXTJS = "REACT_NEXTJS"
-    GENERIC_HTML = "GENERIC_HTML"
 
 
 class WebsiteIntegration(BaseModel):
@@ -88,9 +88,9 @@ class WebsiteIntegration(BaseModel):
         String(150),
         nullable=True,
     )
-    framework: Mapped[WebsiteFramework] = mapped_column(
-        SQLEnum(WebsiteFramework, name="website_framework"),
-        default=WebsiteFramework.REACT_NEXTJS,
+    framework_skill_id: Mapped[str] = mapped_column(
+        String(100),
+        default=DEFAULT_FRAMEWORK_SKILL_ID,
         nullable=False,
     )
     website_root_dir: Mapped[str] = mapped_column(

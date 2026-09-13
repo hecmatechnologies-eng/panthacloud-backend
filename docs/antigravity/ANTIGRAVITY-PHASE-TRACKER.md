@@ -2479,10 +2479,10 @@ Checked against `STEP-C-SLICES.md` C8/C9:
 **Rigour tier: 1 — Maximum** (CLAUDE.md §9.0), declared in `STEP-C-SLICES.md` and unchanged. The
 analyst becomes reachable from the product and its result is persisted.
 
-**Status: PARTIAL — backend done; the Studio surface and FR-082 remain.** The reviewer's
-`PASS WITH FINDINGS` explicitly states this change does not meet the slice's stated done-when
-("no framework dropdown, no typed path"), because the frontend and the `WebsiteFramework` enum are
-untouched. It is recorded here as partial rather than complete. Committed with this entry.
+**Status: COMPLETE (2026-09-13).** Delivered in two parts: the backend (this entry) and the
+Studio surface + FR-082 (the next entry). The reviewer's first round was `PASS WITH FINDINGS` and
+explicitly stated the backend alone did not meet the slice's done-when ("no framework dropdown, no
+typed path"); the second part closes that finding. Committed with this entry.
 
 ### Objective
 FR-082, FR-058–062, MVP acceptance #4: auto-detect the framework, shell and integration point and
@@ -2546,3 +2546,63 @@ Checked against `STEP-C-SLICES.md` C10:
 - Migration 0018: `upgrade → downgrade → upgrade` verified on **both SQLite and a scratch Postgres
   database**.
 - Backend suite, from the repository root: **525 passed, 2 skipped**.
+
+## Step C (FEASIBILITY §3) · Slice C10 — Studio surface and FR-082 (part 2)
+
+**Rigour tier: 1 — Maximum** (CLAUDE.md §9.0), unchanged from part 1. This part retires the stored
+framework enum and removes the last hand-configured inputs from the Studio.
+
+**Status: COMPLETE.** This is the remainder the part-1 reviewer named as a SHOULD FIX and the
+slice's done-when ("no framework dropdown, no typed path").
+
+### Objective
+FR-082: adding a framework is a new skill package, not an enum value and a migration. C10 done-when:
+framework, shell and integration point are auto-detected and persisted; no framework dropdown, no
+typed path.
+
+### Completed Work
+- **FR-082 — the enum is gone.** `WebsiteFramework` and the `website_framework` Postgres enum are
+  removed. `WebsiteIntegration.framework_skill_id: str` (default `nextjs-app-router`) and
+  `WebsiteAnalysis.framework_skill_id` are plain skill-id strings; `DEFAULT_FRAMEWORK_SKILL_ID`
+  and `GENERIC_HTML_SKILL_ID` are the only constants. `planner.py`, `artifacts.py`, `validation.py`,
+  `pipeline.py`, the schemas and the endpoint are keyed on the string.
+- **Migration `0019_framework_skill_id`** — adds `framework_skill_id`, backfills
+  (`GENERIC_HTML` → `generic-html`, everything else → the default), drops `framework` and, on
+  Postgres, the enum type. The downgrade recreates the type explicitly before `ADD COLUMN`
+  (Postgres does not create a type implicitly), then restores the enum column and backfills it.
+- **`backend/scripts/seeds/0019_framework_skill_id.py`** — one row of each former enum member at
+  revision 0018, so the backfill is exercised against pre-existing rows.
+- **Studio surface** — the framework dropdown and the typed `widget_target_path` are removed from
+  both the Studio stage (`WebsiteStageView`) and the integrations form (`RepositoryConnectionForm`).
+  The connected panel shows the detected `framework_skill_id` and the top ranked candidate, and an
+  **Analyze Repository** action (`POST /analyze`) renders the persisted profile: router, language,
+  package manager, build command, ranked integration candidates, entry points, or the refusal
+  (`unsupported_reason`).
+- **API client** — `websiteIntegrationApi.analyze` / `getLatestAnalysis`, a `WebsiteAnalysis` type,
+  and `WebsiteFramework` deleted from `lib/api/integration.ts` and the feature types.
+- **Tests** — a frontend test asserts the dropdown and typed path are absent, and that the analysis
+  panel renders the detected framework and integration point after the action runs.
+
+### Architectural & Technology Decisions
+1. **The stored identifier is a skill id string, not a database enum.** Adding a framework is now a
+   skill package plus a folder, satisfying the OCP failure named in CLAUDE.md §6.
+2. **The Studio shows a ranked list, not a single guess.** The panel renders the analyst's ranked
+   `integration_candidates`; the top candidate is displayed, the rest remain visible.
+3. **The analysis panel is the only place a framework is shown.** `config.framework_skill_id` is the
+   persisted default until the analyst runs; the panel is the source of truth once it has.
+
+### Deviations
+- **The plan/generation path still reads `integration.framework_skill_id`.** Feeding the analysis
+  into planning and generation is step D; C10's done-when is detection and persistence, which is met.
+- **`widget_target_path` remains a column and is still defaulted** — it is no longer typed by a user;
+  the displayed integration point prefers the analyst's top candidate.
+
+### Blockers / Deferred
+- **Feeding the analysis into the plan/generation path** — step D, as recorded in part 1.
+
+### Verification (2026-09-13)
+- Ruff, from `backend/`: `All checks passed!`
+- Migration 0019 with its seed: `upgrade → downgrade → upgrade` verified on **both SQLite and a
+  scratch Postgres database**.
+- Backend suite, from the repository root: **525 passed, 2 skipped**.
+- Frontend, from `frontend/`: `pnpm build` clean; `pnpm test` — **109 passed** (9 files).

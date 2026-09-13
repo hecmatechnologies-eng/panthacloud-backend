@@ -7,8 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.core.origins import MAX_ORIGIN_LENGTH, normalize_origin
 from app.core.protected_paths import protected_reason
 from app.models.website_integration import (
+    DEFAULT_FRAMEWORK_SKILL_ID,
     IntegrationRunStatus,
-    WebsiteFramework,
     WebsiteIntegrationStatus,
 )
 
@@ -23,7 +23,7 @@ class WebsiteIntegrationRead(BaseModel):
     repository_name: str
     default_branch: str
     integration_branch: str | None = None
-    framework: WebsiteFramework
+    framework_skill_id: str
     website_root_dir: str
     widget_target_path: str
     status: WebsiteIntegrationStatus
@@ -57,7 +57,7 @@ class WebsiteIntegrationCreate(BaseModel):
     repository_owner: str = Field(..., min_length=1, max_length=255)
     repository_name: str = Field(..., min_length=1, max_length=255)
     default_branch: str = Field("main", min_length=1, max_length=100)
-    framework: WebsiteFramework = WebsiteFramework.REACT_NEXTJS
+    framework_skill_id: str = DEFAULT_FRAMEWORK_SKILL_ID
     website_root_dir: str = Field("/", max_length=255)
     widget_target_path: str = Field("app/layout.tsx", max_length=255)
     github_token: str | None = Field(None, max_length=500)
@@ -69,7 +69,7 @@ class WebsiteIntegrationUpdate(BaseModel):
     repository_owner: str | None = Field(None, min_length=1, max_length=255)
     repository_name: str | None = Field(None, min_length=1, max_length=255)
     default_branch: str | None = Field(None, min_length=1, max_length=100)
-    framework: WebsiteFramework | None = None
+    framework_skill_id: str | None = None
     website_root_dir: str | None = Field(None, max_length=255)
     widget_target_path: str | None = Field(None, max_length=255)
     github_token: str | None = Field(None, max_length=500)
@@ -100,7 +100,7 @@ TargetStatus = Literal["exists", "missing", "unknown"]
 
 
 class IntegrationPlanPayload(BaseModel):
-    framework: WebsiteFramework
+    framework_skill_id: str
     files_to_create: list[str]
     files_to_modify: list[str]
     files_to_delete: list[str] = Field(default_factory=list)
@@ -137,7 +137,7 @@ class ValidationResultPayload(BaseModel):
     owner: str
     repo: str
     default_branch: str
-    framework: WebsiteFramework
+    framework_skill_id: str
     assistant_readiness: bool
     knowledge_base_readiness: bool
     issues: list[str] = Field(default_factory=list)

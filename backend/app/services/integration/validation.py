@@ -1,7 +1,10 @@
 import re
 
 from app.core.protected_paths import protected_reason
-from app.models.website_integration import WebsiteFramework
+from app.models.website_integration import (
+    DEFAULT_FRAMEWORK_SKILL_ID,
+    GENERIC_HTML_SKILL_ID,
+)
 from app.schemas.website_integration import IntegrationPlanPayload
 from app.services.integration.artifacts import (
     HTML_BEGIN,
@@ -145,7 +148,7 @@ class StaticValidator:
 
     @staticmethod
     def validate(
-        framework: WebsiteFramework,
+        framework_skill_id: str,
         plan: IntegrationPlanPayload,
         files: dict[str, str],
         original_files: dict[str, str],
@@ -190,7 +193,7 @@ class StaticValidator:
             # Framework specific marker verification
             # Marker constants come from artifacts.py rather than being spelled again here:
             # re-typing them is how a marker change breaks the validator silently.
-            if framework == WebsiteFramework.REACT_NEXTJS:
+            if framework_skill_id == DEFAULT_FRAMEWORK_SKILL_ID:
                 if (
                     path.lower().endswith(REACT_SUFFIXES)
                     and path in plan.files_to_modify
@@ -203,7 +206,7 @@ class StaticValidator:
                             issues.append(f"Required configuration key '{key}' missing from '{path}'.")
 
             elif (
-                framework == WebsiteFramework.GENERIC_HTML
+                framework_skill_id == GENERIC_HTML_SKILL_ID
                 and path.lower().endswith(HTML_SUFFIXES)
                 and path in plan.files_to_modify
                 and (HTML_BEGIN not in content or HTML_END not in content)

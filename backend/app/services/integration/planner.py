@@ -1,7 +1,10 @@
 import posixpath
 from typing import Any
 
-from app.models.website_integration import WebsiteFramework
+from app.models.website_integration import (
+    DEFAULT_FRAMEWORK_SKILL_ID,
+    GENERIC_HTML_SKILL_ID,
+)
 from app.schemas.website_integration import IntegrationPlanPayload, TargetStatus
 from app.services.integration.artifacts import (
     HTML_SUFFIXES,
@@ -17,7 +20,7 @@ class IntegrationPlanner:
 
     @staticmethod
     def generate_plan(
-        framework: WebsiteFramework,
+        framework_skill_id: str,
         widget_target_path: str,
         assistant_data: dict[str, Any] | None = None,
         has_knowledge_base: bool = False,
@@ -32,7 +35,7 @@ class IntegrationPlanner:
         # Exactly the path that was read: a defaulted path here would plan a file nobody read.
         target_path = widget_target_path
 
-        if framework == WebsiteFramework.REACT_NEXTJS:
+        if framework_skill_id == DEFAULT_FRAMEWORK_SKILL_ID:
             # The same derivation the generator uses, so the plan declares the paths that are
             # actually written. A root-relative guess put generated files outside the plan on any
             # src/ layout, which validation correctly refuses.
@@ -46,7 +49,7 @@ class IntegrationPlanner:
                 f"{root}lib/fussion-assistant.ts",
             ]
             files_to_modify = [target_path]
-        elif framework == WebsiteFramework.GENERIC_HTML:
+        elif framework_skill_id == GENERIC_HTML_SKILL_ID:
             # Beside the page, as the generator writes it: an absolute /fussion-assistant.js 404s
             # whenever the page is not served from the repository root.
             files_to_create = [
@@ -83,12 +86,12 @@ class IntegrationPlanner:
             warnings.append("Knowledge Base contains no indexed documents. Assistant will operate without document grounding.")
 
         summary = (
-            f"Deterministic plan for {framework.value}: create {len(files_to_create)} file(s), "
+            f"Deterministic plan for {framework_skill_id}: create {len(files_to_create)} file(s), "
             f"modify {len(files_to_modify)} file(s) ({', '.join(files_to_modify)})."
         )
 
         return IntegrationPlanPayload(
-            framework=framework,
+            framework_skill_id=framework_skill_id,
             files_to_create=files_to_create,
             files_to_modify=files_to_modify,
             files_to_delete=files_to_delete,

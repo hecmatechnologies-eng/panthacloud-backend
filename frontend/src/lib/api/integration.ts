@@ -1,7 +1,5 @@
 import { fetchApi } from './client';
 
-export type WebsiteFramework = 'REACT_NEXTJS' | 'GENERIC_HTML';
-
 export type WebsiteIntegrationStatus =
   | 'NOT_CONNECTED'
   | 'CONNECTED'
@@ -30,7 +28,7 @@ export interface WebsiteIntegrationConfig {
   repository_name: string;
   default_branch: string;
   integration_branch?: string | null;
-  framework: WebsiteFramework;
+  framework_skill_id: string;
   website_root_dir: string;
   widget_target_path: string;
   status: WebsiteIntegrationStatus;
@@ -45,7 +43,7 @@ export interface WebsiteIntegrationCreateInput {
   repository_owner: string;
   repository_name: string;
   default_branch?: string;
-  framework?: WebsiteFramework;
+  framework_skill_id?: string;
   website_root_dir?: string;
   widget_target_path?: string;
   github_token?: string;
@@ -55,14 +53,37 @@ export interface WebsiteIntegrationUpdateInput {
   repository_owner?: string;
   repository_name?: string;
   default_branch?: string;
-  framework?: WebsiteFramework;
+  framework_skill_id?: string;
   website_root_dir?: string;
   widget_target_path?: string;
   github_token?: string;
 }
 
+export interface IntegrationCandidate {
+  path: string;
+  confidence: number;
+  reason: string;
+}
+
+export interface WebsiteAnalysis {
+  id: string;
+  integration_id: string;
+  commit_sha: string;
+  framework_skill_id: string | null;
+  router: string | null;
+  language: string | null;
+  package_manager: string | null;
+  build_command: string | null;
+  entry_points: string[];
+  integration_candidates: IntegrationCandidate[];
+  design_tokens: Record<string, unknown>;
+  protected_paths: string[];
+  unsupported_reason: string | null;
+  created_at: string;
+}
+
 export interface IntegrationPlanPayload {
-  framework: WebsiteFramework;
+  framework_skill_id: string;
   files_to_create: string[];
   files_to_modify: string[];
   files_to_delete: string[];
@@ -96,7 +117,7 @@ export interface ValidationResultPayload {
   owner: string;
   repo: string;
   default_branch: string;
-  framework: WebsiteFramework;
+  framework_skill_id: string;
   assistant_readiness: boolean;
   knowledge_base_readiness: boolean;
   issues: string[];
@@ -144,6 +165,24 @@ export const websiteIntegrationApi = {
         body: JSON.stringify(data),
         token,
       }
+    );
+  },
+
+  analyze: async (orgId: string, projectId: string, token?: string): Promise<WebsiteAnalysis> => {
+    return fetchApi<WebsiteAnalysis>(
+      `/api/v1/organizations/${orgId}/projects/${projectId}/website-integrations/analyze`,
+      { method: 'POST', token }
+    );
+  },
+
+  getLatestAnalysis: async (
+    orgId: string,
+    projectId: string,
+    token?: string
+  ): Promise<WebsiteAnalysis | null> => {
+    return fetchApi<WebsiteAnalysis | null>(
+      `/api/v1/organizations/${orgId}/projects/${projectId}/website-integrations/analysis`,
+      { token, cache: 'no-store' }
     );
   },
 

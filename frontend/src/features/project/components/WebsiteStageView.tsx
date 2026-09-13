@@ -4,7 +4,6 @@ import React, { useState } from 'react';
 import { useProject } from '../context';
 import { useWebsiteStage } from '../hooks/useWebsiteStage';
 import { Project } from '@/lib/api';
-import { WebsiteFramework } from '@/lib/api/integration';
 import {
   FolderGit2,
   GitBranch,
@@ -16,6 +15,7 @@ import {
   AlertCircle,
   RefreshCw,
   Sparkles,
+  ScanSearch,
 } from 'lucide-react';
 
 export interface WebsiteStageViewProps {
@@ -41,12 +41,15 @@ export const WebsiteStageView: React.FC<WebsiteStageViewProps> = ({
 
   const {
     config,
+    analysis,
     isLoading,
     isConnecting,
     isDisconnecting,
+    isAnalyzing,
     error,
     connect,
     disconnect,
+    analyze,
     clearError,
   } = useWebsiteStage({
     orgId,
@@ -58,26 +61,12 @@ export const WebsiteStageView: React.FC<WebsiteStageViewProps> = ({
   const [owner, setOwner] = useState('');
   const [repo, setRepo] = useState('');
   const [branch, setBranch] = useState('main');
-  const [framework, setFramework] = useState<WebsiteFramework>('REACT_NEXTJS');
-  const [targetPath, setTargetPath] = useState('app/layout.tsx');
   const [token, setToken] = useState('');
-
-  // Framework change updates default widget path
-  const handleFrameworkChange = (val: WebsiteFramework) => {
-    setFramework(val);
-    if (val === 'REACT_NEXTJS') {
-      setTargetPath('app/layout.tsx');
-    } else {
-      setTargetPath('index.html');
-    }
-  };
 
   const handleFillDemo = () => {
     setOwner('acme-corp');
     setRepo('storefront-web');
     setBranch('main');
-    setFramework('REACT_NEXTJS');
-    setTargetPath('app/layout.tsx');
     setToken('');
     clearError();
   };
@@ -91,8 +80,6 @@ export const WebsiteStageView: React.FC<WebsiteStageViewProps> = ({
         repository_owner: owner.trim(),
         repository_name: repo.trim(),
         default_branch: branch.trim() || 'main',
-        framework,
-        widget_target_path: targetPath.trim() || 'app/layout.tsx',
         website_root_dir: '/',
         github_token: token.trim() || undefined,
       });
@@ -101,7 +88,16 @@ export const WebsiteStageView: React.FC<WebsiteStageViewProps> = ({
     }
   };
 
+  const handleAnalyze = async () => {
+    try {
+      await analyze();
+    } catch {
+      // Error handled by hook
+    }
+  };
+
   const isConnected = config?.status === 'CONNECTED';
+  const topCandidate = analysis?.integration_candidates?.[0];
 
   return (
     <div
@@ -222,17 +218,23 @@ export const WebsiteStageView: React.FC<WebsiteStageViewProps> = ({
                 <span className="text-[10px] font-mono uppercase text-[var(--text-muted)] tracking-wider">
                   Framework
                 </span>
-                <p className="text-xs font-semibold text-[var(--text-primary)]">
-                  {config.framework === 'REACT_NEXTJS' ? 'React / Next.js' : 'Generic HTML'}
+                <p
+                  data-testid="detected-framework"
+                  className="text-xs font-semibold text-[var(--text-primary)] font-mono truncate"
+                >
+                  {config.framework_skill_id || 'Not detected'}
                 </p>
               </div>
 
               <div className="p-3.5 rounded-2xl bg-[var(--surface-elevated)] border border-[var(--border)]/80 space-y-1">
                 <span className="text-[10px] font-mono uppercase text-[var(--text-muted)] tracking-wider">
-                  Target Injection File
+                  Integration Point
                 </span>
-                <p className="text-xs font-semibold font-mono text-[var(--text-primary)] truncate">
-                  {config.widget_target_path}
+                <p
+                  data-testid="detected-target"
+                  className="text-xs font-semibold font-mono text-[var(--text-primary)] truncate"
+                >
+                  {topCandidate?.path || config.widget_target_path}
                 </p>
               </div>
 
@@ -245,6 +247,108 @@ export const WebsiteStageView: React.FC<WebsiteStageViewProps> = ({
                   <span>Credentials Encrypted</span>
                 </p>
               </div>
+            </div>
+
+            {/* Analysis Surface */}
+            <div
+              data-testid="website-analysis-panel"
+              className="p-5 rounded-2xl bg-[var(--surface-elevated)] border border-[var(--border)]/80 space-y-4"
+            >
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <div className="text-xs font-bold text-[var(--text-primary)] flex items-center gap-1.5">
+                    <ScanSearch className="w-3.5 h-3.5 text-[var(--color-purple)]" />
+                    <span>Repository Analysis</span>
+                  </div>
+                  <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
+                    {analysis
+                      ? 'Detected from the repository at a pinned commit.'
+                      : 'Run the analyst to detect the framework, app shell and integration point.'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  data-testid="analyze-website-button"
+                  onClick={handleAnalyze}
+                  disabled={isAnalyzing}
+                  className="px-4 py-2.5 rounded-xl bg-[var(--color-purple)] hover:bg-[var(--color-purple)]/90 text-white text-xs font-medium shadow-xs transition-all cursor-pointer flex items-center justify-center gap-1.5 shrink-0 disabled:opacity-50"
+                >
+                  {isAnalyzing ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Analysing...</span>
+                    </>
+                  ) : (
+                    <>
+                      <ScanSearch className="w-3.5 h-3.5" />
+                      <span>{analysis ? 'Re-run Analysis' : 'Analyze Repository'}</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {analysis?.unsupported_reason && (
+                <div
+                  data-testid="analysis-unsupported"
+                  className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-400 text-xs"
+                >
+                  {analysis.unsupported_reason}
+                </div>
+              )}
+
+              {analysis && !analysis.unsupported_reason && (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    {[
+                      ['Router', analysis.router],
+                      ['Language', analysis.language],
+                      ['Package Manager', analysis.package_manager],
+                      ['Build Command', analysis.build_command],
+                    ].map(([label, value]) => (
+                      <div key={label} className="space-y-1">
+                        <span className="text-[10px] font-mono uppercase text-[var(--text-muted)] tracking-wider">
+                          {label}
+                        </span>
+                        <p className="text-xs font-mono text-[var(--text-primary)] truncate">
+                          {value || '—'}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+
+                  {analysis.integration_candidates.length > 0 && (
+                    <div className="space-y-1.5">
+                      <span className="text-[10px] font-mono uppercase text-[var(--text-muted)] tracking-wider">
+                        Ranked Integration Candidates
+                      </span>
+                      <ul data-testid="analysis-candidates" className="space-y-1">
+                        {analysis.integration_candidates.map((candidate) => (
+                          <li
+                            key={candidate.path}
+                            className="flex items-center justify-between gap-3 text-xs font-mono text-[var(--text-primary)]"
+                          >
+                            <span className="truncate">{candidate.path}</span>
+                            <span className="text-[var(--text-muted)] shrink-0">
+                              {Math.round(candidate.confidence * 100)}%
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {analysis.entry_points.length > 0 && (
+                    <div className="space-y-1">
+                      <span className="text-[10px] font-mono uppercase text-[var(--text-muted)] tracking-wider">
+                        Entry Points
+                      </span>
+                      <p className="text-xs font-mono text-[var(--text-secondary)] truncate">
+                        {analysis.entry_points.join(', ')}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Next Recommended Step Banner */}
@@ -369,38 +473,6 @@ export const WebsiteStageView: React.FC<WebsiteStageViewProps> = ({
               />
             </div>
 
-            {/* Target Framework */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-[var(--text-secondary)]">
-                Target Framework
-              </label>
-              <select
-                data-testid="framework-select"
-                value={framework}
-                onChange={(e) => handleFrameworkChange(e.target.value as WebsiteFramework)}
-                className="w-full bg-[var(--surface-elevated)] border border-[var(--border)] focus:border-[var(--color-purple)] rounded-xl px-3.5 py-2.5 text-xs text-[var(--text-primary)] focus:outline-none transition-colors cursor-pointer"
-              >
-                <option value="REACT_NEXTJS">React / Next.js (App Router)</option>
-                <option value="GENERIC_HTML">Generic HTML / Single Page</option>
-              </select>
-            </div>
-
-            {/* Widget Target Path */}
-            <div className="space-y-1.5 sm:col-span-2">
-              <label className="text-xs font-semibold text-[var(--text-secondary)]">
-                Widget Layout Injection Target
-              </label>
-              <input
-                type="text"
-                required
-                data-testid="widget-target-input"
-                value={targetPath}
-                onChange={(e) => setTargetPath(e.target.value)}
-                placeholder="e.g. app/layout.tsx"
-                className="w-full bg-[var(--surface-elevated)] border border-[var(--border)] focus:border-[var(--color-purple)] rounded-xl px-3.5 py-2.5 text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none transition-colors font-mono"
-              />
-            </div>
-
             {/* GitHub Access Token */}
             <div className="space-y-1.5 sm:col-span-2">
               <div className="flex items-center justify-between">
@@ -420,6 +492,10 @@ export const WebsiteStageView: React.FC<WebsiteStageViewProps> = ({
                 placeholder="ghp_****************************************"
                 className="w-full bg-[var(--surface-elevated)] border border-[var(--border)] focus:border-[var(--color-purple)] rounded-xl px-3.5 py-2.5 text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none transition-colors font-mono"
               />
+              <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
+                The framework, app shell and integration point are detected from the repository by
+                the analyst. No framework selection or target path is required.
+              </p>
             </div>
           </div>
 

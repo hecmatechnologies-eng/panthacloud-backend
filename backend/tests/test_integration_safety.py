@@ -14,7 +14,7 @@ from sqlalchemy import select
 
 from app.core.database import get_session_factory
 from app.core.protected_paths import protected_reason
-from app.models.website_integration import WebsiteFramework, WebsiteIntegration
+from app.models.website_integration import WebsiteIntegration
 from app.schemas.website_integration import IntegrationPlanPayload
 from app.services.integration.artifacts import (
     HTML_BEGIN,
@@ -62,7 +62,7 @@ async def create_project(client: AsyncClient, token: str, org_id: str, slug: str
 
 def plan_for(target: str, created: list[str] | None = None) -> IntegrationPlanPayload:
     return IntegrationPlanPayload(
-        framework=WebsiteFramework.REACT_NEXTJS,
+        framework_skill_id="nextjs-app-router",
         files_to_create=created or [],
         files_to_modify=[target],
         target_status="exists",
@@ -127,7 +127,7 @@ def test_validator_refuses_a_protected_widget_target() -> None:
 
     with pytest.raises(StaticValidationError) as exc:
         StaticValidator.validate(
-            framework=WebsiteFramework.REACT_NEXTJS,
+            framework_skill_id="nextjs-app-router",
             plan=plan_for(target),
             files={target: patched},
             original_files={target: "name: deploy\n"},
@@ -138,7 +138,7 @@ def test_validator_refuses_a_protected_widget_target() -> None:
 def test_validator_refuses_a_protected_created_file() -> None:
     with pytest.raises(StaticValidationError) as exc:
         StaticValidator.validate(
-            framework=WebsiteFramework.REACT_NEXTJS,
+            framework_skill_id="nextjs-app-router",
             plan=plan_for("app/layout.tsx", created=[".env.production"]),
             files={
                 "app/layout.tsx": _patched_react(REACT_LAYOUT),
@@ -253,7 +253,7 @@ def test_an_edit_wrapped_in_marker_text_does_not_bypass_the_validator() -> None:
 
     with pytest.raises(StaticValidationError) as exc:
         StaticValidator.validate(
-            framework=WebsiteFramework.REACT_NEXTJS,
+            framework_skill_id="nextjs-app-router",
             plan=plan_for("app/layout.tsx"),
             files={"app/layout.tsx": smuggled},
             original_files={"app/layout.tsx": REACT_LAYOUT},
@@ -266,7 +266,7 @@ def test_more_marker_pairs_than_the_patcher_emits_is_rejected() -> None:
 
     with pytest.raises(StaticValidationError):
         StaticValidator.validate(
-            framework=WebsiteFramework.REACT_NEXTJS,
+            framework_skill_id="nextjs-app-router",
             plan=plan_for("app/layout.tsx"),
             files={"app/layout.tsx": extra},
             original_files={"app/layout.tsx": REACT_LAYOUT},
@@ -280,7 +280,7 @@ def test_a_marker_sharing_its_line_with_other_code_is_rejected() -> None:
 
     with pytest.raises(StaticValidationError):
         StaticValidator.validate(
-            framework=WebsiteFramework.REACT_NEXTJS,
+            framework_skill_id="nextjs-app-router",
             plan=plan_for("app/layout.tsx"),
             files={"app/layout.tsx": inline},
             original_files={"app/layout.tsx": REACT_LAYOUT},
@@ -296,7 +296,7 @@ def test_a_foreign_marker_family_is_rejected() -> None:
 
     with pytest.raises(StaticValidationError):
         StaticValidator.validate(
-            framework=WebsiteFramework.REACT_NEXTJS,
+            framework_skill_id="nextjs-app-router",
             plan=plan_for("app/layout.tsx"),
             files={"app/layout.tsx": foreign},
             original_files={"app/layout.tsx": REACT_LAYOUT},
@@ -306,7 +306,7 @@ def test_a_foreign_marker_family_is_rejected() -> None:
 def test_the_deterministic_patch_still_passes() -> None:
     """The discipline above must not reject what the patcher actually emits."""
     StaticValidator.validate(
-        framework=WebsiteFramework.REACT_NEXTJS,
+        framework_skill_id="nextjs-app-router",
         plan=plan_for("app/layout.tsx", created=["components/fussion/FussionAssistant.tsx"]),
         files={
             "app/layout.tsx": _patched_react(REACT_LAYOUT),
@@ -381,7 +381,7 @@ def test_validator_scans_only_managed_blocks_of_a_modified_file() -> None:
     ).replace("{children}", "{children}{fetch('https://analytics.customer.com')}")
 
     StaticValidator.validate(
-        framework=WebsiteFramework.REACT_NEXTJS,
+        framework_skill_id="nextjs-app-router",
         plan=plan_for("app/layout.tsx"),
         files={"app/layout.tsx": _patched_react(customer)},
         original_files={"app/layout.tsx": customer},
@@ -393,7 +393,7 @@ def test_validator_scans_only_managed_blocks_of_a_modified_file() -> None:
     )
     with pytest.raises(StaticValidationError) as exc:
         StaticValidator.validate(
-            framework=WebsiteFramework.REACT_NEXTJS,
+            framework_skill_id="nextjs-app-router",
             plan=plan_for("app/layout.tsx"),
             files={"app/layout.tsx": hostile},
             original_files={"app/layout.tsx": customer},
@@ -583,7 +583,7 @@ def test_react_patch_emits_exactly_one_block_and_validates() -> None:
     assert patched.count(REACT_END_JSX) == 1
 
     StaticValidator.validate(
-        framework=WebsiteFramework.REACT_NEXTJS,
+        framework_skill_id="nextjs-app-router",
         plan=plan_for("app/layout.tsx"),
         files={"app/layout.tsx": patched},
         original_files={"app/layout.tsx": REACT_LAYOUT},
@@ -634,7 +634,7 @@ def test_html_patch_keeps_markers_alone_on_their_lines(html: str) -> None:
     assert marker_lines == [HTML_BEGIN, HTML_END], patched
 
     StaticValidator.validate(
-        framework=WebsiteFramework.GENERIC_HTML,
+        framework_skill_id="generic-html",
         plan=plan_for("index.html", created=["fussion-assistant.js"]),
         files={"index.html": patched, "fussion-assistant.js": "// noop\n"},
         original_files={"index.html": html},
@@ -816,7 +816,7 @@ def test_generated_files_follow_the_project_source_root() -> None:
     files = generate_artifacts(
         project_id=uuid.uuid4(),
         assistant_data={"name": "Acme", "is_enabled": True},
-        framework=WebsiteFramework.REACT_NEXTJS,
+        framework_skill_id="nextjs-app-router",
         widget_target_path=SRC_LAYOUT_TARGET,
         existing_target_content=REACT_LAYOUT,
     )
@@ -863,7 +863,7 @@ def test_the_plan_declares_exactly_what_a_src_layout_generates() -> None:
     from app.services.integration.planner import IntegrationPlanner
 
     plan = IntegrationPlanner.generate_plan(
-        framework=WebsiteFramework.REACT_NEXTJS,
+        framework_skill_id="nextjs-app-router",
         widget_target_path=SRC_LAYOUT_TARGET,
         assistant_data={"is_enabled": True},
         has_knowledge_base=True,
@@ -872,14 +872,14 @@ def test_the_plan_declares_exactly_what_a_src_layout_generates() -> None:
     files = generate_artifacts(
         project_id=uuid.uuid4(),
         assistant_data={"name": "Acme", "is_enabled": True},
-        framework=WebsiteFramework.REACT_NEXTJS,
+        framework_skill_id="nextjs-app-router",
         widget_target_path=SRC_LAYOUT_TARGET,
         existing_target_content=REACT_LAYOUT,
     )
 
     assert set(files) == set(plan.files_to_create + plan.files_to_modify)
     StaticValidator.validate(
-        framework=WebsiteFramework.REACT_NEXTJS,
+        framework_skill_id="nextjs-app-router",
         plan=plan,
         files=files,
         original_files={SRC_LAYOUT_TARGET: REACT_LAYOUT},
@@ -895,7 +895,7 @@ def test_the_import_block_goes_below_a_use_client_directive() -> None:
     assert lines[1] == REACT_BEGIN_IMPORT, patched
 
     StaticValidator.validate(
-        framework=WebsiteFramework.REACT_NEXTJS,
+        framework_skill_id="nextjs-app-router",
         plan=plan_for("app/layout.tsx"),
         files={"app/layout.tsx": patched},
         original_files={"app/layout.tsx": USE_CLIENT_LAYOUT},
@@ -970,7 +970,7 @@ def test_a_static_target_that_is_not_html_is_refused_not_substituted(target: str
         generate_artifacts(
             project_id=uuid.uuid4(),
             assistant_data={"name": "Acme", "is_enabled": True},
-            framework=WebsiteFramework.GENERIC_HTML,
+            framework_skill_id="generic-html",
             widget_target_path=target,
             existing_target_content="<html><body></body></html>\n",
         )
@@ -1026,7 +1026,7 @@ def test_html_and_htm_targets_are_both_patched_in_place() -> None:
         files = generate_artifacts(
             project_id=uuid.uuid4(),
             assistant_data={"name": "Acme", "is_enabled": True},
-            framework=WebsiteFramework.GENERIC_HTML,
+            framework_skill_id="generic-html",
             widget_target_path=target,
             existing_target_content="<html><body></body></html>\n",
         )
@@ -1045,12 +1045,12 @@ def test_the_static_script_is_reachable_from_the_page_that_loads_it() -> None:
     files = generate_artifacts(
         project_id=uuid.uuid4(),
         assistant_data={"name": "Acme", "is_enabled": True},
-        framework=WebsiteFramework.GENERIC_HTML,
+        framework_skill_id="generic-html",
         widget_target_path=target,
         existing_target_content="<html><body></body></html>\n",
     )
     plan = IntegrationPlanner.generate_plan(
-        framework=WebsiteFramework.GENERIC_HTML,
+        framework_skill_id="generic-html",
         widget_target_path=target,
         assistant_data={"is_enabled": True},
         has_knowledge_base=True,

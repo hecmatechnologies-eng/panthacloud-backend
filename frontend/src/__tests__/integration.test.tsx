@@ -30,6 +30,8 @@ vi.mock('@/lib/api/integration', () => ({
     delete: vi.fn(),
     validate: vi.fn(),
     getPlan: vi.fn(),
+    analyze: vi.fn(),
+    getLatestAnalysis: vi.fn(),
     startRun: vi.fn(),
     listRuns: vi.fn(),
     getRun: vi.fn(),
@@ -47,7 +49,7 @@ const mockConfig: WebsiteIntegrationConfig = {
   repository_name: 'storefront',
   default_branch: 'main',
   integration_branch: 'fussion/assistant-integration',
-  framework: 'REACT_NEXTJS',
+  framework_skill_id: 'nextjs-app-router',
   website_root_dir: '/',
   widget_target_path: 'app/layout.tsx',
   status: 'CONNECTED',
@@ -57,7 +59,7 @@ const mockConfig: WebsiteIntegrationConfig = {
 };
 
 const mockPlan: IntegrationPlanPayload = {
-  framework: 'REACT_NEXTJS',
+  framework_skill_id: 'nextjs-app-router',
   files_to_create: ['components/fussion/FussionAssistant.tsx'],
   files_to_modify: ['app/layout.tsx'],
   files_to_delete: [],
@@ -72,7 +74,7 @@ const mockValidation: ValidationResultPayload = {
   owner: 'acme-corp',
   repo: 'storefront',
   default_branch: 'main',
-  framework: 'REACT_NEXTJS',
+  framework_skill_id: 'nextjs-app-router',
   assistant_readiness: true,
   knowledge_base_readiness: true,
   issues: [],

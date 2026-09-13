@@ -85,7 +85,7 @@ def to_website_integration_read(integration: WebsiteIntegration) -> WebsiteInteg
         repository_name=integration.repository_name,
         default_branch=integration.default_branch,
         integration_branch=integration.integration_branch,
-        framework=integration.framework,
+        framework_skill_id=integration.framework_skill_id,
         website_root_dir=integration.website_root_dir,
         widget_target_path=integration.widget_target_path,
         status=integration.status,
@@ -148,7 +148,7 @@ async def create_website_integration(
         repository_owner=payload.repository_owner.strip(),
         repository_name=payload.repository_name.strip(),
         default_branch=payload.default_branch.strip() or "main",
-        framework=payload.framework,
+        framework_skill_id=payload.framework_skill_id,
         website_root_dir=payload.website_root_dir.strip() or "/",
         widget_target_path=payload.widget_target_path.strip() or "app/layout.tsx",
         status=WebsiteIntegrationStatus.CONNECTED,
@@ -167,7 +167,7 @@ async def create_website_integration(
         integration.id,
         {
             "repository": f"{integration.repository_owner}/{integration.repository_name}",
-            "framework": integration.framework.value,
+            "framework_skill_id": integration.framework_skill_id,
         },
     )
 
@@ -195,8 +195,8 @@ async def update_website_integration(
         integration.repository_name = payload.repository_name.strip()
     if payload.default_branch is not None:
         integration.default_branch = payload.default_branch.strip()
-    if payload.framework is not None:
-        integration.framework = payload.framework
+    if payload.framework_skill_id is not None:
+        integration.framework_skill_id = payload.framework_skill_id
     if payload.website_root_dir is not None:
         integration.website_root_dir = payload.website_root_dir.strip()
     if payload.widget_target_path is not None:
@@ -316,7 +316,7 @@ async def validate_connection(
         owner=integration.repository_owner,
         repo=integration.repository_name,
         default_branch=integration.default_branch,
-        framework=integration.framework,
+        framework_skill_id=integration.framework_skill_id,
         assistant_readiness=assistant_readiness,
         knowledge_base_readiness=kb_readiness,
         issues=issues,
@@ -395,7 +395,7 @@ async def get_integration_plan(
             ) from exc
 
     return IntegrationPlanner.generate_plan(
-        framework=integration.framework,
+        framework_skill_id=integration.framework_skill_id,
         widget_target_path=integration.widget_target_path,
         assistant_data=asst_data,
         has_knowledge_base=has_kb,

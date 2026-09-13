@@ -5,7 +5,7 @@ import {
   ValidationResultPayload,
   RunDiffPayload,
   PullRequestInfo,
-  WebsiteFramework,
+  WebsiteAnalysis,
 } from '@/lib/api/integration';
 
 export type {
@@ -15,22 +15,21 @@ export type {
   ValidationResultPayload,
   RunDiffPayload,
   PullRequestInfo,
-  WebsiteFramework,
+  WebsiteAnalysis,
 };
 
 export interface IntegrationFormState {
   repository_owner: string;
   repository_name: string;
   default_branch: string;
-  framework: WebsiteFramework;
   website_root_dir: string;
-  widget_target_path: string;
   github_token: string;
 }
 
 export interface IntegrationViewState {
   config: WebsiteIntegrationConfig | null;
   form: IntegrationFormState;
+  analysis: WebsiteAnalysis | null;
   plan: IntegrationPlanPayload | null;
   validation: ValidationResultPayload | null;
   latestRun: IntegrationRun | null;
@@ -39,6 +38,7 @@ export interface IntegrationViewState {
   selectedPR: PullRequestInfo | null;
   isLoading: boolean;
   isSaving: boolean;
+  isAnalyzing: boolean;
   isValidating: boolean;
   isPlanning: boolean;
   isExecuting: boolean;

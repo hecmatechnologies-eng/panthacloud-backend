@@ -131,7 +131,7 @@ class IntegrationPipeline:
             user_id,
             "integration.run.started",
             run.id,
-            {"branch": branch_name, "framework": integration.framework.value},
+            {"branch": branch_name, "framework_skill_id": integration.framework_skill_id},
         )
 
         git_provider = get_git_provider()
@@ -175,7 +175,7 @@ class IntegrationPipeline:
 
             # 5. Generate deterministic plan
             plan = IntegrationPlanner.generate_plan(
-                framework=integration.framework,
+                framework_skill_id=integration.framework_skill_id,
                 widget_target_path=target_path,
                 assistant_data=asst_data,
                 has_knowledge_base=has_kb,
@@ -199,7 +199,7 @@ class IntegrationPipeline:
                 generated_files = generate_artifacts(
                     project_id=project.id,
                     assistant_data=asst_data,
-                    framework=integration.framework,
+                    framework_skill_id=integration.framework_skill_id,
                     widget_target_path=target_path,
                     existing_target_content=original_target,
                 )
@@ -217,7 +217,7 @@ class IntegrationPipeline:
             await db.commit()
 
             issues = StaticValidator.validate(
-                integration.framework,
+                integration.framework_skill_id,
                 plan,
                 generated_files,
                 original_files={target_path: original_target},
@@ -266,7 +266,7 @@ class IntegrationPipeline:
 This automated Pull Request adds the Fussion storefront assistant integration for **{project.name}**.
 
 ### Changes Summary
-- Framework: `{integration.framework.value}`
+- Framework: `{integration.framework_skill_id}`
 - Files created: `{', '.join(plan.files_to_create)}`
 - Files modified: `{', '.join(plan.files_to_modify)}`
 

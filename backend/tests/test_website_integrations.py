@@ -17,7 +17,6 @@ from app.models.project import Project
 from app.models.website_integration import (
     IntegrationRun,
     IntegrationRunStatus,
-    WebsiteFramework,
     WebsiteIntegration,
 )
 from app.schemas.website_integration import IntegrationPlanPayload
@@ -110,7 +109,7 @@ async def test_website_integration_crud_and_secrets(client: AsyncClient) -> None
             "repository_owner": "fussion-org",
             "repository_name": "storefront",
             "default_branch": "main",
-            "framework": "REACT_NEXTJS",
+            "framework_skill_id": "nextjs-app-router",
             "website_root_dir": "/",
             "widget_target_path": "app/layout.tsx",
             "github_token": raw_token,
@@ -120,7 +119,7 @@ async def test_website_integration_crud_and_secrets(client: AsyncClient) -> None
     data = create_resp.json()
     assert data["repository_owner"] == "fussion-org"
     assert data["repository_name"] == "storefront"
-    assert data["framework"] == "REACT_NEXTJS"
+    assert data["framework_skill_id"] == "nextjs-app-router"
     assert data["has_credentials"] is True
     # Verify strict secret redaction
     assert "github_token" not in data
@@ -211,7 +210,7 @@ async def test_repository_validation_success_and_failure(client: AsyncClient) ->
         json={
             "repository_owner": "fussion-org",
             "repository_name": "storefront",
-            "framework": "REACT_NEXTJS",
+            "framework_skill_id": "nextjs-app-router",
         },
     )
 
@@ -498,7 +497,7 @@ def test_deterministic_react_artifacts() -> None:
     art1 = generate_artifacts(
         project_id=proj_id,
         assistant_data=asst_data,
-        framework=WebsiteFramework.REACT_NEXTJS,
+        framework_skill_id="nextjs-app-router",
         widget_target_path="app/layout.tsx",
         existing_target_content=read_fixture("app/layout.tsx"),
     )
@@ -507,7 +506,7 @@ def test_deterministic_react_artifacts() -> None:
     art2 = generate_artifacts(
         project_id=proj_id,
         assistant_data=asst_data,
-        framework=WebsiteFramework.REACT_NEXTJS,
+        framework_skill_id="nextjs-app-router",
         widget_target_path="app/layout.tsx",
         existing_target_content=read_fixture("app/layout.tsx"),
     )
@@ -567,7 +566,7 @@ def test_deterministic_html_artifacts_and_idempotency() -> None:
     art = generate_artifacts(
         project_id=proj_id,
         assistant_data=asst_data,
-        framework=WebsiteFramework.GENERIC_HTML,
+        framework_skill_id="generic-html",
         widget_target_path="index.html",
         existing_target_content="<!DOCTYPE html>\n<html>\n<body>\n  <h1>Shop</h1>\n</body>\n</html>\n",
     )
@@ -593,7 +592,7 @@ def test_deterministic_html_artifacts_and_idempotency() -> None:
 
 def test_static_validator_success_and_failures() -> None:
     plan = IntegrationPlanPayload(
-        framework=WebsiteFramework.REACT_NEXTJS,
+        framework_skill_id="nextjs-app-router",
         files_to_create=["components/fussion/FussionAssistant.tsx", "lib/fussion-assistant.ts"],
         files_to_modify=["app/layout.tsx"],
     )
@@ -607,35 +606,35 @@ def test_static_validator_success_and_failures() -> None:
     }
 
     # 1. Valid files pass
-    issues = StaticValidator.validate(WebsiteFramework.REACT_NEXTJS, plan, valid_files, originals)
+    issues = StaticValidator.validate("nextjs-app-router", plan, valid_files, originals)
     assert len(issues) == 0
 
     # 2. Forbidden unexpected file modification rejected
     forbidden_files = dict(valid_files)
     forbidden_files["package.json"] = '{"name": "hacked"}'
     with pytest.raises(StaticValidationError) as exc_info:
-        StaticValidator.validate(WebsiteFramework.REACT_NEXTJS, plan, forbidden_files, originals)
+        StaticValidator.validate("nextjs-app-router", plan, forbidden_files, originals)
     assert "Forbidden files generated" in str(exc_info.value)
 
     # 3. Secret pattern in file rejected
     secret_files = dict(valid_files)
     secret_files["lib/fussion-assistant.ts"] += '\nconst token = "ghp_12345678901234567890123456789012";'
     with pytest.raises(StaticValidationError) as exc_info:
-        StaticValidator.validate(WebsiteFramework.REACT_NEXTJS, plan, secret_files, originals)
+        StaticValidator.validate("nextjs-app-router", plan, secret_files, originals)
     assert "secret" in str(exc_info.value).lower()
 
     # 4. Absolute system path rejected
     system_path_files = dict(valid_files)
     system_path_files["lib/fussion-assistant.ts"] += '\nconst p = "C:\\Windows\\System32";'
     with pytest.raises(StaticValidationError) as exc_info:
-        StaticValidator.validate(WebsiteFramework.REACT_NEXTJS, plan, system_path_files, originals)
+        StaticValidator.validate("nextjs-app-router", plan, system_path_files, originals)
     assert "path" in str(exc_info.value).lower()
 
     # 5. Missing markers in modified file rejected
     missing_marker_files = dict(valid_files)
     missing_marker_files["app/layout.tsx"] = original_layout
     with pytest.raises(StaticValidationError) as exc_info:
-        StaticValidator.validate(WebsiteFramework.REACT_NEXTJS, plan, missing_marker_files, originals)
+        StaticValidator.validate("nextjs-app-router", plan, missing_marker_files, originals)
     assert "markers missing" in str(exc_info.value).lower()
 
 
@@ -644,7 +643,7 @@ def test_static_validator_success_and_failures() -> None:
 # ============================================================
 
 NEXTJS_PLAN = IntegrationPlanPayload(
-    framework=WebsiteFramework.REACT_NEXTJS,
+    framework_skill_id="nextjs-app-router",
     files_to_create=["components/fussion/FussionAssistant.tsx", "lib/fussion-assistant.ts"],
     files_to_modify=["app/layout.tsx"],
 )
@@ -680,7 +679,7 @@ def nextjs_artifacts(existing_layout: str) -> dict[str, str]:
     return generate_artifacts(
         project_id="proj-1",
         assistant_data={"id": "asst-1", "name": "Bot"},
-        framework=WebsiteFramework.REACT_NEXTJS,
+        framework_skill_id="nextjs-app-router",
         widget_target_path="app/layout.tsx",
         existing_target_content=existing_layout,
     )
@@ -688,7 +687,7 @@ def nextjs_artifacts(existing_layout: str) -> dict[str, str]:
 
 def validate_layout(files: dict[str, str], original_layout: str) -> list[str]:
     return StaticValidator.validate(
-        WebsiteFramework.REACT_NEXTJS, NEXTJS_PLAN, files, {"app/layout.tsx": original_layout}
+        "nextjs-app-router", NEXTJS_PLAN, files, {"app/layout.tsx": original_layout}
     )
 
 
@@ -723,7 +722,7 @@ def test_preservation_rejects_deleted_line_and_reports_line_number() -> None:
 def test_preservation_requires_original_for_modified_file() -> None:
     files = nextjs_artifacts(read_fixture("app/layout.tsx"))
     with pytest.raises(StaticValidationError) as exc_info:
-        StaticValidator.validate(WebsiteFramework.REACT_NEXTJS, NEXTJS_PLAN, files, {})
+        StaticValidator.validate("nextjs-app-router", NEXTJS_PLAN, files, {})
     assert "original content was not read" in str(exc_info.value)
 
 
@@ -819,7 +818,7 @@ async def test_pipeline_execution_commit_and_pr(client: AsyncClient) -> None:
             "repository_owner": "fussion-org",
             "repository_name": "storefront",
             "default_branch": "main",
-            "framework": "REACT_NEXTJS",
+            "framework_skill_id": "nextjs-app-router",
             "widget_target_path": "app/layout.tsx",
             "github_token": "ghp_mock_token_for_test",
         },
@@ -931,7 +930,7 @@ async def test_pipeline_preserves_existing_layout_content(client: AsyncClient) -
         json={
             "repository_owner": "rwenzori",
             "repository_name": "storefront",
-            "framework": "REACT_NEXTJS",
+            "framework_skill_id": "nextjs-app-router",
             "widget_target_path": "app/layout.tsx",
         },
     )
@@ -980,7 +979,7 @@ async def test_missing_target_is_refused_not_created(client: AsyncClient) -> Non
         json={
             "repository_owner": "rwenzori",
             "repository_name": "storefront",
-            "framework": "REACT_NEXTJS",
+            "framework_skill_id": "nextjs-app-router",
             "widget_target_path": "src/app/layout.tsx",
         },
     )

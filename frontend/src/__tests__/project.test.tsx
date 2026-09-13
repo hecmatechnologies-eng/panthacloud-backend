@@ -21,6 +21,7 @@ import {
 import {
   websiteIntegrationApi,
   WebsiteIntegrationConfig,
+  WebsiteAnalysis,
 } from '@/lib/api/integration';
 import { knowledgeApi } from '@/lib/api/knowledge';
 import { assistantApi, AssistantConfig } from '@/lib/api/assistant';
@@ -34,6 +35,8 @@ vi.mock('@/lib/api/integration', () => ({
     delete: vi.fn(),
     validate: vi.fn(),
     getPlan: vi.fn(),
+    analyze: vi.fn(),
+    getLatestAnalysis: vi.fn(),
     startRun: vi.fn(),
     listRuns: vi.fn(),
     getRun: vi.fn(),
@@ -100,13 +103,30 @@ const mockWebsiteConfig: WebsiteIntegrationConfig = {
   repository_name: 'storefront-web',
   default_branch: 'main',
   integration_branch: 'fussion/assistant-integration',
-  framework: 'REACT_NEXTJS',
+  framework_skill_id: 'nextjs-app-router',
   website_root_dir: '/',
   widget_target_path: 'app/layout.tsx',
   status: 'CONNECTED',
   has_credentials: true,
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',
+};
+
+const mockAnalysis: WebsiteAnalysis = {
+  id: 'analysis-1',
+  integration_id: 'integ-1',
+  commit_sha: 'abc123',
+  framework_skill_id: 'nextjs-app-router',
+  router: 'app',
+  language: 'typescript',
+  package_manager: 'pnpm',
+  build_command: 'pnpm build',
+  entry_points: ['src/app/layout.tsx'],
+  integration_candidates: [{ path: 'app/layout.tsx', confidence: 0.95, reason: 'Root layout' }],
+  design_tokens: {},
+  protected_paths: [],
+  unsupported_reason: null,
+  created_at: '2026-01-01T00:00:00Z',
 };
 
 const mockAssistantConfig: AssistantConfig = {
@@ -184,15 +204,16 @@ describe('Fussion Project Studio — Guided Sequential UX & Website Stage', () =
       return currentWebsiteConfig;
     });
     vi.mocked(websiteIntegrationApi.create).mockImplementation(async (_, __, input) => {
-      currentWebsiteConfig = {
+      const created: WebsiteIntegrationConfig = {
         ...mockWebsiteConfig,
         repository_owner: input.repository_owner,
         repository_name: input.repository_name,
         default_branch: input.default_branch || 'main',
-        framework: input.framework || 'REACT_NEXTJS',
+        framework_skill_id: input.framework_skill_id || 'nextjs-app-router',
         widget_target_path: input.widget_target_path || 'app/layout.tsx',
       };
-      return currentWebsiteConfig;
+      currentWebsiteConfig = created;
+      return created;
     });
     vi.mocked(websiteIntegrationApi.delete).mockImplementation(async () => {
       currentWebsiteConfig = null;
@@ -447,8 +468,6 @@ describe('Fussion Project Studio — Guided Sequential UX & Website Stage', () =
           repository_owner: 'acme-corp',
           repository_name: 'storefront-web',
           default_branch: 'main',
-          framework: 'REACT_NEXTJS',
-          widget_target_path: 'app/layout.tsx',
         })
       );
     });
@@ -478,6 +497,46 @@ describe('Fussion Project Studio — Guided Sequential UX & Website Stage', () =
     await waitFor(() => {
       expect(websiteIntegrationApi.delete).toHaveBeenCalledWith('org-123', 'proj-1');
       expect(screen.getByTestId('website-connection-form')).toBeDefined();
+    });
+  });
+
+  it('detects the framework and integration point from the repository analysis', async () => {
+    currentWebsiteConfig = { ...mockWebsiteConfig };
+    vi.mocked(websiteIntegrationApi.get).mockResolvedValue(mockWebsiteConfig);
+    vi.mocked(websiteIntegrationApi.getLatestAnalysis).mockResolvedValue(null);
+    vi.mocked(websiteIntegrationApi.analyze).mockResolvedValue(mockAnalysis);
+
+    render(
+      <ThemeProvider>
+        <AuthProvider>
+          <ProjectProvider
+            initialProjects={[mockProject1]}
+            initialCurrentProject={mockProject1}
+            initialOrg={mockOrg}
+          >
+            <AppShell>
+              <StudioPage />
+            </AppShell>
+          </ProjectProvider>
+        </AuthProvider>
+      </ThemeProvider>
+    );
+
+    fireEvent.click(screen.getByTestId('nav-website'));
+    await waitFor(() => {
+      expect(screen.getByTestId('website-connected-panel')).toBeDefined();
+    });
+
+    // The framework and target are detected, never chosen: no dropdown, no typed path.
+    expect(screen.queryByTestId('framework-select')).toBeNull();
+    expect(screen.queryByTestId('widget-target-input')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('analyze-website-button'));
+
+    await waitFor(() => {
+      expect(websiteIntegrationApi.analyze).toHaveBeenCalledWith('org-123', 'proj-1');
+      expect(screen.getByTestId('detected-framework').textContent).toBe('nextjs-app-router');
+      expect(screen.getByTestId('detected-target').textContent).toBe('app/layout.tsx');
     });
   });
 
