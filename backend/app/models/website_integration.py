@@ -204,6 +204,12 @@ class IntegrationRun(BaseModel):
         default=dict,
         nullable=False,
     )
+    # The per-file change set this run committed, recorded at generation time and served verbatim
+    # (C12). NULL means the run recorded none — refused before generating, or predates C12.
+    change_set: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSON,
+        nullable=True,
+    )
     generated_files_count: Mapped[int] = mapped_column(
         Integer,
         default=0,

@@ -230,6 +230,20 @@ async def test_run_refuses_a_protected_target_before_touching_the_repository(cli
     assert "protected" in run.json()["detail"].lower()
     assert mock.branches == branches_before, "no branch may be created for a protected target"
 
+    # The run recorded no plan, so the diff endpoint reports 409 rather than inventing a diff (C12).
+    runs = (
+        await client.get(
+            f"/api/v1/organizations/{org_id}/projects/{project_id}/website-integrations/runs",
+            headers=hdr,
+        )
+    ).json()
+    diff = await client.get(
+        f"/api/v1/organizations/{org_id}/projects/{project_id}/website-integrations"
+        f"/runs/{runs[0]['id']}/diff",
+        headers=hdr,
+    )
+    assert diff.status_code == 409
+
 
 # ============================================================
 # 2. MARKER-PAIR DISCIPLINE

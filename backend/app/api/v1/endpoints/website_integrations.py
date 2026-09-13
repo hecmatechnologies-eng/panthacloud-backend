@@ -584,30 +584,38 @@ async def get_run_diff(
             detail="Integration run not found.",
         )
 
-    # Served from what this run actually recorded, never re-derived. Re-deriving from the *current*
-    # assistant configuration and a stub layout is what showed the Studio a file the pull request
-    # never contained (CLAUDE.md §3.1), and re-deriving content now would repeat that: the run's
-    # inputs were the repository at a pinned commit, which is not what the config says today.
-    #
-    # File *content* is not persisted yet (§3.7), so this reports the paths and actions the run
-    # committed and points at the pull request for the content itself. Raising a TypeError here —
-    # which is what re-deriving did — meant a 500 on every successful run.
+    # Served from what this run recorded, never re-derived (CLAUDE.md §3.1, §3.7). The change set
+    # is computed once at generation time from the exact bytes the run wrote, so what the Studio
+    # shows is what the pull request contains.
     plan_summary = run.plan_summary or {}
-    created = [str(path) for path in plan_summary.get("files_to_create", [])]
-    modified = [str(path) for path in plan_summary.get("files_to_modify", [])]
+    change_set = run.change_set or []
 
-    diff_items = [
-        DiffFileItem(
-            path=path,
-            action=action,
-            diff=(
-                "Content is not retained for completed runs. Review the pull request for the exact "
-                "diff Fussion committed."
-            ),
-        )
-        for action, paths in (("create", created), ("modify", modified))
-        for path in paths
-    ]
+    if change_set:
+        diff_items = [
+            DiffFileItem(
+                path=str(item.get("path", "")),
+                action=str(item.get("action", "")),
+                diff=str(item.get("diff", "")),
+            )
+            for item in change_set
+        ]
+    else:
+        # A run that predates C12, or one refused or failed before generating anything: report the
+        # paths it planned and point at the pull request for any content.
+        created = [str(path) for path in plan_summary.get("files_to_create", [])]
+        modified = [str(path) for path in plan_summary.get("files_to_modify", [])]
+        diff_items = [
+            DiffFileItem(
+                path=path,
+                action=action,
+                diff=(
+                    "This run recorded no change set. If it opened a pull request, review it for "
+                    "the exact diff Fussion committed."
+                ),
+            )
+            for action, paths in (("create", created), ("modify", modified))
+            for path in paths
+        ]
 
     if not diff_items:
         raise HTTPException(

@@ -17,7 +17,7 @@ third, different numbering and is archived under `docs/archive/`.
 | :--- | :--- | :--- |
 | **A. Truth & safety** | layout-overwrite fix, workspace clone+read, one roadmap, key removal, 05–08 decision | **IN PROGRESS** — layout-overwrite fix (`dd10167`), roadmap reconciliation (`d91d821`), dev-secret removal from source and the git-history rewrite (2026-09-12), the `@/` alias fix (B8-gated) and the 05–08 decision are done. The one item left, `SandboxProvider` + workspace rename, is now slice **C14** (the B5-or-later trigger has passed) |
 | **B. Runtime plane** | `STEP-B-SLICES.md` B1–B8 | **IN PROGRESS** — B1 (`95b63eb`) through B6 done; **B7 (SSE) and B8 (real widget + customer-origin CORS) remain**. The owner's B7 deferral is re-scoped as an MVP gap in `GAP-CLOSURE-PLAN.md` (acceptance #8 names a *streamed* answer); B7 precedes B8 |
-| **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **IN PROGRESS** — C1–C11 done (`acda350`, `16a13a0`, `d697e7d`, C11). **C12–C15** remain, per `GAP-CLOSURE-PLAN.md`: C12 run change set, C13 Studio SSE leak, C14 contract closeout, C15 memory reconciliation |
+| **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **IN PROGRESS** — C1–C12 done. **C13–C15** remain, per `GAP-CLOSURE-PLAN.md`: C13 Studio SSE leak, C14 contract closeout, C15 memory reconciliation |
 | **D. Coding agent** | write capability, generated-code scan, ChangeSet → PR, bounded repair | NOT STARTED — no slice breakdown yet; post-MVP per `FEASIBILITY.md` §4 (the deterministic PR path already covers acceptance #6) |
 
 The gap between the code and the Part C acceptance criteria, and the ordered path to close it, is
@@ -2706,4 +2706,63 @@ refuse (it fails later at "target not found").
 - Ruff, from `backend/`: `All checks passed!`
 - No migration in this slice.
 - Backend suite, from the repository root: **554 passed, 2 skipped**.
+- Frontend, from `frontend/`: `pnpm build` clean; `pnpm test` — **109 passed** (9 files).
+
+## Step C (FEASIBILITY §3) · Slice C12 — the run change set
+
+**Rigour tier: 2 — Standard** (CLAUDE.md §9.0), declared in `STEP-C-SLICES.md`. Backend behaviour with
+no customer-repo, credential or cross-tenant path: it records and serves what the run already
+generated.
+
+**Status: COMPLETED** — the reviewer returned **PASS WITH FINDINGS**, no BLOCKING or SHOULD FIX; the
+CONSIDERs are logged and the one untested branch is now covered. Committed with this entry.
+
+### Objective
+Close `CLAUDE.md` §3.7: `GET /runs/{id}/diff` served a placeholder because file content was not
+persisted, and before that it re-derived a diff the pull request never contained. Persist the change
+set at generation time and serve it verbatim.
+
+### Completed Work
+- **`app/services/integration/changeset.py`** — `build_change_set` computes a per-file unified diff
+  from the exact bytes the run wrote: created files against empty, modified files against the
+  content that was read. Paths sorted, so the stored set is deterministic.
+- **`IntegrationRun.change_set`** (JSON, nullable) + **migration `0020_run_change_set`** — nullable
+  by design, so there is no backfill and no seed module. Reversible on both dialects.
+- **`pipeline.py`** — the change set is recorded after generation and before validation, so a run
+  that later fails still records what it had generated. It persists with the run on both the success
+  and failure commit paths.
+- **`GET /runs/{id}/diff`** — serves the stored set verbatim; a pre-C12 or refused run falls back to
+  its recorded plan paths and a placeholder, and a run with no plan at all returns 409. It never
+  re-derives content from the current configuration.
+- **Tests** — the change-set unit tests, the happy-path diff (real content), the refused-run
+  fallback, and the 409 branch.
+
+### Architectural & Technology Decisions
+1. **Compute once, at generation time, from the bytes written.** The stored after-side is the same
+   dict `commit_files` receives, so the served diff cannot disagree with the pull request.
+2. **Nullable, not backfilled.** An absent change set means "none" — refused before generating, or
+   predates C12 — which is a real state, so no seed module is required.
+3. **The change set is not in `IntegrationRunRead`.** List and detail responses do not carry customer
+   file content; only the dedicated diff endpoint serves it.
+
+### Review history
+One round (Tier 2), fresh reviewer — **PASS WITH FINDINGS**, no BLOCKING or SHOULD FIX. CONSIDERs
+logged: a create path that already exists at `base_sha` shows as a full add (an inherited
+planner-classification limit, reachable only on a re-run against an already-integrated repo); a
+failed run's diff describes generated-but-uncommitted content (intentional, disambiguated by
+`status`/`error_message`); the pre-C12 fallback and 409 branches were untested (now covered).
+
+### Deviations
+- **None from the slice definition.** The fallback for pre-C12 runs is a small addition the slice
+  plan implies (existing runs have no change set).
+
+### Blockers / Deferred
+- **Create-path fidelity on a re-run** — inherited from the planner's create/modify classification,
+  not introduced here; a gate on the re-integration flow.
+
+### Verification (2026-09-13)
+- Ruff, from `backend/`: `All checks passed!`
+- Migration 0020: `upgrade → downgrade → upgrade` verified on **both SQLite and a scratch Postgres
+  database**. No seed — the column is nullable with no backfill.
+- Backend suite, from the repository root: **556 passed, 2 skipped**.
 - Frontend, from `frontend/`: `pnpm build` clean; `pnpm test` — **109 passed** (9 files).

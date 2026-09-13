@@ -20,6 +20,7 @@ from app.models.website_integration import (
 )
 from app.services.analysis.queries import get_latest_analysis
 from app.services.integration.artifacts import WidgetInjectionError, generate_artifacts
+from app.services.integration.changeset import build_change_set
 from app.services.integration.github import get_git_provider
 from app.services.integration.planner import IntegrationPlanner
 from app.services.integration.sandbox import SandboxManager
@@ -216,6 +217,15 @@ class IntegrationPipeline:
                 raise IntegrationRefusedError(
                     f"Cannot integrate into '{target_path}': {exc}"
                 ) from exc
+
+            # 6b. Record the exact change set this run generated, so the Studio serves what the pull
+            # request contains rather than re-deriving it (C12, CLAUDE.md §3.7). Recorded before
+            # validation, so a run that later fails still shows what it had generated.
+            run.change_set = build_change_set(
+                generated_files,
+                plan.files_to_create,
+                {target_path: original_target},
+            )
 
             # 7. Write files into sandbox
             for rel_path, content in generated_files.items():

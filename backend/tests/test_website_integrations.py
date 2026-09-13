@@ -903,10 +903,8 @@ async def test_pipeline_execution_commit_and_pr(client: AsyncClient) -> None:
     assert run_detail.status_code == 200
     assert run_detail.json()["id"] == run_id
 
-    # 7. Run diff: served from what the run recorded, never re-derived. Content is not persisted
-    # yet (CLAUDE.md §3.7), so the paths and actions are reported and the pull request carries the
-    # content. Re-deriving raised TypeError — a 500 on every successful run once the provider
-    # became real — and before that it showed a file the pull request never contained (§3.1).
+    # 7. Run diff: served from the change set the run recorded at generation time, never re-derived
+    # (C12, CLAUDE.md §3.7).
     diff_resp = await client.get(
         f"/api/v1/organizations/{org_id}/projects/{proj_id}/website-integrations/runs/{run_id}/diff",
         headers=hdr,
@@ -916,9 +914,14 @@ async def test_pipeline_execution_commit_and_pr(client: AsyncClient) -> None:
     by_path = {item["path"]: item for item in diff_data["files"]}
     assert by_path["app/layout.tsx"]["action"] == "modify"
     assert by_path["components/fussion/FussionAssistant.tsx"]["action"] == "create"
-    # Not the file's content: nothing here may be re-derived from the current configuration.
-    assert "FussionAssistant" not in by_path["components/fussion/FussionAssistant.tsx"]["diff"]
-    assert "pull request" in by_path["app/layout.tsx"]["diff"].lower()
+    # The stored diff is the real content the run committed, not a placeholder or a re-derived stub.
+    created_diff = by_path["components/fussion/FussionAssistant.tsx"]["diff"]
+    assert "+export" in created_diff and "FussionAssistant" in created_diff
+    modified_diff = by_path["app/layout.tsx"]["diff"]
+    assert modified_diff.startswith("--- a/app/layout.tsx")
+    # The original content is the "before" side, and the widget import is the "after" side.
+    assert 'import type { Metadata } from "next";' in modified_diff
+    assert "FussionAssistant" in modified_diff
 
     # 8. Get PR info
     pr_resp = await client.get(
@@ -1034,6 +1037,14 @@ async def test_missing_target_is_refused_not_created(client: AsyncClient) -> Non
     assert runs[0]["status"] == "FAILED"
     assert runs[0]["plan_summary"]["target_status"] == "missing"
     assert runs[0]["plan_summary"]["base_sha"] == mock_git.branches[("rwenzori", "storefront", "main")]
+
+    # A run with no change set falls back to its recorded plan paths and a placeholder — it never
+    # re-derives content from the current configuration (C12).
+    diff = await client.get(f"{base}/runs/{runs[0]['id']}/diff", headers=hdr)
+    assert diff.status_code == 200
+    item = {f["path"]: f for f in diff.json()["files"]}["src/app/layout.tsx"]
+    assert item["action"] == "modify"
+    assert "no change set" in item["diff"].lower()
 
     async with get_session_factory()() as db:
         stmt = select(AuditEvent.event_type).where(AuditEvent.project_id == uuid.UUID(proj_id))
