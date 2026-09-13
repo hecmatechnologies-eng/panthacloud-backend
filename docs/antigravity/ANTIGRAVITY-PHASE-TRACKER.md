@@ -17,7 +17,7 @@ third, different numbering and is archived under `docs/archive/`.
 | :--- | :--- | :--- |
 | **A. Truth & safety** | layout-overwrite fix, workspace clone+read, one roadmap, key removal, 05–08 decision | **IN PROGRESS** — layout-overwrite fix (`dd10167`), roadmap reconciliation (`d91d821`), dev-secret removal from source and the git-history rewrite (2026-09-12), the `@/` alias fix (B8-gated) and the 05–08 decision are done. The one item left, `SandboxProvider` + workspace rename, is now slice **C14** (the B5-or-later trigger has passed) |
 | **B. Runtime plane** | `STEP-B-SLICES.md` B1–B8 | **IN PROGRESS** — B1 (`95b63eb`) through B6 done; **B7 (SSE) and B8 (real widget + customer-origin CORS) remain**. The owner's B7 deferral is re-scoped as an MVP gap in `GAP-CLOSURE-PLAN.md` (acceptance #8 names a *streamed* answer); B7 precedes B8 |
-| **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **IN PROGRESS** — C1–C13 done. **C14–C15** remain, per `GAP-CLOSURE-PLAN.md`: C14 contract closeout (`SandboxProvider` + `AgentRun.skill_versions`), C15 memory reconciliation |
+| **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **IN PROGRESS** — C1–C14 done. **C15** remains, per `GAP-CLOSURE-PLAN.md`: reconcile FR-058–062 (project memory) in the plan and tracker |
 | **D. Coding agent** | write capability, generated-code scan, ChangeSet → PR, bounded repair | NOT STARTED — no slice breakdown yet; post-MVP per `FEASIBILITY.md` §4 (the deterministic PR path already covers acceptance #6) |
 
 The gap between the code and the Part C acceptance criteria, and the ordered path to close it, is
@@ -2822,3 +2822,49 @@ the composition hand-mirrors the permission set.
 - No migration in this slice.
 - Backend suite, from the repository root: **561 passed, 2 skipped**.
 - Frontend: no change; last run `pnpm build` clean, `pnpm test` **109 passed**.
+
+## Step C (FEASIBILITY §3) · Slice C14 — the sandbox contract
+
+**Rigour tier: 2 — Standard** (CLAUDE.md §9.0), declared in `STEP-C-SLICES.md`. A naming and
+contract change with no behaviour on any request path; the one live method added (`run`) refuses.
+
+**Status: COMPLETED** — reviewer pending; see Verification for the run that was interrupted.
+
+### Objective
+`CLAUDE.md` §2/§3: the class named `SandboxManager` provides no process, filesystem or network
+isolation — the name claims otherwise. Rename it to what it is, and define the `SandboxProvider`
+Protocol a real backend must satisfy.
+
+### Completed Work
+- **`SandboxManager` → `LocalWorkspaceProvider`** (`app/services/integration/sandbox.py`): a
+  path-checked per-run file workspace, not a sandbox. `pipeline.py` now holds `self.workspace`, and
+  `services/integration/__init__.py` exports the new name.
+- **`SandboxProvider` Protocol + `SandboxResult` + `SandboxNotSupportedError`**: the contract for a
+  future container backend.
+- **`LocalWorkspaceProvider.run()` refuses** with `SandboxNotSupportedError`, so nothing pretends to
+  execute customer code on the control plane (`CLAUDE.md` §4.6).
+- **Tests** — the workspace provider satisfies the Protocol shape; `run()` refuses.
+
+### Architectural & Technology Decisions
+1. **The name now matches the capability.** File containment is a workspace concern; isolation is a
+   sandbox concern, and no sandbox exists.
+2. **The Protocol is defined before the implementation is needed**, because a second implementation
+   (the container) is now plausible — the condition `CLAUDE.md` §3 set for adding it.
+3. **`AgentRun.skill_versions` needed no work here.** It was already populated from the matched skill
+   packages when the analyst was built (C8), contrary to C6's "empty until C7" note.
+
+### Deviations
+- **The `AgentRun.skill_versions` half of the slice was already delivered** in C8; this slice is the
+  sandbox contract alone. Recorded rather than re-implemented.
+
+### Blockers / Deferred
+- **A container-backed `SandboxProvider`** — post-MVP per `FEASIBILITY.md` §4; the Protocol is the
+  seam.
+
+### Verification (2026-09-13)
+- Ruff, from `backend/`: `All checks passed!`
+- No migration in this slice.
+- **Full suite run interrupted by the operator.** The affected suites were run instead:
+  `test_website_integrations.py` + `test_sandbox_provider.py` + `test_integration_safety.py` —
+  **186 passed**. The full suite should be re-run before the next release.
+- Frontend: no change.

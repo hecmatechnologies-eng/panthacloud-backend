@@ -10,8 +10,11 @@ from app.services.integration.github import (
 from app.services.integration.pipeline import IntegrationPipeline, pipeline_service
 from app.services.integration.planner import IntegrationPlanner
 from app.services.integration.sandbox import (
+    LocalWorkspaceProvider,
     SandboxLimitExceededError,
-    SandboxManager,
+    SandboxNotSupportedError,
+    SandboxProvider,
+    SandboxResult,
     SandboxSecurityError,
 )
 from app.services.integration.validation import StaticValidationError, StaticValidator
@@ -22,9 +25,12 @@ __all__ = [
     "GitProvider",
     "IntegrationPipeline",
     "IntegrationPlanner",
+    "LocalWorkspaceProvider",
     "MockGitProvider",
     "SandboxLimitExceededError",
-    "SandboxManager",
+    "SandboxNotSupportedError",
+    "SandboxProvider",
+    "SandboxResult",
     "SandboxSecurityError",
     "StaticValidationError",
     "StaticValidator",

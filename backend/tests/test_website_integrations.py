@@ -33,7 +33,7 @@ from app.services.integration.github import (
     MockGitProvider,
     set_git_provider,
 )
-from app.services.integration.sandbox import SandboxManager, SandboxSecurityError
+from app.services.integration.sandbox import LocalWorkspaceProvider, SandboxSecurityError
 from app.services.integration.validation import StaticValidationError, StaticValidator
 
 DISTINCTIVE_REPO = Path(__file__).parent / "fixtures" / "repositories" / "nextjs-distinctive-layout"
@@ -430,7 +430,7 @@ async def test_website_integration_rbac(client: AsyncClient) -> None:
 
 def test_sandbox_path_traversal_rejection() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
-        sbx = SandboxManager(base_dir=tmpdir)
+        sbx = LocalWorkspaceProvider(base_dir=tmpdir)
         org_id = uuid.uuid4()
         proj_id = uuid.uuid4()
         run_id = uuid.uuid4()
@@ -471,7 +471,7 @@ def test_sandbox_path_traversal_rejection() -> None:
 
 def test_sandbox_isolation_between_runs() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
-        sbx = SandboxManager(base_dir=tmpdir)
+        sbx = LocalWorkspaceProvider(base_dir=tmpdir)
         org_id = uuid.uuid4()
         proj_id = uuid.uuid4()
         run1 = uuid.uuid4()
@@ -494,7 +494,7 @@ def test_sandbox_isolation_between_runs() -> None:
 
 def test_sandbox_keeps_line_endings_exactly() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
-        sbx = SandboxManager(base_dir=tmpdir)
+        sbx = LocalWorkspaceProvider(base_dir=tmpdir)
         path, _ = sbx.allocate(uuid.uuid4(), uuid.uuid4(), uuid.uuid4())
         content = "line one\r\nline two\nline three\r\n"
 

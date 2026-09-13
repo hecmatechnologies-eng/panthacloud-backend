@@ -23,7 +23,7 @@ from app.services.integration.artifacts import WidgetInjectionError, generate_ar
 from app.services.integration.changeset import build_change_set
 from app.services.integration.github import get_git_provider
 from app.services.integration.planner import IntegrationPlanner
-from app.services.integration.sandbox import SandboxManager
+from app.services.integration.sandbox import LocalWorkspaceProvider
 from app.services.integration.validation import StaticValidator
 
 logger = logging.getLogger("fussion.integration.pipeline")
@@ -61,8 +61,8 @@ async def _record_audit(
 
 
 class IntegrationPipeline:
-    def __init__(self, sandbox_manager: SandboxManager | None = None) -> None:
-        self.sandbox = sandbox_manager or SandboxManager()
+    def __init__(self, workspace_provider: LocalWorkspaceProvider | None = None) -> None:
+        self.workspace = workspace_provider or LocalWorkspaceProvider()
 
     async def execute(
         self,
@@ -118,7 +118,7 @@ class IntegrationPipeline:
         branch_name = f"fussion/integration/{short_run}"
 
         # 1. Allocate sandbox
-        sandbox_path, sandbox_ref = self.sandbox.allocate(org_id, project.id, run_id)
+        sandbox_path, sandbox_ref = self.workspace.allocate(org_id, project.id, run_id)
 
         # 2. Record initial IntegrationRun (the plan is recorded once the target has been read)
         run = IntegrationRun(
@@ -229,7 +229,7 @@ class IntegrationPipeline:
 
             # 7. Write files into sandbox
             for rel_path, content in generated_files.items():
-                self.sandbox.write_file(sandbox_path, rel_path, content)
+                self.workspace.write_file(sandbox_path, rel_path, content)
 
             # 8. Static validation
             integration.status = WebsiteIntegrationStatus.VALIDATING
@@ -381,7 +381,7 @@ This automated Pull Request adds the Fussion storefront assistant integration fo
 
         finally:
             # Clean up sandbox workspace files safely
-            self.sandbox.cleanup(sandbox_path)
+            self.workspace.cleanup(sandbox_path)
 
 
 pipeline_service = IntegrationPipeline()

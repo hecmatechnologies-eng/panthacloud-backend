@@ -2,7 +2,10 @@ import os
 import re
 import shutil
 import uuid
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 from app.core.config import settings
 
@@ -21,16 +24,62 @@ class SandboxLimitExceededError(Exception):
     """Raised when sandbox resource limits are exceeded."""
 
 
-class SandboxManager:
+class SandboxNotSupportedError(Exception):
+    """Raised when code execution is requested but no sandbox backend exists (CLAUDE.md §4.6)."""
+
+
+@dataclass(frozen=True)
+class SandboxResult:
+    """The outcome of executing a command in a sandbox."""
+
+    exit_code: int
+    stdout: str
+    stderr: str
+
+
+@runtime_checkable
+class SandboxProvider(Protocol):
+    """Executes a command in an isolated sandbox.
+
+    No backend implements this: nothing executes customer code on the control plane
+    (CLAUDE.md §4.6). The Protocol is defined now so a container-backed implementation is a
+    drop-in later; until then the workspace provider refuses rather than pretending to run.
     """
-    Manages isolated, per-run sandbox workspaces for website modification.
-    Enforces strict path containment, traversal rejection, and resource limits.
-    FILE OPERATIONS ONLY: Execution of arbitrary repository code is strictly prohibited.
+
+    def run(
+        self,
+        workspace_path: Path,
+        command: Sequence[str],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> SandboxResult: ...
+
+
+class LocalWorkspaceProvider:
+    """A per-run, path-checked file workspace — **not** a sandbox.
+
+    It provides containment and resource limits for Fussion's own file writes, and no process,
+    filesystem or network isolation. It therefore refuses `run()`: executing customer code needs a
+    container-backed `SandboxProvider`, which does not exist yet (CLAUDE.md §2, §4.6).
     """
 
     def __init__(self, base_dir: str | None = None) -> None:
         root = Path(base_dir or settings.WORKSPACE_BASE_DIR).resolve()
         self.base_dir = (root / "sandboxes").resolve()
+
+    def run(
+        self,
+        workspace_path: Path,
+        command: Sequence[str],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> SandboxResult:
+        """Refuse: Fussion does not execute customer code on the control plane (CLAUDE.md §4.6)."""
+        del workspace_path, command, timeout_seconds
+        raise SandboxNotSupportedError(
+            "No sandbox backend is configured. Fussion does not execute customer code on the "
+            "control plane; a container-backed SandboxProvider is required."
+        )
 
     def get_sandbox_path(
         self,
