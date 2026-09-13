@@ -25,6 +25,9 @@ class ExecutionContext:
     # The pinned revision the agent reads at. Present from C2 so C4's tools can read a commit,
     # rather than widening every call site later.
     commit_sha: str | None = None
+    # Opaque handle to the isolated workspace the run reads from (AGENT-ARCHITECTURE §7). Never a
+    # physical path: the reader resolves it server-side.
+    workspace_reference: str | None = None
     agent_run_id: uuid.UUID | None = None
 
     def has_capability(self, capability: str) -> bool:
@@ -44,5 +47,6 @@ class ExecutionContext:
             "agent_version": self.agent_version,
             "capabilities": sorted(self.capabilities),
             "commit_sha": self.commit_sha,
+            "workspace_reference": self.workspace_reference,
             "agent_run_id": str(self.agent_run_id) if self.agent_run_id else None,
         }

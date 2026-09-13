@@ -17,7 +17,7 @@ third, different numbering and is archived under `docs/archive/`.
 | :--- | :--- | :--- |
 | **A. Truth & safety** | layout-overwrite fix, workspace clone+read, one roadmap, key removal, 05–08 decision | **IN PROGRESS** — layout-overwrite fix (`dd10167`), roadmap reconciliation (`d91d821`), dev-secret removal from source and the git-history rewrite (2026-09-12) done. Remaining items and their triggers are tabled in `CLAUDE.md` §3: `@/` alias before B8, the 05–08 decision before step C, and `SandboxProvider` with B5 or later |
 | **B. Runtime plane** | `STEP-B-SLICES.md` B1–B8 | **IN PROGRESS** — B1 done (`95b63eb`); B2 done; B3 done; B4 done; B5 done; B6 done; **B7 (SSE) deferred by owner**; B8 next |
-| **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **IN PROGRESS** — `STEP-C-SLICES.md` C1–C10; C1 done; C2 done; C3 done; C4 next |
+| **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **IN PROGRESS** — `STEP-C-SLICES.md` C1–C10; C1 done; C2 done; C3 done; C4 done; C5 next |
 | **D. Coding agent** | write capability, generated-code scan, ChangeSet → PR, bounded repair | NOT STARTED — no slice breakdown yet |
 
 ## Phase history (legacy numbering — record only, never cited for new work)
@@ -2102,4 +2102,81 @@ Checked against `STEP-C-SLICES.md` C3:
 ### Verification (2026-09-13)
 - Ruff, from `backend/`: `All checks passed!`
 - Backend suite, from the repository root: **458 passed**.
+- No migration in this slice.
+
+---
+
+## Step C (FEASIBILITY §3) · Slice C4 — read-only repository tools
+
+**Rigour tier: 1 — Maximum** (CLAUDE.md §9.0), declared in `STEP-C-SLICES.md` and unchanged. These
+tools are the analyst's entire view of a customer repository, and a read tool that returns a secret
+is a credential leak to the model.
+
+**Status: COMPLETED** — fussion-reviewer **BLOCKED** on rounds 1 and 2 (credential reachability),
+then **PASS WITH FINDINGS** on round 3; every finding fixed and re-verified. Committed with this
+entry.
+
+### Objective
+FR-064, FR-067, FR-070: `read_tree`, `read_file`, `search_code` over a containment-checked
+workspace — bounded output with an explicit truncation signal, model-readable errors, and scope
+resolved from the `ExecutionContext`.
+
+### Completed Work
+- **`app/services/repository/reader.py`** — the `RepositoryReader` Protocol and DTOs, and
+  `LocalWorkspaceReader`: containment-checked, denial-filtered, symlink-safe, and off the event
+  loop (`asyncio.to_thread`).
+- **`app/tools/repository.py`** — `ReadTreeTool`, `ReadFileTool`, `SearchCodeTool`; all read-only,
+  capability `repository.read`; `offset`/`limit` and a `total` with `truncated`; reader resolved
+  from the context via an injected resolver.
+- **`ExecutionContext.workspace_reference`** — the opaque handle the future resolver resolves.
+- **Tests** (`tests/test_repository_tools.py`, 16 + 2 skipped) — listing, paging, truncation,
+  missing files, traversal, secrets/VCS paths (case, trailing-dot, short-name and linked-directory
+  variants), symlink escapes, scope from the context, and a gateway round-trip.
+
+### Architectural & Technology Decisions
+1. **The read source is the local workspace clone (AGENT-ARCHITECTURE §7), not the network.**
+   `GitProvider` was not extended: tree listing and code search are natural on a checkout, and the
+   Phase 05 acquisition/workspace substrate already clones at a pinned SHA with path containment.
+2. **Containment, then denial, then read.** `WorkspaceManager.assert_path_contained` rejects `../`,
+   absolute and escaping-symlink paths; denial is then judged **on the resolved target** so a
+   directory link into `.git` cannot smuggle a read.
+3. **Secrecy is a first-class rule of the reader.** VCS metadata, dependencies, build output,
+   `.env*`, credential/key files and every `protected_paths.protected_reason` path are never
+   listed, read or searched. Matching is case-insensitive and trailing-dot/space normalised, because
+   Windows folds both. The workspace's `.git/config` holds the clone token — this is the leak the
+   reviews caught.
+4. **Blocking filesystem work runs in a thread**, so a large search cannot stall the event loop.
+5. **Bounded output with `offset` + `total` + `truncated`** (FR-067), so a large repository is
+   pageable rather than permanently unreachable.
+
+### Review history
+Three rounds (Tier 1). Rounds 1 and 2 returned **BLOCKED**; round 3 passed.
+1. **Round 1 BLOCKED — `read_file(".git/config")` returned the clone's GitHub token**, and `search`
+   followed a committed symlink out of the workspace. Fixed: a denial layer in `_resolve`, and
+   symlink skipping in listing and search.
+2. **Round 2 BLOCKED — `.GIT/config` (case) and a `vendor -> .git` directory link both still
+   reached the token.** Fixed: case/whitespace normalisation in `_is_denied`, and denial re-checked
+   on the resolved path in `_resolve` and `_denied`.
+3. **Round 3 PASS WITH FINDINGS** — regression cases added (`.git./config`, `GIT~1/config`,
+   `.env.`, `credentials./token.json`) and the directory prune made case-insensitive so it agrees
+   with `_is_denied`.
+
+### Deviations
+Checked against `STEP-C-SLICES.md` C4:
+- The reader gained a denial layer the plan did not name, in direct response to the reviews. It is
+  now the load-bearing part of the slice.
+- No production resolver exists yet (nothing turns `workspace_reference` into a reader); C6/C10
+  wire it. Tests inject one.
+
+### Blockers / Deferred
+- The two symlink tests **skip on Windows** (no symlink privilege); the code paths are covered on
+  Linux CI and by the directory-junction test on Windows.
+- `.env.example` is denied along with `.env` (CONSIDER) — safe direction; an allowlist is a later
+  refinement.
+- Remaining step-C gates: `pydantic_ai` (C5), `skills-ref` (C7), frontend fixtures (C9).
+
+### Verification (2026-09-13)
+- Ruff, from `backend/`: `All checks passed!`
+- Reader tests: **16 passed, 2 skipped**; full backend suite **474 passed, 2 skipped** at the
+  round-2 fix point, and the reader tests re-run green after the round-3 touch-ups.
 - No migration in this slice.
