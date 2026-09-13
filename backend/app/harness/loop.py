@@ -9,6 +9,7 @@ model must not — tenancy, tool authorization, budget and audit.
 import asyncio
 import hashlib
 import json
+from collections.abc import Awaitable, Callable
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,6 +46,8 @@ async def run_agent(
     tool_gateway: ToolGateway,
     registry: ToolRegistry,
     approved_plan: ApprovedPlan | None = None,
+    on_result: Callable[[AgentRunResult], Awaitable[None]] | None = None,
+    skill_versions: dict[str, str] | None = None,
 ) -> AgentRun:
     run = await start_agent_run(db, context, definition)
     # Bind the run id onto the context so tool calls and the gateway can prove they belong to it.
@@ -54,7 +57,11 @@ async def run_agent(
     try:
         # Reproducibility is recorded up front, so a failed run is still reconstructible (FR-089).
         await record_run_metadata(
-            db, run, prompt_hash=_prompt_hash(prompt), model_id=settings.MODEL_ID
+            db,
+            run,
+            prompt_hash=_prompt_hash(prompt),
+            model_id=settings.MODEL_ID,
+            skill_versions=skill_versions,
         )
         # Refuse before the call if the organization is already over its spend budget (FR-074).
         await gateway.ensure_budget(db, context.organization_id)
@@ -125,6 +132,9 @@ async def run_agent(
         raise
 
     try:
+        # The caller captures the structured output here; the harness owns the run record.
+        if on_result is not None:
+            await on_result(result)
         await record_run_metadata(
             db, run, model_version_reported=result.model_version_reported
         )

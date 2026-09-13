@@ -7,6 +7,7 @@ description: >-
 compatibility: Requires the target to be a static HTML file.
 metadata:
   fussion.framework: generic-html
+  fussion.version: "1.0.0"
   fussion.schema_version: "1"
   fussion.protected-paths: ".htaccess,robots.txt,sitemap.xml"
 ---

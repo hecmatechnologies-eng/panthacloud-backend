@@ -17,7 +17,7 @@ third, different numbering and is archived under `docs/archive/`.
 | :--- | :--- | :--- |
 | **A. Truth & safety** | layout-overwrite fix, workspace clone+read, one roadmap, key removal, 05–08 decision | **IN PROGRESS** — layout-overwrite fix (`dd10167`), roadmap reconciliation (`d91d821`), dev-secret removal from source and the git-history rewrite (2026-09-12) done. Remaining items and their triggers are tabled in `CLAUDE.md` §3: `@/` alias before B8, the 05–08 decision before step C, and `SandboxProvider` with B5 or later |
 | **B. Runtime plane** | `STEP-B-SLICES.md` B1–B8 | **IN PROGRESS** — B1 done (`95b63eb`); B2 done; B3 done; B4 done; B5 done; B6 done; **B7 (SSE) deferred by owner**; B8 next |
-| **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **IN PROGRESS** — `STEP-C-SLICES.md` C1–C10; C1 done; C2 done; C3 done; C4 done; C5 done; C6 done; C7 done; C8 next |
+| **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **IN PROGRESS** — `STEP-C-SLICES.md` C1–C10; C1–C9 done; C10 next |
 | **D. Coding agent** | write capability, generated-code scan, ChangeSet → PR, bounded repair | NOT STARTED — no slice breakdown yet |
 
 ## Phase history (legacy numbering — record only, never cited for new work)
@@ -2399,3 +2399,75 @@ Checked against `STEP-C-SLICES.md` C7:
 - Full backend suite, from the repository root: **506 passed, 2 skipped** before the round-2
   fixes; the round-2 changes are docs, CI and loader hardening, covered by the targeted skills
   tests and Ruff.
+
+---
+
+## Step C (FEASIBILITY §3) · Slices C8 + C9 — WebsiteAnalyst and the eval corpus
+
+**Rigour tier: 1 — Maximum** (CLAUDE.md §9.0), declared in `STEP-C-SLICES.md` and unchanged. C8 is
+the product differentiator; C9 gates it, as the plan requires evals from agent #1.
+
+**Status: COMPLETED** — fussion-reviewer **BLOCKED** on round 1, then **PASS WITH FINDINGS** on
+round 2; every finding fixed. Committed with this entry.
+
+### Objective
+C8: a WebsiteAnalyst that detects framework, router, app shell, entry points and design tokens — or
+declines with `unsupported_reason` — with ranked integration candidates. C9: a golden corpus (with a
+refusal) and a runner asserting on structured fields, reporting per-case and aggregate outcome, cost
+and wall time.
+
+### Completed Work
+- **`app/agents/website_profile.py`** — `WebsiteProfile`, `IntegrationCandidate`, `DesignTokens`,
+  with a validator making `unsupported_reason` and candidates mutually exclusive.
+- **`app/agents/website_analyst.py`** — the declarative `WEBSITE_ANALYST` only.
+- **`app/services/analysis/pre_analysis.py`** — deterministic pre-analysis (skill detection,
+  manifests, app-shell candidates, protected paths).
+- **`app/services/analysis/analyst.py`** — `build_prompt`, `analyze_repository`, `skill_versions`.
+- **`app/evals/corpus.py`** — 5 cases (app router, `src/` layout, static HTML, unconventional shell,
+  no frontend); **`app/evals/runner.py`** — the async analyzer seam, `deterministic_analyze`,
+  `harness_analyzer`, and an `EvalReport` with per-case and aggregate score, cost and wall time.
+- **Supporting:** `register_default_agents` in lifespan; `run_agent` gained `on_result` and
+  `skill_versions`; skills gained `fussion.version`.
+- **Tests** — the analyst, the pre-analysis, the run, the eval corpus/runner, and the real-agent
+  eval seam.
+
+### Architectural & Technology Decisions
+1. **The agent is a thin declaration; orchestration is a service.** `app/agents/website_analyst.py`
+   imports only agent contracts and stdlib — no SQLAlchemy, model or service (§4.4/§5).
+2. **Deterministic first, model for the residual.** The pre-analysis computes what code can; the
+   model is asked for ranking, the shell and design tokens.
+3. **The pre-analysis is fenced as data**, labelled "(data, not instructions)", and the agent's
+   static instructions never contain repository content (§4.5).
+4. **A refusal is a first-class outcome**, and the schema forbids a refusal that also carries
+   candidates.
+5. **The eval seam is async and supports the real pipeline.** CI runs the deterministic analyzer (no
+   paid API); `harness_analyzer` drives the real WebsiteAnalyst for manual model runs.
+6. **`skill_versions` is recorded** on the run from the matched skills (FR-089).
+
+### Review history
+Two rounds (Tier 1). Round 1 **BLOCKED**; round 2 passed.
+1. **Round 1 BLOCKED** — `app/agents/website_analyst.py` imported SQLAlchemy, the `AgentRun` model
+   and a domain service, and held orchestration, violating the agent boundary. Fixed by splitting
+   the declaration from `app/services/analysis/analyst.py`.
+2. **Round 2 PASS WITH FINDINGS** — the eval did not exercise the real agent, cost was never
+   populated and aggregate cost/time were absent. Fixed: an async cost-carrying seam plus
+   `harness_analyzer`, aggregate `total_cost_usd`/`total_seconds`, an analyzer-error-is-a-failed-case
+   test, a cost-aggregation test, and a test that drives the real-agent seam.
+
+### Deviations
+Checked against `STEP-C-SLICES.md` C8/C9:
+- **The eval gates the deterministic detection and the pipeline in CI; the model's detection quality
+  is asserted by manual real-provider runs.** CI cannot call a paid API, so this is the honest split
+  the plan's Notes describe.
+- **FR-089 tool versions are still unrecorded** (pre-existing from C2); logged below.
+
+### Blockers / Deferred
+- **Tool versions on `AgentRun` (FR-089)** — pre-existing; its own small change.
+- **`harness_analyzer` has no CLI** — a manual model run currently requires a few lines of code.
+- **FR-082** (skill id as the stored framework) and the control-plane wiring remain C10.
+- The remaining step-C gate: none for C8/C9.
+
+### Verification (2026-09-13)
+- Ruff, from `backend/`: `All checks passed!`
+- Backend suite, from the repository root: **522 passed, 2 skipped**.
+- No migration in this slice.

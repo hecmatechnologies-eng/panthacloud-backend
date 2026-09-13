@@ -62,6 +62,9 @@ async def lifespan(app: FastAPI):
     configure_git_provider()
     configure_model_gateway()
     validate_embedding_configuration()
+    from app.agents.registry import register_default_agents
+
+    register_default_agents()
     yield
     logger.info("Shutting down Fussion Backend, closing resources...")
     await close_database_connections()

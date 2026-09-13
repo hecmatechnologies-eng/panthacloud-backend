@@ -32,6 +32,9 @@ class AgentRegistry:
     def list(self) -> list[AgentDefinition]:
         return [self._agents[key] for key in sorted(self._agents)]
 
+    def contains(self, name: str, version: str) -> bool:
+        return (name, version) in self._agents
+
     def clear(self) -> None:
         self._agents.clear()
 
@@ -41,6 +44,14 @@ registry = AgentRegistry()
 
 def register_agent(definition: AgentDefinition) -> None:
     registry.register(definition)
+
+
+def register_default_agents() -> None:
+    """Register the built-in agents. One line per agent — adding one is not a core edit."""
+    from app.agents.website_analyst import WEBSITE_ANALYST
+
+    if not registry.contains(WEBSITE_ANALYST.name, WEBSITE_ANALYST.version):
+        registry.register(WEBSITE_ANALYST)
 
 
 def get_agent(name: str, version: str) -> AgentDefinition:

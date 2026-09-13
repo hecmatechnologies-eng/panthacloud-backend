@@ -8,6 +8,7 @@ compatibility: Requires a Node project with a resolvable package manager lockfil
 metadata:
   fussion.framework: nextjs
   fussion.router: app
+  fussion.version: "1.0.0"
   fussion.schema_version: "1"
   fussion.protected-paths: "next.config.js,next.config.mjs,next.config.ts,middleware.ts"
 ---

@@ -43,6 +43,7 @@ class SkillMetadata:
     path: Path
     framework: str | None
     router: str | None
+    version: str | None
     protected_paths: tuple[str, ...]
 
 
@@ -144,6 +145,7 @@ class SkillLoader:
             path=path,
             framework=metadata.get("fussion.framework"),
             router=metadata.get("fussion.router"),
+            version=metadata.get("fussion.version"),
             protected_paths=_split_paths(metadata.get("fussion.protected-paths")),
         )
 
