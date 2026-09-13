@@ -116,6 +116,19 @@ class Settings(BaseSettings):
     # the backend is installed non-editable, where the default would not resolve.
     SKILLS_ROOT: str | None = None
 
+    # GitHub App connection (step E). With no app configured, the install flow is unavailable and
+    # the endpoints fail loud (503) rather than offering a button that cannot work. The private key
+    # is a PEM secret; a value with literal "\n" is accepted and normalised when used.
+    GITHUB_APP_ID: str | None = None
+    GITHUB_APP_PRIVATE_KEY: str | None = None
+    GITHUB_APP_SLUG: str | None = None
+    GITHUB_APP_CLIENT_ID: str | None = None
+    GITHUB_APP_CLIENT_SECRET: str | None = None
+    # The signed `state` that binds an install callback to the org and user that started it.
+    GITHUB_APP_STATE_TTL_SECONDS: int = 600
+    # Where the install callback sends the browser back to, after recording the installation.
+    FRONTEND_URL: str = "http://localhost:3000"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

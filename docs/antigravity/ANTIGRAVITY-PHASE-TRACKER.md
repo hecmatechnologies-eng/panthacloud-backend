@@ -19,7 +19,7 @@ third, different numbering and is archived under `docs/archive/`.
 | **B. Runtime plane** | `STEP-B-SLICES.md` B1–B8 | **IN PROGRESS** — B1 (`95b63eb`) through B6 done; **B7 (SSE) and B8 (real widget + customer-origin CORS) remain**. The owner's B7 deferral is re-scoped as an MVP gap in `GAP-CLOSURE-PLAN.md` (acceptance #8 names a *streamed* answer); B7 precedes B8 |
 | **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **COMPLETE** — C1–C15 done. The remaining MVP gaps are step B (B7 SSE, B8 widget) per `GAP-CLOSURE-PLAN.md`; step D stays post-MVP |
 | **D. Coding agent** | write capability, generated-code scan, ChangeSet → PR, bounded repair | NOT STARTED — no slice breakdown yet; post-MVP per `FEASIBILITY.md` §4 (the deterministic PR path already covers acceptance #6) |
-| **E. GitHub App connection** | `STEP-E-SLICES.md` E1–E2 (planned) | NOT STARTED — the Railway-style connect flow, replacing the pasted PAT. Post-MVP per `MVP-REQUIREMENTS-V2.md` scope item #3; sequenced after the pipeline is validated on a real repository. See `GAP-CLOSURE-PLAN.md` Phase 6 |
+| **E. GitHub App connection** | `STEP-E-SLICES.md` E1–E2 (planned) | **IN PROGRESS** — E1 done (install + callback + OAuth access check + token minting + repository listing). **E2** remains: the Studio repository picker replacing the PAT form. Post-MVP per `MVP-REQUIREMENTS-V2.md` scope item #3 |
 
 The gap between the code and the Part C acceptance criteria, and the ordered path to close it, is
 `docs/implementation/GAP-CLOSURE-PLAN.md`. Slice definitions live in the `STEP-*-SLICES.md` files;
@@ -2894,3 +2894,71 @@ claim with reality rather than leaving a silent gap.
 
 ### Verification (2026-09-13)
 - Documentation only: no code, no migration, no test change.
+
+## Step E (GAP-CLOSURE Phase 6) · Slice E1 — GitHub App install, token minting, repository listing
+
+**Rigour tier: 1 — Maximum** (CLAUDE.md §9.0), declared in `STEP-E-SLICES.md`. It is an
+authentication/installation flow and it resolves credentials.
+
+**Status: COMPLETED** — the first reviewer round returned **BLOCKED** (two tenancy findings); after
+the rework, a second round returned **PASS WITH FINDINGS** and confirmed both are closed. The
+remaining findings were reachable and are fixed. Committed with this entry.
+
+### Objective
+Start the Railway-style connection: an organization installs the GitHub App, the callback records
+the installation, a short-lived installation access token is minted and cached, and the repositories
+the installation can reach are listed, tenant-scoped and paginated. No PAT is typed.
+
+### Completed Work
+- **`GitHubInstallation` model + migration `0021`** — one row per installation, tenant-scoped,
+  `installation_id` unique. No credential is stored.
+- **`app/services/integration/github_app.py`** — app JWT (RS256), installation-token minting with a
+  per-process cache and refresh margin, installation metadata, repository listing, and the signed
+  `state` machinery for both install steps.
+- **`app/api/v1/endpoints/github_app.py`** — `install-url`, the install callback, the OAuth
+  callback, `installations`, and `repositories`.
+- **Config** — `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_APP_SLUG`, `GITHUB_APP_CLIENT_ID`,
+  `GITHUB_APP_CLIENT_SECRET`, `GITHUB_APP_STATE_TTL_SECONDS`, `FRONTEND_URL`. Missing config → 503.
+- **Tests** — 14, with GitHub mocked by `httpx.MockTransport`.
+
+### Architectural & Technology Decisions
+1. **Two-step install, because an installation id alone proves nothing.** GitHub installation ids
+   are enumerable, so after the install redirect the user is sent through GitHub user authorization
+   (OAuth); the returned user-to-server token is used to confirm the user can reach the installation
+   before it is recorded.
+2. **The flow is bound to the initiating browser.** `/install-url` sets a short-lived HttpOnly
+   `SameSite=Lax` nonce cookie; both callbacks require the state's nonce and the cookie to match, so
+   a link crafted by one user cannot be completed by another (login-CSRF / consent phishing).
+3. **An installation is never re-pointed between tenants.** A row for the same `installation_id`
+   under a different organization is refused (409), and the unique index enforces one owner.
+4. **No credential is stored.** The app private key signs a JWT; installation tokens are minted on
+   demand and cached until shortly before expiry.
+
+### Review history
+Two rounds (Tier 1).
+1. **Round 1 BLOCKED** — the callback attached a caller-supplied `installation_id` to the caller's
+   org (silent cross-tenant repository disclosure), and re-pointed an existing row to a new org.
+   Fixed with the OAuth user-access check and the re-point refusal.
+2. **Round 2 PASS WITH FINDINGS** — both findings confirmed closed; a consent-gated login-CSRF
+   residual remained. Fixed with the browser nonce cookie. Also fixed: an invalid OAuth code is now
+   400 (not 502); the user-installation scan no longer silently refuses >1000 installations; a
+   concurrent-insert race returns 409 instead of an unhandled `IntegrityError`.
+CONSIDER logged: `GET /user/installations` reflects reach (including org membership), which can be
+broader than per-repository permission — inherent to GitHub.
+
+### Deviations
+- **The test-harness change rode in its own commit** (`181fc98`), not this one, because it changes
+  isolation semantics for the whole suite and is unrelated to E1.
+
+### Blockers / Deferred
+- **E2 (Studio repo picker) is not built.** The backend exists; the PAT form remains until E2.
+- **Webhook-driven repository sync** — not built; the list is fetched live.
+- **Audit event on install** — `record_audit` requires a project id, so there is no org-level event
+  helper yet.
+
+### Verification (2026-09-13)
+- Ruff, from `backend/`: `All checks passed!`
+- Migration 0021: `upgrade → downgrade → upgrade` verified on **both SQLite and a scratch Postgres
+  database**. No seed (new table).
+- Backend suite, from the repository root: **578 passed, 2 skipped**. (The suite now runs in ~3 min
+  after the harness change; it was ~15 min.)

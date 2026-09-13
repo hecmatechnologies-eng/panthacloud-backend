@@ -5,6 +5,7 @@ from app.models.audit_event import AuditEvent
 from app.models.base import BaseModel
 from app.models.conversation import Conversation, Message, MessageRole, VisitorSession
 from app.models.discovery import DiscoveryRun, DiscoveryStatus
+from app.models.github_installation import GitHubInstallation
 from app.models.integration import Integration, IntegrationProvider, IntegrationStatus
 from app.models.knowledge import (
     DocumentStatus,
@@ -41,6 +42,7 @@ __all__ = [
     "DiscoveryStatus",
     "DocumentStatus",
     "FailureClass",
+    "GitHubInstallation",
     "Integration",
     "IntegrationProvider",
     "IntegrationRun",
