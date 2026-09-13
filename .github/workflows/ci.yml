@@ -33,6 +33,13 @@ jobs:
       - name: Run Ruff Lint Check
         run: .venv/bin/ruff check app tests
 
+      - name: Validate Agent Skills
+        run: |
+          set -e
+          for skill in ../skills/integrations/*/; do
+            .venv/bin/agentskills validate "$skill"
+          done
+
       - name: Run Pytest Test Suite
         run: .venv/bin/pytest tests
         env:

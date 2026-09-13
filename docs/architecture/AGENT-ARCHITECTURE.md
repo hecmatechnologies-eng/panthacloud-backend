@@ -324,7 +324,7 @@ cannot deliver it.
 
 Fussion skills follow the **Agent Skills specification** (<https://agentskills.io/specification>),
 not a private format. Same layout, same frontmatter, same progressive-disclosure model,
-and `skills-ref validate` runs in CI for free.
+and `agentskills validate` runs in CI for free.
 
 ```
 skills/integrations/nextjs-app-router/

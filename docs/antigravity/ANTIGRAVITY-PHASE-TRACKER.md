@@ -17,7 +17,7 @@ third, different numbering and is archived under `docs/archive/`.
 | :--- | :--- | :--- |
 | **A. Truth & safety** | layout-overwrite fix, workspace clone+read, one roadmap, key removal, 05–08 decision | **IN PROGRESS** — layout-overwrite fix (`dd10167`), roadmap reconciliation (`d91d821`), dev-secret removal from source and the git-history rewrite (2026-09-12) done. Remaining items and their triggers are tabled in `CLAUDE.md` §3: `@/` alias before B8, the 05–08 decision before step C, and `SandboxProvider` with B5 or later |
 | **B. Runtime plane** | `STEP-B-SLICES.md` B1–B8 | **IN PROGRESS** — B1 done (`95b63eb`); B2 done; B3 done; B4 done; B5 done; B6 done; **B7 (SSE) deferred by owner**; B8 next |
-| **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **IN PROGRESS** — `STEP-C-SLICES.md` C1–C10; C1 done; C2 done; C3 done; C4 done; C5 done; C6 done; C7 next |
+| **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **IN PROGRESS** — `STEP-C-SLICES.md` C1–C10; C1 done; C2 done; C3 done; C4 done; C5 done; C6 done; C7 done; C8 next |
 | **D. Coding agent** | write capability, generated-code scan, ChangeSet → PR, bounded repair | NOT STARTED — no slice breakdown yet |
 
 ## Phase history (legacy numbering — record only, never cited for new work)
@@ -2326,3 +2326,76 @@ Checked against `STEP-C-SLICES.md` C6:
 - Ruff, from `backend/`: `All checks passed!`
 - Backend suite, from the repository root: **493 passed, 2 skipped**.
 - No migration in this slice.
+
+---
+
+## Step C (FEASIBILITY §3) · Slice C7 — skills structure and two packages
+
+**Rigour tier: 2 — Standard** (CLAUDE.md §9.0), declared in `STEP-C-SLICES.md` and unchanged. No
+model call and no customer code; it is knowledge and its loader.
+
+**Status: COMPLETED** — fussion-reviewer **BLOCKED** on round 1, then **PASS WITH FINDINGS** on round
+2; every finding fixed. Committed with this entry.
+
+### Objective
+FR-078–083c: framework integration knowledge becomes versioned skill packages conforming to the
+Agent Skills spec, loaded progressively, with a deterministic detection test and CI validation.
+
+### Completed Work
+- **`skills/integrations/nextjs-app-router/`** and **`skills/integrations/generic-html/`** — each with
+  `SKILL.md` (frontmatter + instructions), `scripts/detect.py` (deterministic match), `assets/`
+  (templates) and `references/EDGE-CASES.md`.
+- **`app/skills/loader.py`** — `SkillLoader` with `index()` (metadata only), `get()` (body on
+  demand), `read_asset`/`read_reference`, and `run_detection()`. `SkillMetadata` / `Skill` /
+  `SkillNotFoundError` / `SkillFormatError`.
+- **`app/core/config.py`** — `SKILLS_ROOT` override.
+- **CI** (`.github/workflows/ci.yml`) — an `agentskills validate` step over every skill.
+- **`pyproject.toml` / `uv.lock`** — `skills-ref` as a dev dependency.
+- **Tests** (`tests/test_skills.py`, 13) — index vs body, on-demand assets/references, path
+  traversal, protected paths, detection for both skills, spec validation, the token budget, and a
+  missing-root failure.
+
+### Architectural & Technology Decisions
+1. **The spec is the format, not a private one.** Skills conform to agentskills.io, so models
+   already interpret them and `agentskills validate` runs in CI (FR-083a/b).
+2. **Progressive disclosure is real.** `index()` returns metadata only (the always-on ~100-token
+   tier); `SKILL.md` loads on activation; templates and references load only when referenced (FR-081).
+3. **Adding a framework is a new folder.** The loader discovers packages by directory, so no core
+   edit is required (FR-079). The stored framework id becomes a skill id string (FR-082) when C10
+   retires the `WebsiteFramework` enum.
+4. **Detection is deterministic and self-contained.** Each skill ships `scripts/detect.py`; the
+   loader runs it with a bounded timeout and a **scrubbed environment**, so a skill never sees the
+   process's DB URL, JWT or API keys.
+5. **The skills root fails loudly.** It resolves from `SKILLS_ROOT` (default repo-relative) and
+   raises when absent, rather than reporting an empty catalogue.
+
+### Review history
+Two rounds (Tier 2). Round 1 **BLOCKED**; round 2 passed.
+1. **Round 1 BLOCKED** — the CI step invoked `.venv/bin/skills-ref`, but the installed console
+   script is `agentskills` (`skills-ref` is the package name), so the step exited 127 and never
+   validated anything. Fixed; the validator now runs.
+2. **Round 2 PASS WITH FINDINGS** — the docs still named `skills-ref validate` (fixed to
+   `agentskills validate`), and the loader needed hardening (root resolution, subprocess timeout +
+   scrubbed env, non-object detection output, `OSError`). All fixed.
+
+### Deviations
+Checked against `STEP-C-SLICES.md` C7:
+- The slice named the two packages and the loader; CI, config and the dev dependency are the
+  supporting wiring.
+- **FR-082 is not closed here** — the stored framework id is still the `WebsiteFramework` DB enum;
+  replacing it with a skill id is C10, as the slice plan states.
+- The `assets/` templates are for step D (the CodingAgent). They are required by the skill layout
+  (FR-083a) and are the skill's content, not speculative abstraction.
+
+### Blockers / Deferred
+- **`.j2` rendering**: no template engine is a dependency yet; step D adds one or the templates are
+  consumed directly.
+- **Two widget contracts** exist until step D/C10 retires `services/integration/artifacts.py`.
+- Remaining step-C gates: frontend widget-target fixtures (C9).
+
+### Verification (2026-09-13)
+- Ruff, from `backend/`: `All checks passed!`
+- Skills tests: **13 passed**; the validator (`agentskills validate`) passes on both packages.
+- Full backend suite, from the repository root: **506 passed, 2 skipped** before the round-2
+  fixes; the round-2 changes are docs, CI and loader hardening, covered by the targeted skills
+  tests and Ruff.

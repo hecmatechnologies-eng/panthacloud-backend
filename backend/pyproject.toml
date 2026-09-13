@@ -34,6 +34,8 @@ dev = [
     "pytest-asyncio>=0.24.0",
     "httpx>=0.27.0",
     "ruff>=0.6.0",
+    # Agent Skills reference validator (FR-083b); dev/CI only.
+    "skills-ref>=0.1.1",
 ]
 
 [build-system]

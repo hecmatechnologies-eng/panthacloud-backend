@@ -23,7 +23,7 @@ Still to arrange, each gating the slice that needs it:
 |---|---|---|
 | A repository-read source for the tools | C4 | `GitProvider` has `get_file_contents` but **no tree/search**; either add them or wrap the `WorkspaceManager` clone. C1 decides. |
 | `pydantic_ai` installed | C5 | Not currently a dependency; ADR-001 confines it to `app/llm/adapters/`. |
-| Agent Skills validator (`skills-ref`) | C7 | FR-083b requires CI validation; the CLI is not installed. |
+| Agent Skills validator (`agentskills`, the console script of the `skills-ref` package) | C7 | FR-083b requires CI validation; the CLI is not installed. |
 | Frontend widget-target fixtures | C9 | Existing `tests/fixtures/repositories/` are backend-shaped (Django/FastAPI/Express). |
 
 ## Slices
@@ -36,7 +36,7 @@ Still to arrange, each gating the slice that needs it:
 | C4 | Read-only repository tools (`read_tree`, `read_file`, `search_code`) | 1 | Offset/limit and an explicit truncation signal; actionable errors; scope resolved from `ExecutionContext` |
 | C5 | Pydantic AI adapter + `AgentRunner` Protocol | 1 | Structured output validated (unparseable = failed step); `pydantic_ai` imported only in `app/llm/adapters/`; usage flows through the gateway |
 | C6 | Harness loop + budget + authorization | 1 | One loop; per-run budgets (tool calls, tokens, wall clock, cost) declared and enforced, terminating on breach |
-| C7 | Skills structure + 2 packages (`nextjs-app-router`, `generic-html`) | 2 | Agent Skills spec; `SKILL.md` under 5k tokens; progressive disclosure; `skills-ref validate` passes in CI |
+| C7 | Skills structure + 2 packages (`nextjs-app-router`, `generic-html`) | 2 | Agent Skills spec; `SKILL.md` under 5k tokens; progressive disclosure; `agentskills validate` passes in CI |
 | C8 | `WebsiteAnalyst` + `WebsiteProfile` | 1 | Detects framework, router, app shell, entry points and design tokens, or returns `unsupported_reason`; `integration_candidates` is a ranked list |
 | C9 | Eval corpus + runner | 1 | 5 fixtures (at least one refusal); assertions on structured fields; per-case and aggregate outcome, cost and wall time; gates C8 |
 | C10 | Control-plane wiring + Studio surface | 1 | Framework, shell and integration point are auto-detected and persisted; no framework dropdown, no typed path |

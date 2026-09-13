@@ -123,7 +123,7 @@ what implementation revealed.
 | FR-082 | The stored framework identifier shall be a skill id string, not a database enum. |
 | FR-083 | Each skill shall declare paths it must never modify, in addition to platform-wide protected paths. |
 | FR-083a | Skill packages shall conform to the Agent Skills specification (agentskills.io/specification): `SKILL.md` with valid `name`/`description` frontmatter, `name` matching the parent directory, and the `scripts/` `assets/` `references/` layout. |
-| FR-083b | Skill packages shall be validated in CI (`skills-ref validate`); an invalid skill shall fail the build. |
+| FR-083b | Skill packages shall be validated in CI (`agentskills validate`, the console script of the `skills-ref` package); an invalid skill shall fail the build. |
 | FR-083c | A `SKILL.md` body shall remain under 5,000 tokens; detailed material belongs in `references/`, loaded on demand. |
 
 ### B6. Evaluation and reproducibility

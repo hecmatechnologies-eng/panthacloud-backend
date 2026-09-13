@@ -112,6 +112,10 @@ class Settings(BaseSettings):
     RETRIEVAL_TOP_K: int = 5
     RETRIEVAL_SCORE_THRESHOLD: float = 0.0
 
+    # Skills (step C). Defaults to the repository's skills/ tree beside the backend; override when
+    # the backend is installed non-editable, where the default would not resolve.
+    SKILLS_ROOT: str | None = None
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
