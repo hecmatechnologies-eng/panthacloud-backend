@@ -61,3 +61,34 @@ class UserNotFoundError(AuthServiceError):
 
     def __init__(self, message: str = "User not found.") -> None:
         super().__init__(message)
+
+
+class OAuthError(AuthServiceError):
+    """Base exception for OAuth failures."""
+
+    def __init__(self, message: str = "OAuth authentication failed.") -> None:
+        super().__init__(message)
+
+
+class OAuthStateInvalidError(OAuthError):
+    """Raised when OAuth state parameter verification fails (CSRF protection)."""
+
+    def __init__(self, message: str = "Invalid or expired OAuth state parameter.") -> None:
+        super().__init__(message)
+
+
+class OAuthProviderError(OAuthError):
+    """Raised when upstream OAuth provider returns an error or exchange fails."""
+
+    def __init__(self, message: str = "External identity provider returned an error.") -> None:
+        super().__init__(message)
+
+
+class OAuthEmailUnverifiedError(OAuthError):
+    """Raised when upstream OAuth email is unverified (account linking disallowed)."""
+
+    def __init__(
+        self,
+        message: str = "Cannot link OAuth account: email is not verified with the provider.",
+    ) -> None:
+        super().__init__(message)

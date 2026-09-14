@@ -13,6 +13,10 @@ from app.services.auth.exceptions import (
     InactiveUserError,
     InvalidCredentialsError,
     InvalidTokenError,
+    OAuthEmailUnverifiedError,
+    OAuthError,
+    OAuthProviderError,
+    OAuthStateInvalidError,
     TokenExpiredError,
     UserAlreadyExistsError,
     UserNotFoundError,
@@ -162,6 +166,38 @@ def register_error_handlers(app: FastAPI) -> None:
             code="UNAUTHORIZED",
             message=exc.message,
             headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    @app.exception_handler(OAuthStateInvalidError)
+    async def oauth_state_invalid_handler(request: Request, exc: OAuthStateInvalidError):
+        return create_error_response(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="OAUTH_STATE_INVALID",
+            message=exc.message,
+        )
+
+    @app.exception_handler(OAuthEmailUnverifiedError)
+    async def oauth_email_unverified_handler(request: Request, exc: OAuthEmailUnverifiedError):
+        return create_error_response(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="OAUTH_EMAIL_UNVERIFIED",
+            message=exc.message,
+        )
+
+    @app.exception_handler(OAuthProviderError)
+    async def oauth_provider_handler(request: Request, exc: OAuthProviderError):
+        return create_error_response(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            code="OAUTH_PROVIDER_ERROR",
+            message=exc.message,
+        )
+
+    @app.exception_handler(OAuthError)
+    async def oauth_error_handler(request: Request, exc: OAuthError):
+        return create_error_response(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="OAUTH_ERROR",
+            message=exc.message,
         )
 
     @app.exception_handler(AuthServiceError)

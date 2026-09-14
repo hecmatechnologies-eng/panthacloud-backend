@@ -49,6 +49,25 @@ class SecretStore:
             logger.error("Decryption failed unexpectedly.")
             raise SecretStoreError(f"Decryption failed: {exc}") from exc
 
+    def encrypt_text(self, text: str) -> str:
+        """Encrypt a plaintext string (e.g. an OAuth access token) into ciphertext."""
+        try:
+            return self._fernet.encrypt(text.encode("utf-8")).decode("utf-8")
+        except Exception as exc:
+            logger.error("Failed to encrypt text payload.")
+            raise SecretStoreError(f"Encryption failed: {exc}") from exc
+
+    def decrypt_text(self, ciphertext: str) -> str:
+        """Decrypt ciphertext back into a plaintext string."""
+        try:
+            return self._fernet.decrypt(ciphertext.encode("utf-8")).decode("utf-8")
+        except InvalidToken as exc:
+            logger.error("Decryption failed: Invalid token or tampered ciphertext.")
+            raise SecretStoreError("Decryption failed: Token is invalid or corrupted.") from exc
+        except Exception as exc:
+            logger.error("Decryption failed unexpectedly.")
+            raise SecretStoreError(f"Decryption failed: {exc}") from exc
+
 
 # Global default SecretStore instance
 secret_store = SecretStore()

@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field
 class UserBase(BaseModel):
     email: EmailStr
     full_name: str | None = None
+    avatar_url: str | None = None
 
 
 class UserCreate(UserBase):
@@ -17,6 +18,7 @@ class UserRead(BaseModel):
     id: uuid.UUID
     email: str
     full_name: str | None = None
+    avatar_url: str | None = None
     is_active: bool
     is_superuser: bool
     created_at: datetime

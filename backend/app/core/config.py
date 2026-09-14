@@ -59,6 +59,13 @@ class Settings(BaseSettings):
     # Development and test only: where this installation's generated keys live. Gitignored.
     DEV_SECRETS_FILE: str = DEFAULT_DEV_SECRETS_FILE
 
+    # OAuth / SSO provider settings (Google, GitHub)
+    GITHUB_OAUTH_CLIENT_ID: str | None = None
+    GITHUB_OAUTH_CLIENT_SECRET: str | None = None
+    GOOGLE_OAUTH_CLIENT_ID: str | None = None
+    GOOGLE_OAUTH_CLIENT_SECRET: str | None = None
+    OAUTH_STATE_EXPIRE_MINUTES: int = 10
+
     WORKSPACE_BASE_DIR: str = "./data/workspaces"
     MAX_REPOSITORY_SIZE_MB: int = 250
     MAX_FILE_SIZE_MB: int = 10

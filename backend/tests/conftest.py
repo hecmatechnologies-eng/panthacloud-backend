@@ -23,7 +23,8 @@ os.environ["EMBEDDING_PROVIDER"] = "deterministic"
 os.environ["EMBEDDING_DIMENSION"] = "384"
 
 import app.models
-from app.core.database import Base, get_engine
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.database import Base, get_engine, get_session_factory
 from app.main import app
 
 # Created once per test run, then reused. Recreating the whole schema per test (create_all +
@@ -58,6 +59,12 @@ async def prepare_database():
     await _prepare_schema_once()
     yield
     await _clear_all_rows()
+
+
+@pytest.fixture
+async def db_session() -> AsyncGenerator[AsyncSession, None]:
+    async with get_session_factory()() as session:
+        yield session
 
 
 @pytest.fixture

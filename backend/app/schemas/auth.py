@@ -26,3 +26,16 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     user: UserRead
 
+
+class OAuthAuthorizeUrlResponse(BaseModel):
+    provider: str
+    authorization_url: str
+    state: str
+
+
+class OAuthExchangeRequest(BaseModel):
+    provider: str
+    code: str
+    state: str
+    redirect_uri: str | None = None
+

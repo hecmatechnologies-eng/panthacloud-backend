@@ -1,5 +1,5 @@
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
@@ -69,7 +69,7 @@ async def get_current_organization(
 
 def require_permission(
     permission: Permission,
-) -> Callable[..., tuple[Organization, Membership]]:
+) -> Callable[..., Awaitable[tuple[Organization, Membership]]]:
     """Factory dependency enforcing explicit RBAC permission in the resolved tenant."""
 
     async def _dependency(
