@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     APP_VERSION: str = "0.1.0"
 
     DATABASE_URL: str | None = None
+    DEFAULT_POSTGRES_URL: str = "postgresql+psycopg://postgres:mwalimu_dev_2026@localhost:5432/fussion_db"
     FALLBACK_SQLITE_URL: str = "sqlite+aiosqlite:///./fussion.db"
 
     CORS_ORIGINS: list[str] = ["http://localhost:3000"]
@@ -130,7 +131,11 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = "http://localhost:3000"
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=(
+            str(Path(__file__).resolve().parents[2] / ".env"),
+            str(Path(__file__).resolve().parents[3] / ".env"),
+            ".env",
+        ),
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -191,7 +196,8 @@ class Settings(BaseSettings):
         """
         Determines the active database URL with strict environment checks.
         In production: PostgreSQL DATABASE_URL is strictly required.
-        In development/test: Falls back to SQLite if PostgreSQL is unconfigured.
+        In test: Isolated SQLite test database is used.
+        In development/default: PostgreSQL is the default database.
         """
         if self.is_production:
             if not self.DATABASE_URL:
@@ -206,10 +212,16 @@ class Settings(BaseSettings):
                 )
             return self.DATABASE_URL
 
-        # Non-production (development, test)
+        # Test environment uses isolated test database
+        if self.APP_ENV.lower() in {"test", "testing"}:
+            if self.DATABASE_URL and "sqlite" in self.DATABASE_URL.lower():
+                return self.DATABASE_URL
+            return self.FALLBACK_SQLITE_URL
+
+        # Non-production (development, default)
         if self.DATABASE_URL:
             return self.DATABASE_URL
-        return self.FALLBACK_SQLITE_URL
+        return self.DEFAULT_POSTGRES_URL
 
 
 settings = Settings()

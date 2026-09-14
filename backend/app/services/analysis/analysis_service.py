@@ -60,6 +60,7 @@ async def analyze_website_integration(
             agent_name=WEBSITE_ANALYST.name,
             agent_version=WEBSITE_ANALYST.version,
             capabilities=WEBSITE_ANALYST.capabilities,
+            integration_id=integration.id,
             commit_sha=commit_sha,
             workspace_reference=workspace_ref,
         )

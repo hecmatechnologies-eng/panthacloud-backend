@@ -49,6 +49,8 @@ async def test_registration_duplicate_email(client: AsyncClient):
     resp2 = await client.post("/api/v1/auth/register", json=payload)
     assert resp2.status_code == 400
     assert "already exists" in resp2.json()["detail"]
+    assert resp2.json()["error"]["code"] == "BAD_REQUEST"
+    assert resp2.json()["error"]["details"][0]["loc"][-1] == "email"
 
 
 @pytest.mark.asyncio
@@ -96,6 +98,7 @@ async def test_login_failure_wrong_password(client: AsyncClient):
     )
     assert resp.status_code == 401
     assert "Invalid email or password" in resp.json()["detail"]
+    assert resp.json()["error"]["code"] == "UNAUTHORIZED"
 
 
 @pytest.mark.asyncio
@@ -109,6 +112,7 @@ async def test_login_failure_unknown_email(client: AsyncClient):
     )
     assert resp.status_code == 401
     assert "Invalid email or password" in resp.json()["detail"]
+    assert resp.json()["error"]["code"] == "UNAUTHORIZED"
 
 
 @pytest.mark.asyncio

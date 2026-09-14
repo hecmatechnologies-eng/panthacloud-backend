@@ -7,6 +7,17 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.services.auth.exceptions import (
+    AuthServiceError,
+    CredentialsMissingError,
+    InactiveUserError,
+    InvalidCredentialsError,
+    InvalidTokenError,
+    TokenExpiredError,
+    UserAlreadyExistsError,
+    UserNotFoundError,
+)
+
 logger = logging.getLogger("fussion.errors")
 
 
@@ -48,10 +59,28 @@ def register_error_handlers(app: FastAPI) -> None:
             status.HTTP_500_INTERNAL_SERVER_ERROR: "INTERNAL_SERVER_ERROR",
         }
         error_code = code_map.get(exc.status_code, "HTTP_ERROR")
+        details = None
+
+        if isinstance(exc.detail, dict):
+            error_code = exc.detail.get("code", error_code)
+            message = str(exc.detail.get("message", exc.detail))
+            details = exc.detail.get("details", None)
+            if details is None and "field" in exc.detail:
+                details = [
+                    {
+                        "field": exc.detail["field"],
+                        "issue": error_code,
+                        "message": message,
+                    }
+                ]
+        else:
+            message = str(exc.detail)
+
         return create_error_response(
             status_code=exc.status_code,
             code=error_code,
-            message=str(exc.detail),
+            message=message,
+            details=details,
             # Preserve headers the raise site attached — Retry-After on 429, WWW-Authenticate on
             # 401. The JSONResponse this builds would otherwise drop them.
             headers=exc.headers,
@@ -70,6 +99,77 @@ def register_error_handlers(app: FastAPI) -> None:
                 {key: value for key, value in error.items() if key != "input"}
                 for error in jsonable_encoder(exc.errors())
             ],
+        )
+
+    @app.exception_handler(UserAlreadyExistsError)
+    async def user_already_exists_handler(request: Request, exc: UserAlreadyExistsError):
+        return create_error_response(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="BAD_REQUEST",
+            message=exc.message,
+            details=[{"loc": ["body", exc.field], "msg": exc.message}],
+        )
+
+    @app.exception_handler(InvalidCredentialsError)
+    async def invalid_credentials_handler(request: Request, exc: InvalidCredentialsError):
+        return create_error_response(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            code="UNAUTHORIZED",
+            message=exc.message,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    @app.exception_handler(InactiveUserError)
+    async def inactive_user_handler(request: Request, exc: InactiveUserError):
+        return create_error_response(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            code="UNAUTHORIZED",
+            message=exc.message,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    @app.exception_handler(CredentialsMissingError)
+    async def credentials_missing_handler(request: Request, exc: CredentialsMissingError):
+        return create_error_response(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            code="UNAUTHORIZED",
+            message=exc.message,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    @app.exception_handler(TokenExpiredError)
+    async def token_expired_handler(request: Request, exc: TokenExpiredError):
+        return create_error_response(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            code="UNAUTHORIZED",
+            message=exc.message,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    @app.exception_handler(InvalidTokenError)
+    async def invalid_token_handler(request: Request, exc: InvalidTokenError):
+        return create_error_response(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            code="UNAUTHORIZED",
+            message=exc.message,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    @app.exception_handler(UserNotFoundError)
+    async def user_not_found_handler(request: Request, exc: UserNotFoundError):
+        return create_error_response(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            code="UNAUTHORIZED",
+            message=exc.message,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    @app.exception_handler(AuthServiceError)
+    async def auth_service_error_handler(request: Request, exc: AuthServiceError):
+        return create_error_response(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="BAD_REQUEST",
+            message=exc.message,
         )
 
     @app.exception_handler(Exception)

@@ -2,7 +2,6 @@ import uuid
 from collections.abc import Callable
 from typing import Annotated
 
-import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
@@ -11,7 +10,6 @@ from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db, get_session_factory
 from app.core.permissions import Permission, has_permission
-from app.core.security import decode_access_token
 from app.models.assistant import Assistant, AssistantPosition
 from app.models.discovery import DiscoveryRun
 from app.models.integration import Integration
@@ -23,6 +21,7 @@ from app.models.repository import Repository
 from app.models.repository_snapshot import RepositorySnapshot
 from app.models.user import User
 from app.models.website_integration import WebsiteIntegration
+from app.services.auth import AuthService
 from app.services.knowledge.embeddings import build_default_embedding_provider
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -33,55 +32,8 @@ async def get_current_user(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> User:
     """Validate bearer JWT token and return active authenticated user."""
-    if not token_auth or not token_auth.credentials:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication credentials were not provided.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    try:
-        payload = decode_access_token(token_auth.credentials)
-        user_id_str: str | None = payload.get("sub")
-        if not user_id_str:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token payload missing subject identifier.",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        user_id = uuid.UUID(user_id_str)
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication token has expired.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    except (jwt.PyJWTError, ValueError):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate authentication credentials.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    stmt = select(User).where(User.id == user_id)
-    result = await db.execute(stmt)
-    user = result.scalar_one_or_none()
-
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Inactive user account.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    return user
+    token = token_auth.credentials if token_auth else None
+    return await AuthService.resolve_user_from_token(db, token)
 
 
 async def get_current_organization(

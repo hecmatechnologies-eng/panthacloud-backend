@@ -685,7 +685,6 @@ async def get_run_pull_request(
         branch_name=run.branch_name,
         base_branch=integration.default_branch,
         title="Integrate Fussion Assistant",
-        status="open",
     )
 
 

@@ -78,21 +78,6 @@ async def check_database_connectivity() -> tuple[bool, str, float | None]:
         return True, dialect, round(latency, 2)
     except Exception as e:  # noqa: BLE001
         logger.warning("Database connectivity check failed: %s", e)
-        # In non-production, if primary PostgreSQL fails to connect, fallback to SQLite
-        if not settings.is_production and settings.DATABASE_URL:
-            try:
-                logger.info("Attempting local SQLite fallback for development...")
-                fallback_engine = create_async_engine(settings.FALLBACK_SQLITE_URL, echo=False)
-                async with fallback_engine.connect() as conn:
-                    await conn.execute(text("SELECT 1"))
-                latency = (time.perf_counter() - start_time) * 1000.0
-                global _engine, _session_factory
-                _engine = fallback_engine
-                _session_factory = None
-                return True, "sqlite (fallback)", round(latency, 2)
-            except Exception as fallback_err:  # noqa: BLE001
-                logger.error("Fallback to SQLite also failed: %s", fallback_err)
-
         return False, "unknown", None
 
 

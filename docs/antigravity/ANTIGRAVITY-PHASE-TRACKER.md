@@ -20,6 +20,7 @@ third, different numbering and is archived under `docs/archive/`.
 | **C. Analyst + harness + skills + evals** | WebsiteAnalyst, thin harness, tool gateway, 2 skill packages, 5-case eval corpus | **COMPLETE** — C1–C15 done. The remaining MVP gaps are step B (B7 SSE, B8 widget) per `GAP-CLOSURE-PLAN.md`; step D stays post-MVP |
 | **D. Coding agent** | write capability, generated-code scan, ChangeSet → PR, bounded repair | NOT STARTED — no slice breakdown yet; post-MVP per `FEASIBILITY.md` §4 (the deterministic PR path already covers acceptance #6) |
 | **E. GitHub App connection** | `STEP-E-SLICES.md` E1–E2 (planned) | **COMPLETE** — E1 (install + callback + OAuth access check + token minting + repository listing) and E2 (Studio repository picker, no PAT). The Railway-style connect flow is usable end to end |
+| **F. Studio redesign** | `docs/design/STUDIO-UX-AUDIT.md` F0–F9 | **IN PROGRESS** — F0 (foundations & truth sweep) and F1 (URL architecture) done 2026-09-14; F2 (run home + approval gate) next. The audit and the four owner decisions (§14) govern this step |
 
 The gap between the code and the Part C acceptance criteria, and the ordered path to close it, is
 `docs/implementation/GAP-CLOSURE-PLAN.md`. Slice definitions live in the `STEP-*-SLICES.md` files;
@@ -3047,3 +3048,137 @@ only works because `--reload` runs the server in a subprocess, which uvicorn giv
 - `alembic upgrade head` succeeds against Postgres; migrations applied to `0022`.
 - `python run_dev.py` starts the API; `/api/v1/health` reports `"database": {"type": "postgresql"}`.
 - Ruff clean on `app`, `tests` and `run_dev.py`.
+
+## Step F — Slice F0 — Studio foundations & truth sweep
+
+**Rigour tier: 3 — Light** (CLAUDE.md §9.0): frontend-only plus two small backend truth fixes; no
+customer-repo, credential or cross-tenant path. Tests + ruff, no reviewer round per the tier.
+
+**Status: COMPLETED** — governs `docs/design/STUDIO-UX-AUDIT.md` §13 F0 ("Done when" items X1–X7,
+T2–T7, toasts, theming, deletion, snippet origin).
+
+### Objective
+Remove every reachable defect and dishonesty the UX audit found before the structural slices (F1
+URLs, F2 run home) build on top: broken interactions, hardcoded claims, dead controls, dead code,
+theme drift.
+
+### Completed Work
+- **X1** — Create-project modal now closes on success (was: cleared form stayed open).
+- **X2** — Run diff/PR fetch failures surface a dismissible warning in the Run section (was:
+  silently swallowed; the diff section just never appeared).
+- **X3** — No-op banner dismisses wired to real state clears (integration, preview).
+- **X4** — Dead notification bell removed (returns in F6 as a real SSE-fed inbox).
+- **X5** — Disabled "Profile"/"Account settings" menu entries removed.
+- **X6** — Vestigial "Cancel run" control and its dialog removed (the pipeline is synchronous;
+  cancel only flipped a stuck row). The `cancelRun` client method stays — it maps a real endpoint
+  and returns when cancellation is real (F2/F9).
+- **X7** — Repository picker paginates ("Load more", 50/page, deduped) — closes E2's deferral.
+- **T2** — Runtime snippet now uses the configured API base (`getBaseUrl()`), not
+  `window.location.origin`; copy no longer references the unbuilt coding agent.
+- **T3** — Knowledge metrics: "Embeddings 384-dim" replaced with truthful "Retrieval — cosine
+  similarity" (the constant in `retrieval.py`; the dimension is not exposed to the frontend).
+- **T4** — Hardcoded Memory graph node removed from `agentGraphModel`.
+- **T5** — Badges claim only what's real: "Connected" (was "Verified Source"), "Repository access"
+  distinguishes GitHub-App vs encrypted-token (was blanket "Credentials Encrypted"), "Grounded"
+  (was "Verified Active"). Readiness bootstrap: a non-404 probe failure now sets `bootstrapFailed`
+  and shows a retry banner instead of being indistinguishable from "not connected".
+- **T6** — Hardcoded person fallback in the account menu removed.
+- **T7** — `PullRequestInfo.status` is `str | None`, never claimed (was hardcoded `"open"`);
+  schema comment records that live PR state is GitHub's truth until the post-MVP webhook.
+  Frontend type updated.
+- **Toasts** — `ToastProvider` mounted app-wide (root layout); passive successes toast: project
+  created, document uploaded/deleted, origin added/removed. `useToast` gained a silent no-op
+  fallback so a missing provider can never crash a surface (mirrors `useProject`'s default
+  context). The assistant save keeps its existing inline success banner.
+- **Theming** — auth layout, login/signup, both splashes moved from hardcoded dark zinc/indigo to
+  tokens; light `--text-muted` `#64748B` → `#5D6B80` (4.41:1 → 5.02:1 on canvas, WCAG AA);
+  `theme/tokens.ts` drift fixed (`textSecondary` held the old muted value).
+- **Deletion (P10)** — 16 unused ui components deleted (Avatar, Checkbox, Chip, ColorField,
+  DropdownMenu, Dropzone, FileTree, InspectorPanel, LogView, Select, Spinner, StageLayout, Switch,
+  Tabs, Textarea, Tooltip) plus the unused `Term` export; legacy test-only `AssistantView` and
+  `KnowledgeBaseView` deleted with their index exports, orphaned types, and dedicated tests.
+- **Copy** — HUD "Build · Connect · Automate · Live" aligned to the three real modes;
+  NodeInspector's hardcoded protected-paths list replaced with a truthful FR-096 description.
+
+### Deviations (checked against the slice's "Done when")
+- **Undo (audit G8) descoped honestly.** The audit proposed toast-undo for document/origin deletes;
+  both are server-side cascade deletes with no restore endpoint, so a client-side undo would be
+  fake. Toasts confirm; ConfirmDialogs remain for irreversible actions. Real undo needs a
+  soft-delete backend decision — logged for F4, not faked here.
+- **X8 (clickable locked stages) deferred to F1** — the fix belongs to the navigation rail rebuild,
+  where locks render upfront with their unlock condition.
+- **Knowledge embedding dimension removed, not sourced** — no endpoint exposes the KB's
+  model/dimension; a KB-status endpoint can restore the metric truthfully later.
+
+### Blockers / Deferred
+- F1 (URL architecture), F2 (run home + approval gate) are next per the audit's sequence.
+
+### Verification (2026-09-14)
+- Frontend, from `frontend/`: `pnpm test` — **77 passed (7 files)**; `pnpm build` clean
+  (TypeScript strict). Suite size dropped vs. E2's 110/9: the in-flight redesign had already
+  replaced suites, and F0 deleted `assistant.test.tsx` (13 tests driving the deleted legacy
+  `AssistantView`; the live `AssistantStageView` keeps its coverage in `project.test.tsx`) and the
+  legacy `KnowledgeBaseView` test (1).
+- Backend: ruff clean on changed files; full suite from the repository root —
+  **587 passed, 2 skipped**.
+
+## Step F — Slice F1 — URL architecture
+
+**Rigour tier: 2 — Standard** (CLAUDE.md §9.0): frontend navigation structure; no customer-repo,
+credential or cross-tenant path. Tests + build, no reviewer round per the tier.
+
+**Status: COMPLETED** — governs `docs/design/STUDIO-UX-AUDIT.md` §13 F1 (nested routes per §10.1,
+stage = URL, refresh-safe state, deep-linkable run, browser Back, focus-to-heading) and closes the
+F0 deferral X8 (locks upfront).
+
+### Objective
+Give the studio real addresses. Every stage, the project itself, and every run is a URL; refresh,
+Back/Forward, and shared links all land correctly. One source of truth: the URL in route mode,
+component state only outside it (tests, embeds).
+
+### Completed Work
+- **Route tree** — `/studio` (adopts the session project into the URL, else the create hero);
+  `/studio/[projectId]` (overview); `/studio/[projectId]/[stage]` with public slugs
+  (`website · knowledge · assistant · connect · live · activity · settings`);
+  `/studio/[projectId]/connect/runs/[runId]` (run deep link); `/projects` (gallery).
+  Invalid stage slugs 404 via `notFound()`.
+- **`stageRegistry.STAGE_SLUGS` / `SLUG_TO_STAGE` / `stagePath` / `runPath`** — public slugs use
+  product vocabulary (`connect`, `live`) so URLs survive the internal stage rename; the map is the
+  only place the two vocabularies meet.
+- **`StudioRoot`** — the whole studio as one composite, replacing the monolithic studio page.
+  Bidirectional sync with a `urlMoved` arbiter (mount and Back/Forward: URL drives; in-app clicks:
+  state drives, URL follows). Route-prop-gated: rendered without `route` it is the pre-F1
+  pure-state studio, which is how existing tests keep working unchanged.
+- **Deep-link loading state** — a project URL while the session loads renders a spinner, never the
+  marketing hero; an unknown project id redirects to `/studio`.
+- **Focus management** — stage changes move focus to the stage heading and reset scroll (P9).
+- **Run deep link** — `IntegrationStageView` accepts `initialRunId` and selects that run once runs
+  load (verified by test: the deep-linked older run wins over the default newest).
+- **`/projects` gallery** — honest-minimal cards (name, description, created date), skeleton,
+  empty state; card click navigates to the project studio. Fixes the "All projects → dead-end
+  hero" finding: the nav button and gallery are now a real route.
+- **Locks upfront (X8)** — gated rail stages show a lock glyph whose title names the prerequisite
+  ("Locked — complete Website first"); clicking still works (deep links teach).
+- **CreateProjectModal decoupled** — now consumes `useSession`/`useNavigation` and is mounted once
+  in `ProjectFacade`, so every surface (studio and gallery) can open it without import cycles.
+- **`selectProjectFromUrl`** — facade method that selects without resetting navigation, so a
+  stage deep link survives the project switch.
+
+### Deviations (checked against the slice's "Done when")
+- **Run URLs are inbound-only for now.** Selecting a run from the History list inside the connect
+  stage does not rewrite the URL: a history click would change the route, remount `StudioRoot`,
+  and drop all hook state. The dedicated run home (F2) owns run URLs properly. Pasted/shared run
+  links work fully.
+- **Gallery carries no per-project health/run status** — showing it needs either N+1 fetches or a
+  backend summary endpoint; logged for F5 rather than faked.
+- **Bare `/studio` keeps the old "land in the first project" behavior**, now URL-truthful via
+  redirect instead of implicit state.
+- **`container.scrollTop` instead of `scrollTo`** — jsdom lacks `scrollTo`; behavior identical.
+
+### Verification (2026-09-14)
+- New `src/__tests__/studio-routing.test.tsx`: slug mapping, deep-link stage application,
+  state-to-URL push, unknown-project redirect, gallery navigation + empty state, run deep-link
+  selection — 7 tests.
+- Frontend, from `frontend/`: `pnpm test` — **84 passed (8 files)**; `pnpm build` clean; route
+  table shows `/projects`, `/studio/[projectId]`, `/studio/[projectId]/[stage]`,
+  `/studio/[projectId]/connect/runs/[runId]`.

@@ -191,6 +191,7 @@ def gateway_usage_recorder(
             output_tokens=result.output_tokens,
             latency_ms=latency_ms,
             project_id=context.project_id,
+            integration_id=context.integration_id,
         )
 
     return record

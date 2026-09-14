@@ -12,6 +12,7 @@ No credential is stored or returned. A missing app configuration fails loud (503
 offering a button that cannot work.
 """
 
+import logging
 import secrets
 import uuid
 from typing import Annotated
@@ -53,6 +54,8 @@ from app.services.integration.github_app import (
 
 router = APIRouter(tags=["GitHub App"])
 
+logger = logging.getLogger("fussion.github")
+
 _Tenant = Annotated[
     tuple[Organization, Membership], Depends(require_permission(Permission.INTEGRATION_CREATE))
 ]
@@ -73,10 +76,19 @@ def _set_state_cookie(response: Response, nonce: str) -> None:
 
 
 def _nonce_matches(cookie_nonce: str | None, state_nonce: str) -> None:
+    logger.warning(
+        "github nonce check: cookie_present=%s cookie_len=%s state_nonce_len=%s",
+        bool(cookie_nonce),
+        len(cookie_nonce or ""),
+        len(state_nonce),
+    )
     if not cookie_nonce or not secrets.compare_digest(cookie_nonce, state_nonce):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="This install link did not originate in this browser. Start the connection again.",
+            detail=(
+                "This install link did not originate in this browser "
+                f"(cookie_present={bool(cookie_nonce)}). Start the connection again."
+            ),
         )
 
 

@@ -22,6 +22,9 @@ class ExecutionContext:
     agent_name: str
     agent_version: str
     capabilities: frozenset[str]
+    # The website integration a run belongs to, when it is integration-scoped (C10 analysis). Lets
+    # model spend be attributed per integration without the model ever supplying an identifier.
+    integration_id: uuid.UUID | None = None
     # The pinned revision the agent reads at. Present from C2 so C4's tools can read a commit,
     # rather than widening every call site later.
     commit_sha: str | None = None
@@ -42,6 +45,7 @@ class ExecutionContext:
             "organization_id": str(self.organization_id),
             "project_id": str(self.project_id),
             "repository_id": str(self.repository_id) if self.repository_id else None,
+            "integration_id": str(self.integration_id) if self.integration_id else None,
             "environment": self.environment,
             "agent_name": self.agent_name,
             "agent_version": self.agent_version,

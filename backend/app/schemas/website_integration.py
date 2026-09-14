@@ -183,4 +183,6 @@ class PullRequestInfo(BaseModel):
     branch_name: str
     base_branch: str
     title: str
-    status: str
+    # The platform records that it *opened* the PR; the live state (open/merged/closed)
+    # is GitHub's truth and is not claimed here until it is read back (post-MVP webhook).
+    status: str | None = None
