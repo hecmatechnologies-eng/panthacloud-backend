@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+!.env.railway.example
 *.local
 # Per-installation development keys, generated on first use (app/core/dev_secrets.py).
 .dev-secrets.json

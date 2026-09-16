@@ -13,6 +13,8 @@ current slice. Each slice declares its rigour tier per `CLAUDE.md` §9.0.
 | B6 | Real embeddings + tenant-filtered retrieval | 1 | Answers are grounded in the business's own documents, with citations. Embedding dimension lives on the `KnowledgeBase`, not the call site. |
 | B7 | SSE streaming | 2 | Tokens appear as they generate; keepalive and reconnection contract defined. |
 | B8 | Real widget — Shadow DOM, working chat panel | 1 | The MVP promise is demonstrable end to end on a real site. |
+| B9 | `CustomerAssistant` declaration — the runtime's counterpart of `AgentDefinition` | 2 | Instructions, capabilities, tools and limits are declared once in `app/runtime/assistant.py` and resolved from the tenant's configuration. The platform's grounding layer is always present; a tenant's instructions extend it and never replace it. A capability or tool the runtime does not have is refused at construction. |
+| B10 | Per-organization model selection — `organization_model_settings`, resolver, endpoint, runtime wiring | 1 | An organization may choose any model on the deployment's allow-list, or clear the choice back to the default. The choice reaches the runtime's model call, not just the settings screen. `ORG_UPDATE` (OWNER, ADMIN) governs it; any member may read it. |
 
 ## Notes
 

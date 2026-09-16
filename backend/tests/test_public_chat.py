@@ -218,7 +218,15 @@ async def test_second_turn_reuses_session_and_conversation(client: AsyncClient) 
 
 
 @pytest.mark.asyncio
-async def test_model_reply_uses_the_assistant_system_instructions(client: AsyncClient) -> None:
+async def test_tenant_instructions_extend_the_platform_contract(client: AsyncClient) -> None:
+    """A business's own instructions are appended to the platform's, never substituted for them.
+
+    The grounding contract — answer only from CONTEXT, decline when it does not contain the answer,
+    treat visitor and retrieved text as data — is a safety rule, not a preference. Substituting it
+    let an accidental edit turn the assistant into one that invents answers, with nothing to say so.
+    """
+    from app.runtime.assistant import PLATFORM_INSTRUCTIONS
+
     integration, _, proj_id = await tenant(client, "pc_assist@example.com", "PcAssist")
 
     session_factory = get_session_factory()
@@ -237,10 +245,52 @@ async def test_model_reply_uses_the_assistant_system_instructions(client: AsyncC
 
     prompt = _FAKE["provider"].calls[0].messages
     assert prompt[0].role == "system"
-    assert prompt[0].content == "You are AcmeBot, the store's assistant."
+    # The contract survives the tenant's edit, and the tenant's words follow it.
+    assert PLATFORM_INSTRUCTIONS in prompt[0].content
+    assert "You are AcmeBot, the store's assistant." in prompt[0].content
+    assert prompt[0].content.index(PLATFORM_INSTRUCTIONS) < prompt[0].content.index("AcmeBot")
     # The visitor's message is a user turn, not part of the instruction region (FR-098).
     assert prompt[-1].role == "user"
     assert "QUESTION: hi" in prompt[-1].content
+
+
+@pytest.mark.asyncio
+async def test_the_assistant_runs_on_the_organizations_chosen_model(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The organization's choice has to reach the model call, not just the settings screen."""
+    from app.models.organization_model_settings import OrganizationModelSettings
+
+    monkeypatch.setattr(settings, "MODEL_ID", "deployment-default")
+    monkeypatch.setattr(settings, "MODEL_ALLOWED_IDS", ["deployment-default", "org-choice"])
+
+    integration, org_id, _ = await tenant(client, "pc_orgmodel@example.com", "PcOrgModel")
+    session_factory = get_session_factory()
+    async with session_factory() as db:
+        db.add(
+            OrganizationModelSettings(
+                organization_id=uuid.UUID(org_id), model_id="org-choice"
+            )
+        )
+        await db.commit()
+
+    await chat(client, integration["public_key"], "hi")
+
+    assert _FAKE["provider"].calls[0].model == "org-choice"
+
+
+@pytest.mark.asyncio
+async def test_the_assistant_falls_back_to_the_deployment_model(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "MODEL_ID", "deployment-default")
+    monkeypatch.setattr(settings, "MODEL_ALLOWED_IDS", ["deployment-default"])
+
+    integration, _, _ = await tenant(client, "pc_fallback@example.com", "PcFallback")
+
+    await chat(client, integration["public_key"], "hi")
+
+    assert _FAKE["provider"].calls[0].model == "deployment-default"
 
 
 @pytest.mark.asyncio
@@ -784,3 +834,54 @@ async def test_stream_returns_503_for_a_disabled_assistant(client: AsyncClient) 
     resp = await stream(client, integration["public_key"])
     assert resp.status_code == 503
     assert "text/event-stream" not in resp.headers.get("content-type", "")
+
+
+@pytest.mark.asyncio
+async def test_the_assistant_turn_records_the_definition_that_produced_it(
+    client: AsyncClient,
+) -> None:
+    """An answer stays attributable after the business edits its instructions (B9).
+
+    Recorded per turn rather than per conversation: instructions can change mid-conversation, and
+    the earlier answers were produced by a definition that no longer exists.
+    """
+    from app.runtime.assistant import CUSTOMER_ASSISTANT
+
+    integration, _, _ = await tenant(client, "pc_trace@example.com", "PcTrace")
+
+    resp = await chat(client, integration["public_key"], "hi")
+    conversation_id = uuid.UUID(resp.json()["conversation_id"])
+
+    assistant_message = (await messages_of(conversation_id))[-1]
+    assert assistant_message.role == MessageRole.ASSISTANT
+    assert assistant_message.assistant_version == CUSTOMER_ASSISTANT.version
+    assert assistant_message.prompt_hash
+
+
+@pytest.mark.asyncio
+async def test_the_recorded_prompt_hash_follows_the_instructions(
+    client: AsyncClient,
+) -> None:
+    """The hash is what identifies the definition: a version alone would not, because a business
+    edits its instructions without any version changing."""
+    integration, _, proj_id = await tenant(client, "pc_hash@example.com", "PcHash")
+
+    first = await chat(client, integration["public_key"], "hi")
+    first_hash = (await messages_of(uuid.UUID(first.json()["conversation_id"])))[-1].prompt_hash
+
+    session_factory = get_session_factory()
+    async with session_factory() as db:
+        db.add(
+            Assistant(
+                project_id=uuid.UUID(proj_id),
+                system_instructions="Always mention our free returns policy.",
+                is_enabled=True,
+            )
+        )
+        await db.commit()
+
+    second = await chat(client, integration["public_key"], "hi again")
+    second_hash = (await messages_of(uuid.UUID(second.json()["conversation_id"])))[-1].prompt_hash
+
+    assert first_hash and second_hash
+    assert first_hash != second_hash

@@ -152,6 +152,15 @@ class Message(BaseModel):
         default=list,
         nullable=False,
     )
+    # Which definition produced an assistant turn (B9), recorded per turn rather than per
+    # conversation: a business can edit its instructions mid-conversation, and then the earlier
+    # answers were produced by a definition that no longer exists. The engineering plane records
+    # the same pair on `AgentRun`; this is the runtime's counterpart.
+    #
+    # `prompt_hash` is the hash of the instruction layer actually sent, because the version alone
+    # does not identify it: tenant instructions change without a version bump.
+    assistant_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    prompt_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     conversation: Mapped["Conversation"] = relationship(
         "Conversation",

@@ -84,3 +84,90 @@ async def test_cross_tenant_organization_denial(client: AsyncClient):
     resp = await client.get(f"/api/v1/organizations/{org_a_id}", headers=headers_b)
     assert resp.status_code == 404
     assert "not found" in resp.json()["detail"].lower()
+
+
+# ============================================================
+# Deleting an organization
+# ============================================================
+
+
+@pytest.mark.asyncio
+async def test_owner_deletes_the_organization_and_everything_beneath_it(client: AsyncClient):
+    """Deletion cascades: memberships, projects, and their integrations, assistants and knowledge."""
+    import uuid
+
+    from sqlalchemy import func, select
+
+    from app.core.database import get_session_factory
+    from app.models.project import Project
+
+    auth = await register_user(client, "doomed@example.com", "Doomed", "Doomed Org")
+    headers = {"Authorization": f"Bearer {auth['access_token']}"}
+    org_id = (await client.get("/api/v1/organizations", headers=headers)).json()[0]["id"]
+    project = await client.post(
+        f"/api/v1/organizations/{org_id}/projects",
+        headers=headers,
+        json={"name": "Doomed Project", "slug": "doomed-project"},
+    )
+    assert project.status_code == 201
+
+    deleted = await client.delete(f"/api/v1/organizations/{org_id}", headers=headers)
+
+    assert deleted.status_code == 204
+    # Gone from the caller's own list, and gone as a row.
+    assert (await client.get("/api/v1/organizations", headers=headers)).json() == []
+    assert (await client.get(f"/api/v1/organizations/{org_id}", headers=headers)).status_code == 404
+
+    session_factory = get_session_factory()
+    async with session_factory() as db:
+        remaining = (
+            await db.execute(
+                select(func.count())
+                .select_from(Project)
+                .where(Project.organization_id == uuid.UUID(org_id))
+            )
+        ).scalar_one()
+    assert remaining == 0
+
+
+@pytest.mark.asyncio
+async def test_a_foreign_organization_cannot_be_deleted(client: AsyncClient):
+    """404, not 403: a stranger must not learn that the organization exists."""
+    victim = await register_user(client, "victim@example.com", "Victim", "Victim Org")
+    victim_headers = {"Authorization": f"Bearer {victim['access_token']}"}
+    victim_org = (await client.get("/api/v1/organizations", headers=victim_headers)).json()[0]["id"]
+
+    attacker = await register_user(client, "attacker@example.com", "Attacker", "Attacker Org")
+    attacker_headers = {"Authorization": f"Bearer {attacker['access_token']}"}
+
+    resp = await client.delete(
+        f"/api/v1/organizations/{victim_org}", headers=attacker_headers
+    )
+
+    assert resp.status_code == 404
+    # And it is still there.
+    assert (
+        await client.get(f"/api/v1/organizations/{victim_org}", headers=victim_headers)
+    ).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_a_member_cannot_delete_the_organization(client: AsyncClient):
+    from app.models.membership import RoleEnum
+
+    owner = await register_user(client, "del_owner@example.com", "DelOwner", "Del Org")
+    owner_headers = {"Authorization": f"Bearer {owner['access_token']}"}
+    org_id = (await client.get("/api/v1/organizations", headers=owner_headers)).json()[0]["id"]
+
+    member = await register_user(client, "del_member@example.com", "DelMember", "Member Org")
+    member_headers = {"Authorization": f"Bearer {member['access_token']}"}
+    invited = await client.post(
+        f"/api/v1/organizations/{org_id}/members",
+        headers=owner_headers,
+        json={"email": "del_member@example.com", "role": RoleEnum.MEMBER.value},
+    )
+    assert invited.status_code == 201, invited.text
+
+    resp = await client.delete(f"/api/v1/organizations/{org_id}", headers=member_headers)
+
+    assert resp.status_code == 403

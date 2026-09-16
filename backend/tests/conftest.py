@@ -1,5 +1,7 @@
 import os
+import tempfile
 from collections.abc import AsyncGenerator
+from pathlib import Path
 from secrets import token_urlsafe
 
 import pytest
@@ -8,7 +10,17 @@ from httpx import ASGITransport, AsyncClient
 
 # Enforce test environment before importing app
 os.environ["APP_ENV"] = "test"
-os.environ["FALLBACK_SQLITE_URL"] = "sqlite+aiosqlite:///./test_fussion.db"
+
+# One database file per process, in the temp directory.
+#
+# A fixed path made two concurrent pytest runs share it, and `_clear_all_rows` then deleted the
+# other run's users mid-test — surfacing as baffling 401s from a token that had worked one request
+# earlier. Both variables are set so the file is used whether or not the developer's `.env` names a
+# SQLite database of its own (config.effective_database_url prefers DATABASE_URL when it is SQLite).
+_TEST_DB_PATH = Path(tempfile.gettempdir()) / f"fussion-test-{os.getpid()}.db"
+_TEST_DB_URL = f"sqlite+aiosqlite:///{_TEST_DB_PATH.as_posix()}"
+os.environ["DATABASE_URL"] = _TEST_DB_URL
+os.environ["FALLBACK_SQLITE_URL"] = _TEST_DB_URL
 
 # Supply the test run's own keys, so no test reads or writes a developer's generated
 # .dev-secrets.json (app/core/dev_secrets.py). Fresh per run, and never a value from source.
@@ -22,8 +34,9 @@ os.environ["SECRET_ENCRYPTION_KEY"] = Fernet.generate_key().decode("ascii")
 os.environ["EMBEDDING_PROVIDER"] = "deterministic"
 os.environ["EMBEDDING_DIMENSION"] = "384"
 
-import app.models
 from sqlalchemy.ext.asyncio import AsyncSession
+
+import app.models
 from app.core.database import Base, get_engine, get_session_factory
 from app.main import app
 
@@ -53,6 +66,16 @@ async def _clear_all_rows() -> None:
             await conn.execute(table.delete())
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _remove_this_process_database():
+    """Drop this process's database file at the end. Best effort: Windows holds open handles."""
+    yield
+    try:
+        _TEST_DB_PATH.unlink(missing_ok=True)
+    except OSError:
+        pass  # the OS clears the temp directory; a leftover file is harmless
+
+
 @pytest.fixture(autouse=True)
 async def prepare_database():
     """Create the schema once, then give each test an empty database."""
@@ -62,7 +85,7 @@ async def prepare_database():
 
 
 @pytest.fixture
-async def db_session() -> AsyncGenerator[AsyncSession, None]:
+async def db_session() -> AsyncGenerator[AsyncSession]:
     async with get_session_factory()() as session:
         yield session
 

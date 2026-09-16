@@ -18,7 +18,9 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=ghcr.io/astral-sh/uv:0.9.5 /uv /usr/local/bin/uv
+# Pinned to the uv that produced `uv.lock` (revision 3). An older uv than the one that wrote the
+# lock is the classic way to make `uv sync --frozen` fail inside an image that built fine locally.
+COPY --from=ghcr.io/astral-sh/uv:0.12.13 /uv /usr/local/bin/uv
 
 ENV PYTHONUNBUFFERED=1 \
     UV_COMPILE_BYTECODE=1 \
@@ -54,4 +56,4 @@ USER fussion
 
 EXPOSE 8000
 # Shell form so $PORT (injected by the platform) is honoured, with 8000 as the local default.
-CMD uvicorn app.main:app --host 0.0.0.0 --port "${PORT:-8000}"
+CMD uvicorn app.main:app --host 0.0.0.0 --port "${PORT:-8000}" --proxy-headers --forwarded-allow-ips=* --timeout-keep-alive 75

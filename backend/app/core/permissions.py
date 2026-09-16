@@ -5,6 +5,7 @@ from app.models.membership import RoleEnum
 
 class Permission(str, enum.Enum):
     ORG_VIEW = "org:view"
+    ORG_UPDATE = "org:update"
     ORG_DELETE = "org:delete"
     MEMBERS_VIEW = "members:view"
     MEMBERS_INVITE = "members:invite"
@@ -41,6 +42,7 @@ class Permission(str, enum.Enum):
 ROLE_PERMISSIONS: dict[RoleEnum, set[Permission]] = {
     RoleEnum.OWNER: {
         Permission.ORG_VIEW,
+        Permission.ORG_UPDATE,
         Permission.ORG_DELETE,
         Permission.MEMBERS_VIEW,
         Permission.MEMBERS_INVITE,
@@ -75,6 +77,7 @@ ROLE_PERMISSIONS: dict[RoleEnum, set[Permission]] = {
     },
     RoleEnum.ADMIN: {
         Permission.ORG_VIEW,
+        Permission.ORG_UPDATE,
         Permission.MEMBERS_VIEW,
         Permission.MEMBERS_INVITE,
         Permission.MEMBERS_REMOVE,

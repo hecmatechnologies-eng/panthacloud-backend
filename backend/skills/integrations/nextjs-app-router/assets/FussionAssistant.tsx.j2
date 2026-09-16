@@ -1,0 +1,19 @@
+'use client';
+
+import { useEffect } from 'react';
+import { fussionConfig } from './config';
+
+export function FussionAssistant() {
+  useEffect(() => {
+    const script = document.createElement('script');
+    script.src = fussionConfig.scriptUrl;
+    script.async = true;
+    script.dataset.fussionKey = fussionConfig.publicKey;
+    document.body.appendChild(script);
+    return () => {
+      document.body.removeChild(script);
+    };
+  }, []);
+
+  return null;
+}

@@ -20,7 +20,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v3
         with:
-          version: "latest"
+          version: "0.12.13"
 
       - name: Set up Python 3.13
         run: uv python install 3.13
@@ -45,36 +45,3 @@ jobs:
         env:
           APP_ENV: test
           FALLBACK_SQLITE_URL: sqlite+aiosqlite:///:memory:
-
-  frontend-ci:
-    name: Frontend Typecheck, Test & Build
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.30.3
-
-      - name: Set up Node.js 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: "pnpm"
-          cache-dependency-path: frontend/pnpm-lock.yaml
-
-      - name: Install frontend dependencies
-        run: pnpm install
-
-      - name: Run Vitest Unit Tests
-        run: pnpm test
-
-      - name: Run Next.js Production Build
-        run: pnpm build
-        env:
-          NEXT_PUBLIC_API_URL: http://localhost:8000

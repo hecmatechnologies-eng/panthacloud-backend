@@ -17,6 +17,7 @@ from app.models.knowledge import (
 from app.models.membership import Membership, RoleEnum
 from app.models.model_usage import ModelUsage
 from app.models.organization import Organization
+from app.models.organization_model_settings import OrganizationModelSettings
 from app.models.project import Project
 from app.models.repository import Repository, RepositoryProvider, RepositoryStatus
 from app.models.repository_snapshot import RepositorySnapshot, SnapshotStatus
@@ -58,6 +59,7 @@ __all__ = [
     "MessageRole",
     "ModelUsage",
     "Organization",
+    "OrganizationModelSettings",
     "Project",
     "Repository",
     "RepositoryProvider",

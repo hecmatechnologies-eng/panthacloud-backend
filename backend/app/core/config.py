@@ -141,16 +141,24 @@ class Settings(BaseSettings):
     # Fussion commits, so a wrong value ships a broken widget into a customer's repository.
     # Development falls back to the local API; production must set it (see `widget_script_url`).
     PUBLIC_API_URL: str | None = None
+    # Auto-injected by Railway platform when a public domain is assigned.
+    RAILWAY_PUBLIC_DOMAIN: str | None = None
+    RAILWAY_STATIC_URL: str | None = None
 
     @property
     def widget_script_url(self) -> str:
         """The widget bundle's public URL, as a customer's browser will load it."""
         base = self.PUBLIC_API_URL
+        if not base and self.RAILWAY_PUBLIC_DOMAIN:
+            base = f"https://{self.RAILWAY_PUBLIC_DOMAIN}"
+        elif not base and self.RAILWAY_STATIC_URL:
+            base = f"https://{self.RAILWAY_STATIC_URL}"
+
         if not base:
             if self.is_production:
                 raise RuntimeError(
-                    "Production configuration error: PUBLIC_API_URL must be set. It is the origin "
-                    "a customer's browser loads the widget from and is written into every pull "
+                    "Production configuration error: PUBLIC_API_URL must be set (or RAILWAY_PUBLIC_DOMAIN available). "
+                    "It is the origin a customer's browser loads the widget from and is written into every pull "
                     "request, so there is no default to fall back to."
                 )
             base = "http://localhost:8000"
@@ -217,6 +225,19 @@ class Settings(BaseSettings):
 
 
 
+    @staticmethod
+    def _normalize_database_url(url: str) -> str:
+        """Normalize database URL for async SQLAlchemy with psycopg3.
+
+        Railway and other PaaS inject connection strings starting with `postgresql://` or `postgres://`.
+        SQLAlchemy 2.0 async with psycopg 3 requires `postgresql+psycopg://`.
+        """
+        if url.startswith("postgres://"):
+            return "postgresql+psycopg://" + url[len("postgres://"):]
+        if url.startswith("postgresql://"):
+            return "postgresql+psycopg://" + url[len("postgresql://"):]
+        return url
+
     @property
     def effective_database_url(self) -> str:
         """
@@ -236,7 +257,7 @@ class Settings(BaseSettings):
                     "Production configuration error: SQLite is not permitted in production. "
                     "PostgreSQL is the mandatory system of record."
                 )
-            return self.DATABASE_URL
+            return self._normalize_database_url(self.DATABASE_URL)
 
         # Test environment uses isolated test database
         if self.APP_ENV.lower() in {"test", "testing"}:
@@ -246,8 +267,8 @@ class Settings(BaseSettings):
 
         # Non-production (development, default)
         if self.DATABASE_URL:
-            return self.DATABASE_URL
-        return self.DEFAULT_POSTGRES_URL
+            return self._normalize_database_url(self.DATABASE_URL)
+        return self._normalize_database_url(self.DEFAULT_POSTGRES_URL)
 
 
 settings = Settings()

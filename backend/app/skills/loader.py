@@ -22,8 +22,23 @@ _DETECTION_TIMEOUT_SECONDS = 30
 def _default_root() -> Path:
     if settings.SKILLS_ROOT:
         return Path(settings.SKILLS_ROOT)
-    # `app/skills/loader.py` -> parents[3] is the repository root, which holds skills/.
-    return Path(__file__).resolve().parents[3] / "skills" / "integrations"
+    # 1. Repository root (local development or root Docker build context):
+    repo_root = Path(__file__).resolve().parents[3] / "skills" / "integrations"
+    if repo_root.exists():
+        return repo_root
+    # 2. Subdirectory bundle (backend/skills/integrations):
+    backend_root = Path(__file__).resolve().parents[2] / "skills" / "integrations"
+    if backend_root.exists():
+        return backend_root
+    # 3. Application package bundle (app/skills/integrations):
+    app_root = Path(__file__).resolve().parents[1] / "skills" / "integrations"
+    if app_root.exists():
+        return app_root
+    # 4. Container path fallback (/app/skills/integrations):
+    container_root = Path("/app/skills/integrations")
+    if container_root.exists():
+        return container_root
+    return repo_root
 
 
 class SkillNotFoundError(Exception):

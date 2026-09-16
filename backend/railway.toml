@@ -10,10 +10,12 @@ dockerfilePath = "Dockerfile"
 [deploy]
 # Schema first, then traffic. `upgrade head` is idempotent, so a redeploy that adds no migration is
 # a no-op — and a deploy that needs one cannot serve requests against the old schema.
-preDeployCommand = "alembic upgrade head"
+# Railway's schema documents `preDeployCommand` as an **array**, not a string. A string may simply
+# be ignored, which would skip the migration and start the app against an unmigrated database.
+preDeployCommand = ["alembic upgrade head"]
 # `--forwarded-allow-ips=*` is also set as ENV in the Dockerfile; repeated here so the start command
 # is correct even if it is overridden in the dashboard.
-startCommand = "uvicorn app.main:app --host 0.0.0.0 --port $PORT --forwarded-allow-ips=*"
+startCommand = "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips=* --timeout-keep-alive 75"
 healthcheckPath = "/health"
 healthcheckTimeout = 120
 restartPolicyType = "ON_FAILURE"

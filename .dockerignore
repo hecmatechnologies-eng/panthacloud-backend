@@ -1,0 +1,41 @@
+# Git and IDE
+.git/
+.gitignore
+.github/
+.vscode/
+.claude/
+docs/
+
+# Virtual environment and python caches
+.venv/
+backend/.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.uv-cache/
+backend/.pytest_cache/
+backend/.ruff_cache/
+*.egg-info/
+backend/*.egg-info/
+build/
+dist/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+!.env.railway.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+.dev-secrets.json
+backend/.dev-secrets.json
+
+# Local runtime data, databases, and logs
+*.db
+backend/*.db
+*.log
+backend/*.log
+data/
+backend/data/

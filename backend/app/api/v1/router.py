@@ -11,6 +11,7 @@ from app.api.v1.endpoints import (
     integrations,
     knowledge,
     memberships,
+    model_settings,
     organizations,
     projects,
     public_chat,
@@ -27,6 +28,7 @@ api_v1_router.include_router(health.router)
 api_v1_router.include_router(auth.router)
 api_v1_router.include_router(organizations.router)
 api_v1_router.include_router(memberships.router)
+api_v1_router.include_router(model_settings.router)
 api_v1_router.include_router(projects.router)
 api_v1_router.include_router(workspace.router)
 api_v1_router.include_router(studio_events.router)

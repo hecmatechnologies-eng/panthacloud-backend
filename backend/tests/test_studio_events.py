@@ -73,9 +73,16 @@ async def test_authorize_project_stream_refuses_a_foreign_project(client: AsyncC
 
 @pytest.mark.asyncio
 async def test_authorize_project_stream_requires_credentials() -> None:
-    with pytest.raises(HTTPException) as exc:
+    """The dependency raises the *domain* error; the edge owns the status code.
+
+    It used to assert `HTTPException`, which the dependency has never raised: credential failures
+    come from the auth service and are mapped to a 401 by the application's exception handler. The
+    route-level outcome is covered by `test_stream_route_requires_authentication` below.
+    """
+    from app.services.auth.exceptions import CredentialsMissingError
+
+    with pytest.raises(CredentialsMissingError):
         await authorize_project_stream(uuid.uuid4(), uuid.uuid4(), None)
-    assert exc.value.status_code == 401
 
 
 @pytest.mark.asyncio

@@ -17,13 +17,18 @@ _REDACTED_KEYS = ("token", "github_token", "encrypted_secrets", "secret", "passw
 async def record_audit(
     db: AsyncSession,
     org_id: uuid.UUID,
-    project_id: uuid.UUID,
+    project_id: uuid.UUID | None,
     user_id: uuid.UUID | None,
     event_type: str,
     resource_id: uuid.UUID,
     payload: dict[str, Any] | None = None,
     resource_type: str = "website_integration",
 ) -> None:
+    """Append an audit event.
+
+    ``project_id`` is ``None`` for an organization-level change — choosing the organization's model,
+    for instance — which has no project to attribute it to.
+    """
     clean_payload = dict(payload or {})
     for key in _REDACTED_KEYS:
         clean_payload.pop(key, None)

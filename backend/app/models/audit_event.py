@@ -17,10 +17,13 @@ class AuditEvent(BaseModel):
         nullable=False,
         index=True,
     )
-    project_id: Mapped[uuid.UUID] = mapped_column(
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("projects.id", ondelete="CASCADE"),
-        nullable=False,
+        # Optional because not every audited change belongs to a project: choosing an
+        # organization's model, for instance, is an organization-level decision. Requiring a project
+        # meant such changes could not be recorded at all.
+        nullable=True,
         index=True,
     )
     user_id: Mapped[uuid.UUID | None] = mapped_column(
