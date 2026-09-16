@@ -99,6 +99,10 @@ def create_application() -> FastAPI:
     # Root health endpoint (required by Phase 01: GET /health)
     app.include_router(health_router, tags=["health"])
 
+    # Root GitHub App callbacks (/github/callback and /github/oauth/callback)
+    from app.api.v1.endpoints import github_app
+    app.include_router(github_app.router)
+
     # Versioned API router (/api/v1)
     app.include_router(api_v1_router, prefix="/api/v1")
 
