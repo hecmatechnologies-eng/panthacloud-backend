@@ -201,7 +201,9 @@ class StaticValidator:
                 ):
                     issues.append(f"Managed integration markers missing from modified React layout '{path}'.")
                 if "lib/fussion-assistant.ts" in path:
-                    for key in ("projectId", "assistantId", "brandColor", "position"):
+                    # The keys a loader cannot work without (B8). `publicKey` and `scriptUrl` are
+                    # what locate the hosted widget; the rest are presentation.
+                    for key in ("publicKey", "scriptUrl", "brandColor", "position"):
                         if f'"{key}"' not in content and f"{key}:" not in content:
                             issues.append(f"Required configuration key '{key}' missing from '{path}'.")
 

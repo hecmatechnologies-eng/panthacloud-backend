@@ -12,11 +12,14 @@ from app.llm.base import ModelProvider
 from app.llm.gateway import ModelGateway
 
 # Vendors whose API is OpenAI-shaped. Moonshot/Kimi is one; the base URL selects the host.
-OPENAI_COMPATIBLE_PROVIDERS = frozenset({"moonshot", "openai", "openrouter", "openai_compatible"})
+OPENAI_COMPATIBLE_PROVIDERS = frozenset(
+    {"moonshot", "openai", "openrouter", "openai_compatible", "deepseek"}
+)
 DEFAULT_BASE_URLS = {
     "moonshot": "https://api.moonshot.ai/v1",
     "openai": "https://api.openai.com/v1",
     "openrouter": "https://openrouter.ai/api/v1",
+    "deepseek": "https://api.deepseek.com/v1",
 }
 
 

@@ -9,6 +9,7 @@ CORS for customer origins is deliberately not here: the app's global CORSMiddlew
 intercept a customer preflight, and the browser story belongs to B8. Logged as a B8 gate.
 """
 
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -25,9 +26,11 @@ from app.models.assistant import Assistant
 from app.models.conversation import Conversation, Message, MessageRole, VisitorSession
 from app.models.knowledge import KnowledgeBase
 from app.models.model_usage import ModelUsage
+from app.runtime.chat import ChatStreamEnd, ChatStreamStart, start_chat_stream
 from app.runtime.rate_limit import rate_limiter
 
 CHAT_URL = "/api/v1/public/chat"
+STREAM_URL = "/api/v1/public/chat/stream"
 ORIGIN = "https://shop.example.com"
 MODEL_REPLY = "This is the fake model's reply."
 
@@ -643,3 +646,141 @@ async def test_embedding_dimension_mismatch_returns_503(client: AsyncClient) -> 
     # Query would embed at 768 while the stored chunks are 384: fail closed, do not return garbage.
     await _set_knowledge_base(proj_id, embedding_dimension=768)
     assert (await chat(client, integration["public_key"], "refund?")).status_code == 503
+
+
+# ============================================================
+# B7 — the streamed twin
+# ============================================================
+
+
+def _events(body: str) -> list[tuple[str, dict]]:
+    """Parse an SSE body into its (event, data) pairs, ignoring keepalive comments."""
+    parsed: list[tuple[str, dict]] = []
+    for block in body.strip().split("\n\n"):
+        if not block or block.startswith(":"):
+            continue
+        name, data = "", ""
+        for line in block.splitlines():
+            if line.startswith("event: "):
+                name = line[len("event: ") :]
+            elif line.startswith("data: "):
+                data = line[len("data: ") :]
+        parsed.append((name, json.loads(data) if data else {}))
+    return parsed
+
+
+async def stream(
+    client: AsyncClient,
+    public_key: str | None,
+    message: str = "Hello",
+    *,
+    origin: str | None = ORIGIN,
+) -> Response:
+    headers = {} if origin is None else {"Origin": origin}
+    return await client.post(
+        STREAM_URL,
+        json={"public_key": public_key, "message": message},
+        headers=headers,
+    )
+
+
+@pytest.mark.asyncio
+async def test_stream_emits_start_tokens_and_a_terminal_event(client: AsyncClient) -> None:
+    integration, _, _ = await tenant(client, "b7_ok@example.com", "B7Ok")
+
+    resp = await stream(client, integration["public_key"])
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    events = _events(resp.text)
+    assert events[0][0] == "start"
+    assert events[0][1]["session_id"] and events[0][1]["conversation_id"]
+    # The deltas are the answer, in order, and reassemble to exactly the reply.
+    assert "".join(data["text"] for name, data in events if name == "token") == MODEL_REPLY
+    assert events[-1][0] == "done"
+    assert events[-1][1]["usage"] == {"input_tokens": 10, "output_tokens": 5}
+
+
+@pytest.mark.asyncio
+async def test_stream_persists_the_turn_and_records_the_usage(client: AsyncClient) -> None:
+    integration, _, _ = await tenant(client, "b7_persist@example.com", "B7Persist")
+
+    resp = await stream(client, integration["public_key"])
+    conversation_id = uuid.UUID(_events(resp.text)[0][1]["conversation_id"])
+
+    stored = await messages_of(conversation_id)
+    assert [message.role for message in stored] == [MessageRole.VISITOR, MessageRole.ASSISTANT]
+    assert stored[1].content == MODEL_REPLY
+
+    session_factory = get_session_factory()
+    async with session_factory() as db:
+        usage = (await db.execute(select(ModelUsage))).scalars().all()
+    assert len(usage) == 1
+    assert usage[0].conversation_id == conversation_id
+
+
+@pytest.mark.asyncio
+async def test_the_visitors_turn_is_committed_before_the_first_token(
+    client: AsyncClient,
+) -> None:
+    """FR-118: nothing holds a database session across the stream.
+
+    The generator is driven directly because httpx's ASGI transport buffers the whole response —
+    the middle of a stream is not observable over HTTP. If the pre-stream work were still in an
+    open transaction, an independent session could not see the visitor's turn.
+    """
+    integration, _, _ = await tenant(client, "b7_commit@example.com", "B7Commit")
+
+    events = await start_chat_stream(
+        public_key=integration["public_key"],
+        origin=ORIGIN,
+        session_id=None,
+        message="Hello",
+        client_ip="127.0.0.1",
+    )
+    first = await anext(events)
+    assert isinstance(first, ChatStreamStart)
+
+    session_factory = get_session_factory()
+    async with session_factory() as db:
+        visitor_rows = (
+            await db.execute(select(Message).where(Message.role == MessageRole.VISITOR))
+        ).scalars().all()
+    assert len(visitor_rows) == 1
+    assert visitor_rows[0].content == "Hello"
+
+    rest = [event async for event in events]
+    assert isinstance(rest[-1], ChatStreamEnd)
+
+    async with session_factory() as db:
+        roles = sorted(
+            row.role.value
+            for row in (await db.execute(select(Message))).scalars().all()
+        )
+    assert roles == ["ASSISTANT", "VISITOR"]
+
+
+@pytest.mark.asyncio
+async def test_stream_refuses_before_the_response_starts(client: AsyncClient) -> None:
+    """A refusal must be a status, never a 200 stream that then reports an error."""
+    integration, _, _ = await tenant(client, "b7_refuse@example.com", "B7Refuse")
+
+    foreign = await stream(client, integration["public_key"], origin="https://evil.example.com")
+    assert foreign.status_code == 403
+    assert "text/event-stream" not in foreign.headers.get("content-type", "")
+
+    unknown = await stream(client, "fk_not_a_real_key")
+    assert unknown.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_stream_returns_503_for_a_disabled_assistant(client: AsyncClient) -> None:
+    integration, _, proj_id = await tenant(client, "b7_disabled@example.com", "B7Disabled")
+    session_factory = get_session_factory()
+    async with session_factory() as db:
+        db.add(Assistant(project_id=uuid.UUID(proj_id), is_enabled=False))
+        await db.commit()
+
+    resp = await stream(client, integration["public_key"])
+    assert resp.status_code == 503
+    assert "text/event-stream" not in resp.headers.get("content-type", "")

@@ -42,7 +42,9 @@ async def start_agent_run(
         started_at=utc_now(),
     )
     db.add(run)
-    await db.flush()
+    # Commit before the model is called. A run that fails must still leave a record (FR-089), and a
+    # session poisoned mid-run must not be able to erase one that was only flushed.
+    await db.commit()
     return run
 
 
@@ -58,7 +60,9 @@ async def finish_agent_run(
     run.failure_class = failure_class
     run.failure_reason = failure_reason
     run.completed_at = utc_now()
-    await db.flush()
+    # Committed, not flushed: the terminal state is the half of the record that must survive even
+    # when the caller's transaction is later rolled back.
+    await db.commit()
 
 
 async def record_run_metadata(

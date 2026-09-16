@@ -5,7 +5,16 @@ assert on the assembled prompt, and can be made to fail on demand so the gateway
 paths are testable.
 """
 
-from app.llm.base import ModelRequest, ModelResponse, Usage
+from collections.abc import AsyncIterator
+
+from app.llm.base import (
+    ModelDelta,
+    ModelRequest,
+    ModelResponse,
+    ModelStreamEvent,
+    StreamDone,
+    Usage,
+)
 
 
 class FakeModelProvider:
@@ -27,6 +36,21 @@ class FakeModelProvider:
         if self.error is not None:
             raise self.error
         return ModelResponse(
+            text=self.reply,
+            model=request.model,
+            provider=self.name,
+            usage=self.usage,
+        )
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
+        """The reply as word deltas, so a caller's framing, keepalive and persistence are testable
+        without a vendor. ``"".join(deltas)`` equals ``reply`` exactly."""
+        self.calls.append(request)
+        if self.error is not None:
+            raise self.error
+        for index, word in enumerate(self.reply.split(" ")):
+            yield ModelDelta(text=word if index == 0 else f" {word}")
+        yield StreamDone(
             text=self.reply,
             model=request.model,
             provider=self.name,

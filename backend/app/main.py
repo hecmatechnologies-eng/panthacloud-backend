@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.public_cors import PublicCorsMiddleware
 from app.api.v1.endpoints.health import router as health_router
 from app.api.v1.router import api_v1_router
 from app.core.config import settings
@@ -86,6 +87,11 @@ def create_application() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Added after CORSMiddleware so it is the outermost layer. The public routes are called from a
+    # customer's site, an origin this policy does not cover, so the preflight must be answered
+    # before CORSMiddleware can reject it (step B8, CLAUDE.md §4.11).
+    app.add_middleware(PublicCorsMiddleware)
 
     # Error handling
     register_error_handlers(app)

@@ -16,6 +16,9 @@ DEFAULT_PRICING: dict[str, tuple[Decimal, Decimal]] = {
     "gemini-2.5-flash": (Decimal("0.30"), Decimal("2.50")),
     "kimi-k2.6": (Decimal("0.60"), Decimal("2.50")),
     "kimi-k3": (Decimal("1.20"), Decimal("5.00")),
+    # DeepSeek's published list prices; verify before trusting the budget numbers.
+    "deepseek-chat": (Decimal("0.27"), Decimal("1.10")),
+    "deepseek-reasoner": (Decimal("0.55"), Decimal("2.19")),
 }
 
 

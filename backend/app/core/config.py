@@ -137,6 +137,25 @@ class Settings(BaseSettings):
     # Where the install callback sends the browser back to, after recording the installation.
     FRONTEND_URL: str = "http://localhost:3000"
 
+    # Where a *customer's browser* reaches this API from (step B8). It is written into the loader
+    # Fussion commits, so a wrong value ships a broken widget into a customer's repository.
+    # Development falls back to the local API; production must set it (see `widget_script_url`).
+    PUBLIC_API_URL: str | None = None
+
+    @property
+    def widget_script_url(self) -> str:
+        """The widget bundle's public URL, as a customer's browser will load it."""
+        base = self.PUBLIC_API_URL
+        if not base:
+            if self.is_production:
+                raise RuntimeError(
+                    "Production configuration error: PUBLIC_API_URL must be set. It is the origin "
+                    "a customer's browser loads the widget from and is written into every pull "
+                    "request, so there is no default to fall back to."
+                )
+            base = "http://localhost:8000"
+        return f"{base.rstrip('/')}/api/v1/public/widget.js"
+
     model_config = SettingsConfigDict(
         env_file=(
             str(Path(__file__).resolve().parents[2] / ".env"),

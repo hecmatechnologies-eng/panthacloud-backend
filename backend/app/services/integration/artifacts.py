@@ -1,7 +1,6 @@
 import json
 import posixpath
 import re
-import uuid
 from collections.abc import Callable
 from typing import Any
 
@@ -151,87 +150,75 @@ def _patch_preserving_line_endings(patch: Callable[[str], str], content: str) ->
     return patched.replace("\n", line_ending) if line_ending != "\n" else patched
 
 
-def generate_react_widget_component(
-    assistant_data: dict[str, Any], config_import: str = "../../lib/fussion-assistant"
-) -> str:
-    """Generates the declarative Next.js / React widget component contract."""
-    position = assistant_data.get("position", "BOTTOM_RIGHT")
-    pos_style = "bottom: '24px', right: '24px'" if position == "BOTTOM_RIGHT" else "bottom: '24px', left: '24px'"
+def _widget_config(
+    public_key: str, script_url: str, assistant_data: dict[str, Any]
+) -> dict[str, Any]:
+    """The one config shape both loaders emit, so the React and static paths cannot drift apart."""
+    return {
+        "publicKey": public_key,
+        "scriptUrl": script_url,
+        "name": str(assistant_data.get("name", "Fussion Assistant")),
+        "welcomeMessage": str(
+            assistant_data.get("welcome_message", "Hi! How can I help you today?")
+        ),
+        "brandColor": str(assistant_data.get("brand_color", "#4338CA")),
+        "textColor": str(assistant_data.get("text_color", "#FFFFFF")),
+        "position": str(assistant_data.get("position", "BOTTOM_RIGHT")),
+        # The widget is not injected at all for a switched-off assistant, rather than showing a
+        # launcher whose every question the API would refuse with a 503.
+        "isEnabled": bool(assistant_data.get("is_enabled", True)),
+    }
 
+
+def generate_react_widget_component(config_import: str = "../../lib/fussion-assistant") -> str:
+    """A component that loads the hosted widget (B8).
+
+    It renders nothing of its own. The UI, the shadow root and the isolation live in the bundle
+    Fussion serves, so a widget fix reaches every customer without a new pull request — and this
+    file only has to inject one script tag.
+    """
     return f"""'use client';
 
-import React from 'react';
-import {{ fussionAssistantConfig }} from '{config_import}';
+import {{ useEffect }} from 'react';
+import {{ fussionConfig }} from '{config_import}';
 
 export function FussionAssistant() {{
-  if (!fussionAssistantConfig.isEnabled) {{
-    return null;
-  }}
+  useEffect(() => {{
+    if (!fussionConfig.isEnabled) {{
+      return;
+    }}
+    const script = document.createElement('script');
+    script.src = fussionConfig.scriptUrl;
+    script.async = true;
+    script.dataset.fussionKey = fussionConfig.publicKey;
+    script.dataset.fussionName = fussionConfig.name;
+    script.dataset.fussionBrandColor = fussionConfig.brandColor;
+    script.dataset.fussionTextColor = fussionConfig.textColor;
+    script.dataset.fussionPosition = fussionConfig.position;
+    script.dataset.fussionWelcome = fussionConfig.welcomeMessage;
+    document.body.appendChild(script);
+    return () => {{
+      document.body.removeChild(script);
+    }};
+  }}, []);
 
-  return (
-    <div
-      id="fussion-assistant-root"
-      style={{{{
-        position: 'fixed',
-        {pos_style},
-        zIndex: 9999,
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: '{ "flex-end" if position == "BOTTOM_RIGHT" else "flex-start" }',
-      }}}}
-      data-project-id={{fussionAssistantConfig.projectId}}
-      data-assistant-id={{fussionAssistantConfig.assistantId}}
-    >
-      {{/* Fussion Assistant launcher */}}
-      <button
-        type="button"
-        aria-label="Open AI Assistant"
-        style={{{{
-          backgroundColor: fussionAssistantConfig.brandColor,
-          color: fussionAssistantConfig.textColor,
-          border: 'none',
-          borderRadius: '9999px',
-          padding: '14px 20px',
-          fontSize: '14px',
-          fontWeight: 600,
-          boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.3)',
-          cursor: 'pointer',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-        }}}}
-      >
-        <span>💬</span>
-        <span>{{fussionAssistantConfig.name}}</span>
-      </button>
-    </div>
-  );
+  return null;
 }}
 """
 
 
-def generate_react_config_ts(project_id: uuid.UUID | str, assistant_data: dict[str, Any]) -> str:
-    """Generates the declarative assistant configuration module."""
-    raw_config = {
-        "projectId": str(project_id),
-        "assistantId": str(assistant_data.get("id", "")),
-        "name": str(assistant_data.get("name", "Fussion Assistant")),
-        "welcomeMessage": str(assistant_data.get("welcome_message", "Hi! How can I help you today?")),
-        "brandColor": str(assistant_data.get("brand_color", "#6366F1")),
-        "textColor": str(assistant_data.get("text_color", "#FFFFFF")),
-        "position": str(assistant_data.get("position", "BOTTOM_RIGHT")),
-        "avatarUrl": assistant_data.get("avatar_url"),
-        "starterPrompt": assistant_data.get("starter_prompt"),
-        "isEnabled": bool(assistant_data.get("is_enabled", True)),
-    }
-    serialized = json.dumps(raw_config, indent=2)
+def generate_react_config_ts(
+    public_key: str, script_url: str, assistant_data: dict[str, Any]
+) -> str:
+    """What the loader needs: where the widget lives, which assistant it is, and how it looks."""
+    serialized = json.dumps(_widget_config(public_key, script_url, assistant_data), indent=2)
 
     return f"""// Auto-generated by Fussion. Edit your assistant's settings in Fussion, not here:
 // this file is replaced on the next integration run.
 
-export const fussionAssistantConfig = {CONFIG_BEGIN} {serialized} {CONFIG_END} as const;
+export const fussionConfig = {CONFIG_BEGIN} {serialized} {CONFIG_END} as const;
 
-export type FussionAssistantConfig = typeof fussionAssistantConfig;
+export type FussionConfig = typeof fussionConfig;
 """
 
 
@@ -280,28 +267,35 @@ def patch_react_layout(
     return f"{head}{jsx_statement}\n      {separator}{tail}"
 
 
-def generate_html_widget_script(project_id: uuid.UUID | str, assistant_data: dict[str, Any]) -> str:
-    """Generates the generic HTML/JS widget configuration script."""
-    raw_config = {
-        "projectId": str(project_id),
-        "assistantId": str(assistant_data.get("id", "")),
-        "name": str(assistant_data.get("name", "Fussion Assistant")),
-        "welcomeMessage": str(assistant_data.get("welcome_message", "Hi! How can I help you today?")),
-        "brandColor": str(assistant_data.get("brand_color", "#6366F1")),
-        "textColor": str(assistant_data.get("text_color", "#FFFFFF")),
-        "position": str(assistant_data.get("position", "BOTTOM_RIGHT")),
-        "avatarUrl": assistant_data.get("avatar_url"),
-        "starterPrompt": assistant_data.get("starter_prompt"),
-        "isEnabled": bool(assistant_data.get("is_enabled", True)),
-    }
-    serialized = json.dumps(raw_config, indent=2)
+def generate_html_widget_script(
+    public_key: str, script_url: str, assistant_data: dict[str, Any]
+) -> str:
+    """A static page's loader: inject the hosted widget with this assistant's settings.
+
+    A static site has no component to hook into, so this file is the loader the page's script tag
+    pulls in.
+    """
+    serialized = json.dumps(_widget_config(public_key, script_url, assistant_data), indent=2)
 
     # No console logging: this runs on the customer's production site, where their console is
     # theirs. Configuration values are fenced so the security scan checks code, not settings.
     return f"""// Auto-generated by Fussion. Edit your assistant's settings in Fussion, not here:
 // this file is replaced on the next integration run.
 (function() {{
-  window.fussionAssistantConfig = {CONFIG_BEGIN} {serialized} {CONFIG_END};
+  var config = {CONFIG_BEGIN} {serialized} {CONFIG_END};
+  if (!config.isEnabled) {{
+    return;
+  }}
+  var script = document.createElement('script');
+  script.src = config.scriptUrl;
+  script.async = true;
+  script.dataset.fussionKey = config.publicKey;
+  script.dataset.fussionName = config.name;
+  script.dataset.fussionBrandColor = config.brandColor;
+  script.dataset.fussionTextColor = config.textColor;
+  script.dataset.fussionPosition = config.position;
+  script.dataset.fussionWelcome = config.welcomeMessage;
+  document.body.appendChild(script);
 }})();
 """
 
@@ -334,7 +328,9 @@ def patch_html_index(content: str, script_src: str = "./fussion-assistant.js") -
 
 
 def generate_artifacts(
-    project_id: uuid.UUID | str,
+    *,
+    public_key: str,
+    script_url: str,
     assistant_data: dict[str, Any],
     framework_skill_id: str,
     widget_target_path: str,
@@ -344,6 +340,10 @@ def generate_artifacts(
     Generates all required files for website integration deterministically.
     Returns a mapping of relative file paths to their string contents.
     The widget target is always patched from its real contents, which the caller must have read.
+
+    What is generated is a *loader*, not the widget: the bundle Fussion serves
+    (`GET /api/v1/public/widget.js`) owns the UI, so a widget fix reaches every customer at once
+    instead of through a pull request each.
     """
     files: dict[str, str] = {}
 
@@ -355,9 +355,9 @@ def generate_artifacts(
         config_path = f"{root}lib/fussion-assistant.ts"
 
         files[component_path] = generate_react_widget_component(
-            assistant_data, config_import=relative_import(component_path, config_path)
+            config_import=relative_import(component_path, config_path)
         )
-        files[config_path] = generate_react_config_ts(project_id, assistant_data)
+        files[config_path] = generate_react_config_ts(public_key, script_url, assistant_data)
         files[widget_target_path] = _patch_preserving_line_endings(
             lambda content: patch_react_layout(
                 content, component_import=relative_import(widget_target_path, component_path)
@@ -376,7 +376,7 @@ def generate_artifacts(
         # The script sits beside the page that loads it, referenced relatively, so it resolves
         # whatever directory the site is served from.
         script_path = posixpath.join(posixpath.dirname(widget_target_path), "fussion-assistant.js")
-        files[script_path] = generate_html_widget_script(project_id, assistant_data)
+        files[script_path] = generate_html_widget_script(public_key, script_url, assistant_data)
         files[widget_target_path] = _patch_preserving_line_endings(
             lambda content: patch_html_index(content, script_src="./fussion-assistant.js"),
             existing_target_content,

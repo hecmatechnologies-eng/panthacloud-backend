@@ -1,4 +1,3 @@
-import re
 import uuid
 from typing import Annotated
 
@@ -8,17 +7,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_organization, get_current_user
 from app.core.database import get_db
+from app.core.slugs import slugify
 from app.models.membership import Membership, RoleEnum
 from app.models.organization import Organization
 from app.models.user import User
 from app.schemas.organization import OrganizationCreate, OrganizationRead
 
 router = APIRouter(prefix="/organizations", tags=["Organizations"])
-
-
-def format_slug(text: str) -> str:
-    clean = re.sub(r"[^a-zA-Z0-9]+", "-", text).strip("-").lower()
-    return clean or "org"
 
 
 @router.post(
@@ -32,7 +27,7 @@ async def create_organization(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> OrganizationRead:
-    slug = payload.slug or f"{format_slug(payload.name)}-{uuid.uuid4().hex[:6]}"
+    slug = payload.slug or f"{slugify(payload.name, 'org')}-{uuid.uuid4().hex[:6]}"
 
     # Check slug uniqueness
     stmt = select(Organization).where(Organization.slug == slug)

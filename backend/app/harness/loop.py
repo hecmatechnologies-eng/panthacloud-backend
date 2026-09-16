@@ -9,6 +9,7 @@ model must not — tenancy, tool authorization, budget and audit.
 import asyncio
 import hashlib
 import json
+import logging
 from collections.abc import Awaitable, Callable
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,6 +34,8 @@ from app.models.agent_run import AgentRun, AgentRunStatus, FailureClass
 from app.tools.base import ToolResult
 from app.tools.gateway import ApprovedPlan, ToolGateway
 from app.tools.registry import ToolRegistry
+
+logger = logging.getLogger("fussion.harness.loop")
 
 
 async def run_agent(
@@ -171,6 +174,29 @@ def _observation(result: ToolResult) -> str:
 
 
 async def _fail(
+    db: AsyncSession,
+    run: AgentRun,
+    failure_class: FailureClass,
+    reason: str,
+    budget: BudgetTracker,
+) -> None:
+    try:
+        await _record_failure(db, run, failure_class, reason, budget)
+    except Exception:
+        # The session may already be unusable: a failed flush leaves it in a pending-rollback
+        # state, where every further statement raises PendingRollbackError. That is what masked a
+        # real analysis failure behind "an unexpected error occurred". Roll back and retry once, so
+        # the failed run is still recorded *and* the caller sees the original error (FR-089).
+        logger.exception("Could not record the failed run; retrying on a clean transaction.")
+        try:
+            await db.rollback()
+            await db.refresh(run)
+            await _record_failure(db, run, failure_class, reason, budget)
+        except Exception:
+            logger.exception("The failed run could not be recorded at all.")
+
+
+async def _record_failure(
     db: AsyncSession,
     run: AgentRun,
     failure_class: FailureClass,

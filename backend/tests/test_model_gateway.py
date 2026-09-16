@@ -4,7 +4,9 @@ Unit tests against the gateway with fake providers: allowlist, context cap, budg
 throttle / suspension, bounded retries, and usage recording. No network, no paid API.
 """
 
+import asyncio
 import uuid
+from dataclasses import replace
 from decimal import Decimal
 
 import pytest
@@ -13,11 +15,13 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.core.database import get_session_factory
 from app.llm.base import (
+    ModelDelta,
     ModelMessage,
     ModelRequest,
     ModelResponse,
     ProviderPermanentError,
     ProviderTransientError,
+    StreamDone,
     Usage,
 )
 from app.llm.factory import validate_model_configuration
@@ -318,3 +322,113 @@ def test_validate_rejects_uncapped_production(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(settings, "MODEL_DEFAULT_SPEND_LIMIT_USD", None)
     with pytest.raises(RuntimeError):
         validate_model_configuration()
+
+
+# ============================================================
+# Streaming (B7)
+# ============================================================
+
+
+class _ScriptedProvider:
+    """A provider whose stream fails a set number of times, optionally after a first delta."""
+
+    name = "fake"
+
+    def __init__(self, *, failures: int = 0, emit_before_failure: bool = False) -> None:
+        self._failures = failures
+        self._emit_before_failure = emit_before_failure
+        self.attempts = 0
+
+    async def complete(self, request: ModelRequest) -> ModelResponse:  # pragma: no cover
+        raise AssertionError("complete() is not used by these tests")
+
+    async def stream(self, request: ModelRequest):
+        self.attempts += 1
+        if self.attempts <= self._failures:
+            if self._emit_before_failure:
+                yield ModelDelta(text="partial ")
+            raise ProviderTransientError("transient")
+        yield ModelDelta(text="ok")
+        yield StreamDone(text="ok", model=request.model, provider=self.name, usage=Usage(2, 3))
+
+
+class _StallingProvider:
+    name = "fake"
+
+    async def complete(self, request: ModelRequest) -> ModelResponse:  # pragma: no cover
+        raise AssertionError("complete() is not used by these tests")
+
+    async def stream(self, request: ModelRequest):
+        await asyncio.sleep(5)
+        yield StreamDone(text="late", model=request.model, provider=self.name, usage=Usage(0, 0))
+
+
+@pytest.mark.asyncio
+async def test_stream_yields_deltas_then_the_done_event() -> None:
+    provider = FakeModelProvider(reply="one two three")
+    events = [event async for event in ModelGateway(provider).stream(_request())]
+
+    assert [e.text for e in events if isinstance(e, ModelDelta)] == ["one", " two", " three"]
+    done = events[-1]
+    assert isinstance(done, StreamDone)
+    # The terminal event carries the whole text, so a caller never accumulates deltas itself.
+    assert done.text == "one two three"
+    assert done.usage == Usage(input_tokens=10, output_tokens=5)
+
+
+@pytest.mark.asyncio
+async def test_stream_refuses_a_model_not_on_the_allowlist() -> None:
+    request = replace(_request(), model="not-allowed")
+    with pytest.raises(ModelNotAllowedError):
+        [event async for event in ModelGateway(FakeModelProvider()).stream(request)]
+
+
+@pytest.mark.asyncio
+async def test_stream_refuses_an_over_long_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "MODEL_MAX_INPUT_TOKENS", 5)
+    with pytest.raises(ContextTooLargeError):
+        [event async for event in ModelGateway(FakeModelProvider()).stream(_request("x" * 400))]
+
+
+@pytest.mark.asyncio
+async def test_stream_retries_a_transient_failure_before_the_first_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "MODEL_RETRY_BACKOFF_SECONDS", 0.0)
+    provider = _ScriptedProvider(failures=1)
+
+    events = [event async for event in ModelGateway(provider).stream(_request())]
+
+    assert provider.attempts == 2
+    assert [e.text for e in events if isinstance(e, ModelDelta)] == ["ok"]
+
+
+@pytest.mark.asyncio
+async def test_stream_does_not_retry_after_the_first_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replaying a half-delivered answer would duplicate text the visitor has already seen."""
+    monkeypatch.setattr(settings, "MODEL_RETRY_BACKOFF_SECONDS", 0.0)
+    provider = _ScriptedProvider(failures=1, emit_before_failure=True)
+
+    with pytest.raises(ModelCallError):
+        [event async for event in ModelGateway(provider).stream(_request())]
+
+    assert provider.attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_fails_on_a_silent_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "MODEL_TIMEOUT_SECONDS", 0.05)
+    with pytest.raises(ModelCallError):
+        [event async for event in ModelGateway(_StallingProvider()).stream(_request())]
+
+
+@pytest.mark.asyncio
+async def test_stream_leaves_the_ledger_to_the_caller() -> None:
+    """The gateway holds no session during a stream (FR-118), so it cannot record usage itself."""
+    [event async for event in ModelGateway(FakeModelProvider()).stream(_request())]
+
+    session_factory = get_session_factory()
+    async with session_factory() as db:
+        assert (await db.execute(select(ModelUsage))).scalars().all() == []

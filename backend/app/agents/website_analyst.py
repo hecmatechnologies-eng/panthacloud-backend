@@ -34,5 +34,5 @@ WEBSITE_ANALYST = AgentDefinition(
     capabilities=frozenset({"repository.read"}),
     tools=("read_tree", "read_file", "search_code"),
     output_schema=WebsiteProfile,
-    budget=Budget(tool_calls=40, tokens=200_000, seconds=120, cost_usd=Decimal("0.50")),
+    budget=Budget(tool_calls=60, tokens=400_000, seconds=300, cost_usd=Decimal("1.00")),
 )

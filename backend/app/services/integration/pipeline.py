@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.protected_paths import protected_reason
 from app.models.assistant import Assistant
 from app.models.audit_event import AuditEvent
@@ -205,7 +206,8 @@ class IntegrationPipeline:
             # did not compile, and the validator cannot see inside a managed block.
             try:
                 generated_files = generate_artifacts(
-                    project_id=project.id,
+                    public_key=integration.public_key,
+                    script_url=settings.widget_script_url,
                     assistant_data=asst_data,
                     framework_skill_id=integration.framework_skill_id,
                     widget_target_path=target_path,

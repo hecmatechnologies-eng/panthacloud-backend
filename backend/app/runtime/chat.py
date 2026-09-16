@@ -6,16 +6,24 @@ endpoint stays a thin adapter over the refusal/limit mapping.
 """
 
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import settings
-from app.llm.base import ModelMessage, ModelRequest
-from app.llm.gateway import UsageContext, get_model_gateway
+from app.core.database import get_session_factory
+from app.llm.base import (
+    ModelDelta,
+    ModelMessage,
+    ModelRequest,
+    StreamDone,
+    Usage,
+)
+from app.llm.gateway import ModelGateway, UsageContext, get_model_gateway
 from app.models.assistant import Assistant
 from app.models.base import utc_now
 from app.models.conversation import Conversation, Message, MessageRole, VisitorSession
@@ -46,6 +54,48 @@ class ChatReply:
     citations: tuple[dict[str, Any], ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedTurn:
+    """A turn that is persisted and assembled, and has not called the model yet.
+
+    Everything here is done before a stream starts, so the streaming path can commit and release
+    its session before the first token (FR-118).
+    """
+
+    session_id: uuid.UUID
+    conversation_id: uuid.UUID
+    organization_id: uuid.UUID
+    project_id: uuid.UUID
+    integration_id: uuid.UUID
+    request: ModelRequest
+    citations: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ChatStreamStart:
+    """First event: the visitor's turn is committed and the prompt is assembled."""
+
+    session_id: uuid.UUID
+    conversation_id: uuid.UUID
+    citations: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ChatStreamDelta:
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class ChatStreamEnd:
+    """Last event: the reply is persisted and the usage is on the ledger."""
+
+    model: str
+    usage: Usage
+
+
+ChatStreamEvent = ChatStreamStart | ChatStreamDelta | ChatStreamEnd
+
+
 async def handle_chat(
     db: AsyncSession,
     *,
@@ -57,6 +107,135 @@ async def handle_chat(
 ) -> ChatReply:
     """One chat turn. Raises ``TenantResolutionError`` or ``RateLimitExceeded``; never returns a
     reply to a caller that is not entitled to one."""
+    prepared = await _prepare_turn(
+        db,
+        public_key=public_key,
+        origin=origin,
+        session_id=session_id,
+        message=message,
+        client_ip=client_ip,
+    )
+
+    gateway = get_model_gateway()
+    response = await gateway.complete(
+        db,
+        prepared.request,
+        UsageContext(
+            organization_id=prepared.organization_id,
+            project_id=prepared.project_id,
+            integration_id=prepared.integration_id,
+            conversation_id=prepared.conversation_id,
+        ),
+    )
+    _persist_reply(db, prepared, response.text)
+    await db.flush()
+
+    return ChatReply(
+        session_id=prepared.session_id,
+        conversation_id=prepared.conversation_id,
+        reply=response.text,
+        citations=prepared.citations,
+    )
+
+
+async def start_chat_stream(
+    *,
+    public_key: str | None,
+    origin: str | None,
+    session_id: uuid.UUID | None,
+    message: str,
+    client_ip: str | None,
+) -> AsyncIterator[ChatStreamEvent]:
+    """Prepare a streamed turn and return the iterator that yields its events.
+
+    Deliberately a coroutine rather than an async generator: the preparation — tenancy, rate
+    limits, persistence, budget — must run, and be able to **raise**, while the caller can still
+    answer with a real HTTP status, before any part of the response has been sent.
+
+    It manages its own sessions: the visitor's turn is persisted and **committed before the first
+    token**, and the reply and usage are written in a second, short-lived session **after the
+    last**. Nothing holds a database session open across the stream (FR-118, CLAUDE.md §3.6) — the
+    failure that leaked the pool in the Studio's own feed.
+    """
+    session_factory = get_session_factory()
+    gateway = get_model_gateway()
+
+    async with session_factory() as db:
+        prepared = await _prepare_turn(
+            db,
+            public_key=public_key,
+            origin=origin,
+            session_id=session_id,
+            message=message,
+            client_ip=client_ip,
+        )
+        # `complete` checks the budget itself; `stream` cannot without a session, so the caller
+        # does it here — before any token is paid for.
+        await gateway.ensure_budget(db, prepared.organization_id)
+        await db.commit()
+
+    return _stream_events(session_factory, gateway, prepared)
+
+
+async def _stream_events(
+    session_factory: async_sessionmaker[AsyncSession],
+    gateway: ModelGateway,
+    prepared: PreparedTurn,
+) -> AsyncIterator[ChatStreamEvent]:
+    yield ChatStreamStart(
+        session_id=prepared.session_id,
+        conversation_id=prepared.conversation_id,
+        citations=prepared.citations,
+    )
+
+    parts: list[str] = []
+    done: StreamDone | None = None
+    async for event in gateway.stream(prepared.request):
+        if isinstance(event, StreamDone):
+            done = event
+        elif isinstance(event, ModelDelta):
+            parts.append(event.text)
+            yield ChatStreamDelta(text=event.text)
+
+    reply = done.text if done is not None else "".join(parts)
+
+    async with session_factory() as db:
+        _persist_reply(db, prepared, reply)
+        if done is not None:
+            # The ledger write the gateway could not do: the same seam the agent adapter uses.
+            await gateway.record_external_usage(
+                db,
+                organization_id=prepared.organization_id,
+                provider=done.provider,
+                model=done.model,
+                input_tokens=done.usage.input_tokens,
+                output_tokens=done.usage.output_tokens,
+                project_id=prepared.project_id,
+                integration_id=prepared.integration_id,
+                conversation_id=prepared.conversation_id,
+            )
+        await db.commit()
+
+    yield ChatStreamEnd(
+        model=done.model if done is not None else prepared.request.model,
+        usage=done.usage if done is not None else Usage(input_tokens=0, output_tokens=0),
+    )
+
+
+async def _prepare_turn(
+    db: AsyncSession,
+    *,
+    public_key: str | None,
+    origin: str | None,
+    session_id: uuid.UUID | None,
+    message: str,
+    client_ip: str | None,
+) -> PreparedTurn:
+    """Rate limit, resolve the tenant, persist the visitor's turn, and assemble the prompt.
+
+    Shared by the JSON and streaming paths, so both enforce the same bounds and build the same
+    context; only the model call differs.
+    """
     window = settings.PUBLIC_CHAT_RATE_LIMIT_WINDOW_SECONDS
     # IP first: it is the cheapest shed, and it does not require the tenant to be known yet.
     if client_ip:
@@ -96,23 +275,26 @@ async def handle_chat(
     # Flush before assembling the prompt, so the history includes the visitor's current turn.
     await db.flush()
 
-    reply, citations = await _model_reply(db, ctx, conversation)
-
-    db.add(
-        Message(
-            conversation_id=conversation.id,
-            role=MessageRole.ASSISTANT,
-            content=reply,
-            citations=list(citations),
-        )
-    )
-    await db.flush()
-
-    return ChatReply(
+    request, citations = await _assemble_request(db, ctx, conversation)
+    return PreparedTurn(
         session_id=session.id,
         conversation_id=conversation.id,
-        reply=reply,
+        organization_id=ctx.organization_id,
+        project_id=ctx.project_id,
+        integration_id=ctx.integration_id,
+        request=request,
         citations=tuple(citations),
+    )
+
+
+def _persist_reply(db: AsyncSession, prepared: PreparedTurn, reply: str) -> None:
+    db.add(
+        Message(
+            conversation_id=prepared.conversation_id,
+            role=MessageRole.ASSISTANT,
+            content=reply,
+            citations=list(prepared.citations),
+        )
     )
 
 
@@ -178,10 +360,10 @@ async def _latest_conversation(db: AsyncSession, session_id: uuid.UUID) -> Conve
     return (await db.execute(stmt)).scalar_one_or_none()
 
 
-async def _model_reply(
+async def _assemble_request(
     db: AsyncSession, ctx: TenantContext, conversation: Conversation
-) -> tuple[str, list[dict[str, Any]]]:
-    """Assemble the prompt and call the model through the gateway.
+) -> tuple[ModelRequest, list[dict[str, Any]]]:
+    """Assemble one turn's prompt, without calling the model.
 
     The system prompt is the trusted instruction region. Retrieved knowledge is fenced as labelled
     data inside the final user turn, never concatenated into the instruction region (FR-098).
@@ -212,23 +394,12 @@ async def _model_reply(
     ]
     messages.append(ModelMessage(role="user", content=_compose_user_turn(question, retrieved)))
 
-    gateway = get_model_gateway()
     request = ModelRequest(
         model=settings.MODEL_ID,
         messages=messages,
         max_output_tokens=settings.MODEL_MAX_OUTPUT_TOKENS,
     )
-    response = await gateway.complete(
-        db,
-        request,
-        UsageContext(
-            organization_id=ctx.organization_id,
-            project_id=ctx.project_id,
-            integration_id=ctx.integration_id,
-            conversation_id=conversation.id,
-        ),
-    )
-    return response.text, citations
+    return request, citations
 
 
 def _split_question(history: list[Message]) -> tuple[str, list[Message]]:

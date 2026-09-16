@@ -10,10 +10,16 @@ class ProjectBase(BaseModel):
 
 
 class ProjectCreate(ProjectBase):
+    # Reject unknown fields: a typo must fail loudly, not be silently ignored.
+    model_config = ConfigDict(extra="forbid")
+
     slug: str | None = Field(None, min_length=1, max_length=255, pattern=r"^[a-z0-9-]+$")
 
 
 class ProjectUpdate(BaseModel):
+    # slug is intentionally absent: a project's URL key is immutable.
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = Field(None, min_length=1, max_length=255)
     description: str | None = None
 

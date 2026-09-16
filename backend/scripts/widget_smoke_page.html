@@ -1,0 +1,49 @@
+<!doctype html>
+<!-- Fussion widget smoke test (step B8).
+
+     The one part of B8 that cannot be verified without a browser: that the widget renders in a
+     shadow root on a third-party page and streams an answer. Everything behind it — the bundle,
+     the CORS preflight, the SSE stream — is covered by tests and was verified against a live server.
+
+     To use it:
+
+       1. Start the API:            backend/.venv/Scripts/python.exe backend/run_dev.py
+       2. Serve this directory:     backend/.venv/Scripts/python.exe -m http.server 5500
+       3. Register the origin       http://localhost:5500  on the integration
+                                    (Studio -> Repository -> Access, or POST
+                                     /website-integrations/origins with {"origin": "..."})
+       4. Replace the key below     with the integration's public_key
+       5. Open                      http://localhost:5500/widget_smoke_page.html
+
+     Expected: a "Chat" launcher bottom-right; sending a message streams the answer token by token,
+     and the panel cites sources when the knowledge base has documents.
+
+     If the panel reports it cannot reach the assistant, the site's Content-Security-Policy is the
+     usual cause: allow the API origin in `connect-src`. That is the degradation FR-110 asks for.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Fussion widget smoke test</title>
+    <style>
+      body { font: 400 15px/1.6 system-ui, sans-serif; margin: 40px auto; max-width: 40rem; }
+      code { background: #f3f4f6; padding: 1px 5px; border-radius: 4px; }
+    </style>
+  </head>
+  <body>
+    <h1>Fussion widget smoke test</h1>
+    <p>
+      This page stands in for a customer's site. The widget is loaded from the API origin below and
+      must render inside its own shadow root — nothing in this page's stylesheet should affect it,
+      and nothing in the widget should reach this page.
+    </p>
+    <p>Replace <code>REPLACE_WITH_YOUR_PUBLIC_KEY</code> with the integration's public key.</p>
+
+    <script
+      src="http://127.0.0.1:8010/api/v1/public/widget.js"
+      data-fussion-key="REPLACE_WITH_YOUR_PUBLIC_KEY"
+      async
+    ></script>
+  </body>
+</html>

@@ -14,7 +14,7 @@ from sqlalchemy import select
 
 from app.agents.website_profile import IntegrationCandidate, WebsiteProfile
 from app.core.database import get_session_factory
-from app.harness.runner import AgentRunResult
+from app.harness.runner import AgentBudgetExceededError, AgentRunResult
 from app.llm.gateway import ModelGateway
 from app.llm.providers.fake import FakeModelProvider
 from app.models.website_analysis import WebsiteAnalysis
@@ -267,6 +267,42 @@ async def test_re_analysis_below_threshold_keeps_the_existing_configuration(
     configured = (await client.get(_integration_url(org_id, proj_id), headers=hdr)).json()
     assert configured["framework_skill_id"] == "generic-html"
     assert configured["widget_target_path"] == "index.html"
+
+
+@pytest.mark.asyncio
+async def test_a_run_budget_overrun_is_reported_not_masked(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The analyst reaching its run budget is actionable feedback, not an opaque 500 (FR-053).
+
+    A real repository made the analyst exceed its token ceiling; the endpoint had no mapping for the
+    budget errors, so the Studio showed "an unexpected error occurred" while the run record held the
+    real reason.
+    """
+    token, org_id, proj_id = await _tenant(client, "c10_budget@example.com", "C10Budget")
+    hdr = {"Authorization": f"Bearer {token}"}
+    profile = WebsiteProfile(unsupported_reason="unused")
+    monkeypatch.setattr(
+        "app.services.analysis.analysis_service.clone_repository", _stub_clone(profile)
+    )
+
+    class _BudgetRunner:
+        async def run(
+            self, definition, context, *, prompt, tools=(), tool_executor=None, usage_recorder=None
+        ):
+            raise AgentBudgetExceededError("Exceeded the total_tokens_limit of 200000.")
+
+    monkeypatch.setattr(
+        "app.services.analysis.analysis_service.PydanticAIAgentRunner", lambda: _BudgetRunner()
+    )
+    monkeypatch.setattr(
+        "app.services.analysis.analysis_service.get_model_gateway",
+        lambda: ModelGateway(FakeModelProvider()),
+    )
+
+    resp = await client.post(f"{_integration_url(org_id, proj_id)}/{ANALYZE}", headers=hdr)
+    assert resp.status_code == 422, resp.text
+    assert "budget" in resp.json()["detail"].lower()
 
 
 @pytest.mark.asyncio

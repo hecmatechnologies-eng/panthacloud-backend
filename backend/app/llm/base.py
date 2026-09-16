@@ -4,6 +4,7 @@ Fussion's own types, deliberately not a vendor's. A provider adapter maps these 
 vendor API; swapping vendors is a new adapter, never a change to a caller.
 """
 
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
@@ -38,12 +39,39 @@ class ModelResponse:
     usage: Usage
 
 
+@dataclass(frozen=True, slots=True)
+class ModelDelta:
+    """One incremental piece of the answer, in emission order (B7)."""
+
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class StreamDone:
+    """The terminal stream event.
+
+    It carries the whole text so a caller that only needs the finished answer — the persistence
+    path — never has to accumulate deltas itself, and the provider-reported usage, which some
+    vendors send only in the final chunk.
+    """
+
+    text: str
+    model: str
+    provider: str
+    usage: Usage
+
+
+ModelStreamEvent = ModelDelta | StreamDone
+
+
 class ModelProvider(Protocol):
-    """One vendor, reduced to a single call. ``stream`` arrives with B7."""
+    """One vendor, reduced to a call and a stream (FR-072)."""
 
     name: str
 
     async def complete(self, request: ModelRequest) -> ModelResponse: ...
+
+    def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]: ...
 
 
 class ModelProviderError(Exception):

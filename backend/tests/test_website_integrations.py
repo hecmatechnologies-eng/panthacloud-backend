@@ -38,6 +38,10 @@ from app.services.integration.validation import StaticValidationError, StaticVal
 
 DISTINCTIVE_REPO = Path(__file__).parent / "fixtures" / "repositories" / "nextjs-distinctive-layout"
 
+# Every loader needs the integration's public key and the public URL of the widget bundle (B8).
+PUBLIC_KEY = "fk_test_public_key"
+SCRIPT_URL = "https://api.fussion.test/api/v1/public/widget.js"
+
 
 def read_fixture(rel_path: str) -> str:
     # Bytes, not read_text(): keep the on-disk line endings, as GitHub would return them.
@@ -510,7 +514,6 @@ def test_sandbox_keeps_line_endings_exactly() -> None:
 
 
 def test_deterministic_react_artifacts() -> None:
-    proj_id = uuid.uuid4()
     asst_data = {
         "id": "asst-100",
         "name": "Store Assistant",
@@ -525,7 +528,8 @@ def test_deterministic_react_artifacts() -> None:
 
     # Generate once
     art1 = generate_artifacts(
-        project_id=proj_id,
+        public_key=PUBLIC_KEY,
+        script_url=SCRIPT_URL,
         assistant_data=asst_data,
         framework_skill_id="nextjs-app-router",
         widget_target_path="app/layout.tsx",
@@ -534,7 +538,8 @@ def test_deterministic_react_artifacts() -> None:
 
     # Generate twice with identical inputs
     art2 = generate_artifacts(
-        project_id=proj_id,
+        public_key=PUBLIC_KEY,
+        script_url=SCRIPT_URL,
         assistant_data=asst_data,
         framework_skill_id="nextjs-app-router",
         widget_target_path="app/layout.tsx",
@@ -586,7 +591,6 @@ def test_idempotent_react_layout_patching() -> None:
 
 
 def test_deterministic_html_artifacts_and_idempotency() -> None:
-    proj_id = uuid.uuid4()
     asst_data = {
         "id": "asst-200",
         "name": "HTML Bot",
@@ -594,7 +598,8 @@ def test_deterministic_html_artifacts_and_idempotency() -> None:
     }
 
     art = generate_artifacts(
-        project_id=proj_id,
+        public_key=PUBLIC_KEY,
+        script_url=SCRIPT_URL,
         assistant_data=asst_data,
         framework_skill_id="generic-html",
         widget_target_path="index.html",
@@ -631,7 +636,7 @@ def test_static_validator_success_and_failures() -> None:
     originals = {"app/layout.tsx": original_layout}
     valid_files = {
         "components/fussion/FussionAssistant.tsx": "export function FussionAssistant() { return null; }",
-        "lib/fussion-assistant.ts": 'export const fussionAssistantConfig = { "projectId": "p1", "assistantId": "a1", "brandColor": "#000", "position": "BOTTOM_RIGHT" };',
+        "lib/fussion-assistant.ts": 'export const fussionConfig = /* FUSSION-CONFIG:BEGIN */ { "publicKey": "fk_1", "scriptUrl": "https://api.example.com/api/v1/public/widget.js", "brandColor": "#000", "position": "BOTTOM_RIGHT" } /* FUSSION-CONFIG:END */ as const;',
         "app/layout.tsx": patch_react_layout(original_layout),
     }
 
@@ -707,7 +712,8 @@ ADMIN_LAYOUT = (
 
 def nextjs_artifacts(existing_layout: str) -> dict[str, str]:
     return generate_artifacts(
-        project_id="proj-1",
+        public_key=PUBLIC_KEY,
+        script_url=SCRIPT_URL,
         assistant_data={"id": "asst-1", "name": "Bot"},
         framework_skill_id="nextjs-app-router",
         widget_target_path="app/layout.tsx",

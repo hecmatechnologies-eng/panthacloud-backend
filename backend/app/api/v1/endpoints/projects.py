@@ -1,25 +1,21 @@
-import re
 import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_project, require_permission
 from app.core.database import get_db
 from app.core.permissions import Permission
+from app.core.slugs import slugify
 from app.models.membership import Membership
 from app.models.organization import Organization
 from app.models.project import Project
 from app.schemas.project import ProjectCreate, ProjectRead, ProjectUpdate
 
 router = APIRouter(prefix="/organizations/{org_id}/projects", tags=["Projects"])
-
-
-def format_project_slug(text: str) -> str:
-    clean = re.sub(r"[^a-zA-Z0-9]+", "-", text).strip("-").lower()
-    return clean or "project"
 
 
 @router.post(
@@ -37,19 +33,7 @@ async def create_project(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ProjectRead:
     org, _ = tenant
-    slug = payload.slug or f"{format_project_slug(payload.name)}-{uuid.uuid4().hex[:6]}"
-
-    # Invariant: UNIQUE(organization_id, slug)
-    stmt = select(Project).where(
-        Project.organization_id == org.id,
-        Project.slug == slug,
-    )
-    result = await db.execute(stmt)
-    if result.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Project slug '{slug}' is already taken in this organization.",
-        )
+    slug = payload.slug or f"{slugify(payload.name, 'project')}-{uuid.uuid4().hex[:6]}"
 
     project = Project(
         organization_id=org.id,
@@ -58,7 +42,16 @@ async def create_project(
         description=payload.description,
     )
     db.add(project)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # UNIQUE(organization_id, slug) is the authority. A pre-check would race with a
+        # concurrent create and surface as a 500; one insert gives one honest answer.
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Project slug '{slug}' is already taken in this organization.",
+        ) from None
     await db.refresh(project)
 
     return ProjectRead.model_validate(project)
@@ -80,7 +73,7 @@ async def list_projects(
     stmt = (
         select(Project)
         .where(Project.organization_id == org.id)
-        .order_by(Project.created_at.desc())
+        .order_by(Project.created_at.desc(), Project.id.desc())
     )
     result = await db.execute(stmt)
     projects = result.scalars().all()

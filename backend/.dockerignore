@@ -1,0 +1,21 @@
+# Never bake these into the image.
+.env
+.env.*
+!.env.example
+
+# Local environment and artefacts.
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# Runtime state that must not ship: generated dev keys, local databases, logs, and the clone
+# workspace (which holds copies of customers' source).
+.dev-secrets.json
+*.db
+*.log
+data/

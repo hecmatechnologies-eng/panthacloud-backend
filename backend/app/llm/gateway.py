@@ -10,6 +10,7 @@ import logging
 import math
 import time
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -19,9 +20,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.llm.base import (
+    ModelDelta,
     ModelProvider,
     ModelRequest,
     ModelResponse,
+    ModelStreamEvent,
     ProviderPermanentError,
     ProviderTransientError,
 )
@@ -99,6 +102,42 @@ class ModelGateway:
 
         await self._record_usage(db, response, context, latency_ms)
         return response
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
+        """Stream a completion under the same policy as ``complete``, without holding a session.
+
+        Deliberately takes no ``db``: a stream outlives any sane transaction, and holding one open
+        for its lifetime is what leaked the pool in the Studio's own SSE feed (CLAUDE.md §3.6,
+        FR-118). The caller therefore owns the two database halves, exactly as the agent adapter
+        does — ``ensure_budget`` before the call, ``record_external_usage`` after it. The policy
+        that needs no database (allowlist, context cap) is enforced here.
+
+        Retries are bounded to *before the first token*: once a delta has been handed to a caller,
+        replaying the stream would duplicate text the visitor has already seen.
+        """
+        self._check_allowed(request.model)
+        self._check_context(request)
+
+        attempts = settings.MODEL_MAX_RETRIES + 1
+        for attempt in range(attempts):
+            emitted = False
+            try:
+                async for event in _with_idle_timeout(
+                    self._provider.stream(request), settings.MODEL_TIMEOUT_SECONDS
+                ):
+                    if isinstance(event, ModelDelta):
+                        emitted = True
+                    yield event
+                return
+            except ProviderTransientError as exc:
+                if emitted or attempt + 1 >= attempts:
+                    raise ModelCallError("The model provider is unavailable.") from exc
+                await asyncio.sleep(_backoff_seconds(attempt))
+            except TimeoutError as exc:
+                # Ambiguous whether the provider billed, so a retry risks a second charge.
+                raise ModelCallError("The model provider timed out.") from exc
+            except ProviderPermanentError as exc:
+                raise ModelCallError("The model provider rejected the request.") from exc
 
     async def ensure_budget(
         self, db: AsyncSession, organization_id: uuid.UUID, estimated_cost: Decimal = Decimal(0)
@@ -250,6 +289,23 @@ class ModelGateway:
             )
         )
         await db.flush()
+
+
+async def _with_idle_timeout(
+    source: AsyncIterator[ModelStreamEvent], timeout: float
+) -> AsyncIterator[ModelStreamEvent]:
+    """Re-yield ``source``, failing if no event arrives within ``timeout``.
+
+    A whole-stream deadline would kill a long but healthy answer; what matters is that the provider
+    has not gone silent, so the timeout applies between events, not to the total.
+    """
+    iterator = source.__aiter__()
+    while True:
+        try:
+            event = await asyncio.wait_for(iterator.__anext__(), timeout=timeout)
+        except StopAsyncIteration:
+            return
+        yield event
 
 
 def _estimate_tokens(text: str) -> int:

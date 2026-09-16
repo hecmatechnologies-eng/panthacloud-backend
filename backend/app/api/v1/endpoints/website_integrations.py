@@ -704,7 +704,8 @@ async def analyze_website_integration_endpoint(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> WebsiteAnalysisRead:
     """Clone the repository at a pinned revision, run the analyst, and persist the detected profile."""
-    from app.harness.runner import AgentRunnerError, StructuredOutputError
+    from app.harness.budget import RunBudgetExceeded
+    from app.harness.runner import AgentBudgetExceededError, AgentRunnerError, StructuredOutputError
     from app.llm.gateway import BudgetExceededError, ModelNotConfiguredError
     from app.services.analysis.clone import RepositoryCloneError
 
@@ -736,6 +737,13 @@ async def analyze_website_integration_endpoint(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="The analyst could not produce a valid profile. Please try again.",
         ) from None
+    except (AgentBudgetExceededError, RunBudgetExceeded) as exc:
+        # A run budget overrun is an outcome the user can act on, not an opaque server fault. It
+        # reached the UI as "an unexpected error occurred" while the record held the real reason.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"The analysis stopped at its run budget: {exc}",
+        ) from exc
 
     await record_audit(
         db,

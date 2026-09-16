@@ -1,0 +1,20 @@
+# Railway service configuration for the backend.
+#
+# Set the service's **Root Directory** to `backend/`; this file and the Dockerfile are resolved
+# relative to it. The Studio is a separate repository and deploys as its own service.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Schema first, then traffic. `upgrade head` is idempotent, so a redeploy that adds no migration is
+# a no-op — and a deploy that needs one cannot serve requests against the old schema.
+preDeployCommand = "alembic upgrade head"
+# `--forwarded-allow-ips=*` is also set as ENV in the Dockerfile; repeated here so the start command
+# is correct even if it is overridden in the dashboard.
+startCommand = "uvicorn app.main:app --host 0.0.0.0 --port $PORT --forwarded-allow-ips=*"
+healthcheckPath = "/health"
+healthcheckTimeout = 120
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3

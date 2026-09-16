@@ -38,6 +38,11 @@ REACT_LAYOUT = """export default function RootLayout({ children }) {
 }
 """
 
+# The two values every loader needs since B8: the integration's public key, and the public URL of
+# the widget bundle a customer's browser loads.
+PUBLIC_KEY = "fk_test_public_key"
+SCRIPT_URL = "https://api.fussion.test/api/v1/public/widget.js"
+
 
 async def register_user(client: AsyncClient, email: str, name: str) -> tuple[str, str, str]:
     resp = await client.post(
@@ -762,12 +767,10 @@ def test_the_real_generated_widget_passes_the_scan() -> None:
         "position": "BOTTOM_RIGHT",
         "is_enabled": True,
     }
-    project_id = "22222222-2222-2222-2222-222222222222"
-
     generated = {
-        "components/fussion/FussionAssistant.tsx": generate_react_widget_component(assistant),
-        "lib/fussion-assistant.ts": generate_react_config_ts(project_id, assistant),
-        "fussion-assistant.js": generate_html_widget_script(project_id, assistant),
+        "components/fussion/FussionAssistant.tsx": generate_react_widget_component(),
+        "lib/fussion-assistant.ts": generate_react_config_ts(PUBLIC_KEY, SCRIPT_URL, assistant),
+        "fussion-assistant.js": generate_html_widget_script(PUBLIC_KEY, SCRIPT_URL, assistant),
     }
     for path, content in generated.items():
         assert scan_generated_code(path, content) == [], path
@@ -828,7 +831,8 @@ def test_generated_files_follow_the_project_source_root() -> None:
     from app.services.integration.artifacts import generate_artifacts
 
     files = generate_artifacts(
-        project_id=uuid.uuid4(),
+        public_key=PUBLIC_KEY,
+        script_url=SCRIPT_URL,
         assistant_data={"name": "Acme", "is_enabled": True},
         framework_skill_id="nextjs-app-router",
         widget_target_path=SRC_LAYOUT_TARGET,
@@ -884,7 +888,8 @@ def test_the_plan_declares_exactly_what_a_src_layout_generates() -> None:
         target_status="exists",
     )
     files = generate_artifacts(
-        project_id=uuid.uuid4(),
+        public_key=PUBLIC_KEY,
+        script_url=SCRIPT_URL,
         assistant_data={"name": "Acme", "is_enabled": True},
         framework_skill_id="nextjs-app-router",
         widget_target_path=SRC_LAYOUT_TARGET,
@@ -928,20 +933,24 @@ def test_an_assistant_avatar_does_not_block_the_run() -> None:
     )
 
     assistant = {
-        "id": str(uuid.uuid4()),
         "name": "Acme Helper",
-        "avatar_url": "https://cdn.example.com/avatar.png",
-        "starter_prompt": "Ask about shipping: rates, times, returns",
+        # A tenant pastes links into their welcome text; that is configuration, not Fussion code.
+        "welcome_message": "See https://cdn.example.com/pricing for rates",
         "is_enabled": True,
     }
-    project_id = str(uuid.uuid4())
 
     for path, content in (
-        ("lib/fussion-assistant.ts", generate_react_config_ts(project_id, assistant)),
-        ("fussion-assistant.js", generate_html_widget_script(project_id, assistant)),
+        (
+            "lib/fussion-assistant.ts",
+            generate_react_config_ts(PUBLIC_KEY, SCRIPT_URL, assistant),
+        ),
+        (
+            "fussion-assistant.js",
+            generate_html_widget_script(PUBLIC_KEY, SCRIPT_URL, assistant),
+        ),
     ):
         assert scan_generated_code(path, content) == [], path
-        assert "cdn.example.com" in content, "the avatar must still reach the customer's site"
+        assert "cdn.example.com" in content, "the tenant's own link must still reach their site"
 
 
 def test_an_executable_scheme_in_configuration_is_still_refused() -> None:
@@ -949,7 +958,9 @@ def test_an_executable_scheme_in_configuration_is_still_refused() -> None:
     from app.services.integration.artifacts import generate_react_config_ts
 
     content = generate_react_config_ts(
-        str(uuid.uuid4()), {"name": "Acme", "avatar_url": "javascript:alert(1)", "is_enabled": True}
+        PUBLIC_KEY,
+        SCRIPT_URL,
+        {"name": "Acme", "welcome_message": "javascript:alert(1)", "is_enabled": True},
     )
     issues = scan_generated_code("lib/fussion-assistant.ts", content)
     assert any("javascript:" in issue for issue in issues), issues
@@ -965,9 +976,9 @@ def test_generated_files_carry_no_retired_phase_numbers_or_console_logging() -> 
 
     assistant = {"name": "Acme", "is_enabled": True}
     for content in (
-        generate_react_widget_component(assistant),
-        generate_react_config_ts(str(uuid.uuid4()), assistant),
-        generate_html_widget_script(str(uuid.uuid4()), assistant),
+        generate_react_widget_component(),
+        generate_react_config_ts(PUBLIC_KEY, SCRIPT_URL, assistant),
+        generate_html_widget_script(PUBLIC_KEY, SCRIPT_URL, assistant),
     ):
         assert "Phase 11" not in content
         assert "Phase 12" not in content
@@ -982,7 +993,8 @@ def test_a_static_target_that_is_not_html_is_refused_not_substituted(target: str
 
     with pytest.raises(WidgetInjectionError, match="not an HTML file"):
         generate_artifacts(
-            project_id=uuid.uuid4(),
+            public_key=PUBLIC_KEY,
+            script_url=SCRIPT_URL,
             assistant_data={"name": "Acme", "is_enabled": True},
             framework_skill_id="generic-html",
             widget_target_path=target,
@@ -1038,7 +1050,8 @@ def test_html_and_htm_targets_are_both_patched_in_place() -> None:
         ("docs/index.html", "docs/fussion-assistant.js"),
     ):
         files = generate_artifacts(
-            project_id=uuid.uuid4(),
+            public_key=PUBLIC_KEY,
+            script_url=SCRIPT_URL,
             assistant_data={"name": "Acme", "is_enabled": True},
             framework_skill_id="generic-html",
             widget_target_path=target,
@@ -1057,7 +1070,8 @@ def test_the_static_script_is_reachable_from_the_page_that_loads_it() -> None:
 
     target = "public/index.html"
     files = generate_artifacts(
-        project_id=uuid.uuid4(),
+        public_key=PUBLIC_KEY,
+        script_url=SCRIPT_URL,
         assistant_data={"name": "Acme", "is_enabled": True},
         framework_skill_id="generic-html",
         widget_target_path=target,

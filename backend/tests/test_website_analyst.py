@@ -126,7 +126,11 @@ def test_analyst_is_declarative() -> None:
     assert WEBSITE_ANALYST.capabilities == frozenset({READ_CAP})
     assert WEBSITE_ANALYST.tools == ("read_tree", "read_file", "search_code")
     assert WEBSITE_ANALYST.output_schema is WebsiteProfile
-    assert WEBSITE_ANALYST.budget.cost_usd == Decimal("0.50")
+    # Raised after a real repository exceeded the original 200k-token ceiling: the analyst's
+    # exploration grows the context every round, so the declared budget must clear a real run.
+    assert WEBSITE_ANALYST.budget.tool_calls == 60
+    assert WEBSITE_ANALYST.budget.tokens == 400_000
+    assert WEBSITE_ANALYST.budget.cost_usd == Decimal("1.00")
 
 
 def test_default_agents_register_the_analyst() -> None:

@@ -5,11 +5,17 @@ errors onto the transient/permanent split the gateway retries on. It holds no po
 caps, budgets, retries and recording all live in the gateway.
 """
 
+import inspect
+from collections.abc import AsyncIterator
+
 from app.llm.base import (
+    ModelDelta,
     ModelRequest,
     ModelResponse,
+    ModelStreamEvent,
     ProviderPermanentError,
     ProviderTransientError,
+    StreamDone,
     Usage,
 )
 
@@ -30,27 +36,7 @@ class GeminiModelProvider:
         self._thinking_budget = thinking_budget
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
-        from google.genai import types
-
-        system_instruction = "\n\n".join(
-            message.content for message in request.messages if message.role == "system"
-        )
-        contents = [
-            types.Content(
-                role="model" if message.role == "assistant" else "user",
-                parts=[types.Part(text=message.content)],
-            )
-            for message in request.messages
-            if message.role != "system"
-        ]
-        config = types.GenerateContentConfig(
-            system_instruction=system_instruction or None,
-            max_output_tokens=request.max_output_tokens,
-            temperature=request.temperature,
-            # Disable thinking: it is billed as output but omitted from candidates_token_count,
-            # so leaving it on both inflates cost and can starve the visible answer.
-            thinking_config=types.ThinkingConfig(thinking_budget=self._thinking_budget),
-        )
+        contents, config = self._request_parts(request)
 
         try:
             response = await self._client.aio.models.generate_content(
@@ -77,6 +63,66 @@ class GeminiModelProvider:
                 input_tokens=getattr(usage, "prompt_token_count", 0) or 0,
                 output_tokens=getattr(usage, "candidates_token_count", 0) or 0,
             ),
+        )
+
+    def _request_parts(self, request: ModelRequest) -> tuple[list, object]:
+        from google.genai import types
+
+        system_instruction = "\n\n".join(
+            message.content for message in request.messages if message.role == "system"
+        )
+        contents = [
+            types.Content(
+                role="model" if message.role == "assistant" else "user",
+                parts=[types.Part(text=message.content)],
+            )
+            for message in request.messages
+            if message.role != "system"
+        ]
+        config = types.GenerateContentConfig(
+            system_instruction=system_instruction or None,
+            max_output_tokens=request.max_output_tokens,
+            temperature=request.temperature,
+            # Disable thinking: it is billed as output but omitted from candidates_token_count,
+            # so leaving it on both inflates cost and can starve the visible answer.
+            thinking_config=types.ThinkingConfig(thinking_budget=self._thinking_budget),
+        )
+        return contents, config
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
+        contents, config = self._request_parts(request)
+        try:
+            result = self._client.aio.models.generate_content_stream(
+                model=request.model, contents=contents, config=config
+            )
+            # The SDK has shipped this as both an awaitable and a bare async iterator; accept both
+            # rather than pinning the adapter to one minor version's shape.
+            stream = await result if inspect.isawaitable(result) else result
+        except Exception as exc:
+            raise _map_error(exc) from exc
+
+        parts: list[str] = []
+        usage = Usage(input_tokens=0, output_tokens=0)
+        try:
+            async for chunk in stream:
+                try:
+                    text = chunk.text or ""
+                except Exception:  # noqa: BLE001 — a blocked/safety chunk has no text
+                    text = ""
+                if text:
+                    parts.append(text)
+                    yield ModelDelta(text=text)
+                metadata = getattr(chunk, "usage_metadata", None)
+                if metadata is not None:
+                    usage = Usage(
+                        input_tokens=getattr(metadata, "prompt_token_count", 0) or 0,
+                        output_tokens=getattr(metadata, "candidates_token_count", 0) or 0,
+                    )
+        except Exception as exc:
+            raise _map_error(exc) from exc
+
+        yield StreamDone(
+            text="".join(parts), model=request.model, provider=self.name, usage=usage
         )
 
 

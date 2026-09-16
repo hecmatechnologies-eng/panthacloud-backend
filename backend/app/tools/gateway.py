@@ -6,6 +6,7 @@ required capability; write tools additionally require an approved plan. Sensitiv
 are redacted before they reach the run record.
 """
 
+import asyncio
 import logging
 import re
 import time
@@ -61,6 +62,12 @@ class ApprovedPlan:
 class ToolGateway:
     def __init__(self, registry: ToolRegistry) -> None:
         self._registry = registry
+        # pydantic-ai runs the model's tool calls concurrently (its ToolManager default is
+        # 'parallel'), and every call appends to the run's tool-call log on the one AsyncSession.
+        # An AsyncSession is not safe for concurrent use: two interleaved flushes put the session
+        # in a pending-rollback state and the run died with "the connection is closed". This lock
+        # serializes the log write only — tool execution itself stays parallel.
+        self._record_lock = asyncio.Lock()
 
     async def execute(
         self,
@@ -102,7 +109,7 @@ class ToolGateway:
             result = ToolResult(error="The tool failed unexpectedly.")
         duration_ms = int((time.perf_counter() - started) * 1000)
 
-        await record_tool_call(
+        await self._record_call(
             db,
             run,
             tool_name=tool_name,
@@ -135,7 +142,7 @@ class ToolGateway:
         *,
         denied: bool = False,
     ) -> ToolResult:
-        await record_tool_call(
+        await self._record_call(
             db,
             run,
             tool_name=tool_name,
@@ -145,6 +152,29 @@ class ToolGateway:
             error_message=message,
         )
         return ToolResult(error=message, denied=denied)
+
+    async def _record_call(
+        self,
+        db: AsyncSession,
+        run: AgentRun,
+        *,
+        tool_name: str,
+        arguments: dict[str, Any],
+        outcome: str,
+        duration_ms: int,
+        error_message: str | None = None,
+    ) -> AgentToolCall:
+        """Append to the run's tool-call log under the gateway's write lock (see ``__init__``)."""
+        async with self._record_lock:
+            return await record_tool_call(
+                db,
+                run,
+                tool_name=tool_name,
+                arguments=arguments,
+                outcome=outcome,
+                duration_ms=duration_ms,
+                error_message=error_message,
+            )
 
 
 async def record_tool_call(
