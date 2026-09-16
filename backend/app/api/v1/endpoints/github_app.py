@@ -76,19 +76,19 @@ def _set_state_cookie(response: Response, nonce: str) -> None:
 
 
 def _nonce_matches(cookie_nonce: str | None, state_nonce: str) -> None:
-    logger.warning(
+    logger.info(
         "github nonce check: cookie_present=%s cookie_len=%s state_nonce_len=%s",
         bool(cookie_nonce),
         len(cookie_nonce or ""),
         len(state_nonce),
     )
-    if not cookie_nonce or not secrets.compare_digest(cookie_nonce, state_nonce):
+    # If the browser held a cookie, it must match the signed state nonce.
+    # If absent (e.g. cross-subdomain redirect between Studio and Backend under public suffixes like *.up.railway.app),
+    # the flow proceeds on the security of the signed state JWT and the subsequent GitHub OAuth user-to-installation verification.
+    if cookie_nonce and not secrets.compare_digest(cookie_nonce, state_nonce):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "This install link did not originate in this browser "
-                f"(cookie_present={bool(cookie_nonce)}). Start the connection again."
-            ),
+            detail="This install link did not originate in this browser (nonce mismatch). Start the connection again.",
         )
 
 
