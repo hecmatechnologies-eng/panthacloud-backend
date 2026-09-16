@@ -36,5 +36,4 @@ RUN useradd --create-home --uid 10001 fussion \
     && chown -R fussion:fussion /app/data
 USER fussion
 
-EXPOSE 8000
-CMD uvicorn app.main:app --host 0.0.0.0 --port "${PORT:-8000}" --proxy-headers --forwarded-allow-ips=* --timeout-keep-alive 75
+CMD alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port "${PORT:-8000}" --proxy-headers --forwarded-allow-ips=* --timeout-keep-alive 75
