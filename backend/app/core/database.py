@@ -30,12 +30,31 @@ def get_engine() -> AsyncEngine:
     if _engine is None:
         db_url = settings.effective_database_url
         logger.info("Initializing database engine with %s", db_url.split("@")[-1])
-        _engine = create_async_engine(
-            db_url,
-            echo=False,
-            future=True,
-        )
+        _engine = create_async_engine(db_url, echo=False, future=True, **_pool_options(db_url))
     return _engine
+
+
+def _pool_options(db_url: str) -> dict[str, object]:
+    """Connection-pool settings for a server database; none for SQLite.
+
+    The defaults (``pool_size=5``, ``max_overflow=10``, no pre-ping) are tuned for a database that
+    keeps its connections. A managed Postgres does not: the platform's proxy and PostgreSQL's own
+    ``idle_session_timeout`` both close idle connections, and without ``pool_pre_ping`` the next
+    request after a quiet period fails with *"server closed the connection unexpectedly"* — the kind
+    of error that looks like an application bug and is not.
+
+    SQLite is excluded deliberately: it is the development and test database, it is single-writer,
+    and its dialect does not accept these arguments at all.
+    """
+    if db_url.startswith("sqlite"):
+        return {}
+    return {
+        "pool_pre_ping": True,
+        "pool_recycle": 1800,
+        "pool_size": 20,
+        "max_overflow": 20,
+        "pool_timeout": 30,
+    }
 
 
 def get_session_factory() -> async_sessionmaker[AsyncSession]:

@@ -1,4 +1,3 @@
-import asyncio
 import datetime
 import logging
 import re
@@ -14,6 +13,7 @@ from app.models.audit_event import AuditEvent
 from app.models.integration import Integration
 from app.models.repository import Repository
 from app.models.repository_snapshot import RepositorySnapshot, SnapshotStatus
+from app.services.repository.git_command import run_git
 from app.services.repository.workspace import (
     WorkspaceLimitExceededError,
     workspace_manager,
@@ -129,9 +129,8 @@ class RepositoryAcquisitionService:
         else:
             clone_url = repository.url or f"https://github.com/{repository.full_name}.git"
 
-        # Controlled Git clone command with no shell expansion
-        cmd = [
-            "git",
+        # Controlled Git clone with a structured argument list and no shell expansion.
+        clone_args = [
             "clone",
             "--depth",
             "1",
@@ -142,44 +141,34 @@ class RepositoryAcquisitionService:
         ]
 
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            clone = await run_git(
+                clone_args,
+                timeout_seconds=float(settings.ACQUISITION_TIMEOUT_SECONDS),
+                timeout_message=(
+                    "Repository acquisition timed out after "
+                    f"{settings.ACQUISITION_TIMEOUT_SECONDS} seconds."
+                ),
             )
-            try:
-                _stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(),
-                    timeout=float(settings.ACQUISITION_TIMEOUT_SECONDS),
+            if clone.returncode != 0:
+                err_msg = sanitize_git_output(
+                    clone.stderr.decode("utf-8", errors="replace"), auth_token
                 )
-            except TimeoutError:
-                proc.kill()
-                await proc.wait()
-                raise TimeoutError(
-                    f"Repository acquisition timed out after {settings.ACQUISITION_TIMEOUT_SECONDS} seconds."
-                )
-
-            if proc.returncode != 0:
-                err_msg = sanitize_git_output(stderr.decode("utf-8", errors="replace"), auth_token)
-                raise RuntimeError(f"Git clone failed (exit {proc.returncode}): {err_msg}")
+                raise RuntimeError(f"Git clone failed (exit {clone.returncode}): {err_msg}")
 
             # Enforce resource limits immediately after acquisition
             workspace_manager.check_workspace_limits(workspace_path)
 
             # Determine immutable commit SHA
-            rev_proc = await asyncio.create_subprocess_exec(
-                "git",
-                "rev-parse",
-                "HEAD",
-                cwd=str(workspace_path),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            rev = await run_git(
+                ["rev-parse", "HEAD"],
+                cwd=workspace_path,
+                timeout_seconds=float(settings.ACQUISITION_TIMEOUT_SECONDS),
+                timeout_message="Timed out resolving the commit SHA.",
             )
-            rev_stdout, _rev_stderr = await rev_proc.communicate()
-            if rev_proc.returncode != 0:
+            if rev.returncode != 0:
                 raise RuntimeError("Failed to resolve commit SHA via git rev-parse HEAD.")
 
-            commit_sha = rev_stdout.decode("utf-8").strip()
+            commit_sha = rev.stdout.decode("utf-8").strip()
             now = datetime.datetime.now(datetime.UTC)
 
             snapshot.commit_sha = commit_sha
