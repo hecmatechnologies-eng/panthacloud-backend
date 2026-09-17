@@ -49,6 +49,14 @@ class Settings(BaseSettings):
     DEFAULT_POSTGRES_URL: str = "postgresql+psycopg://postgres:mwalimu_dev_2026@localhost:5432/fussion_db"
     FALLBACK_SQLITE_URL: str = "sqlite+aiosqlite:///./fussion.db"
 
+    # Redis configuration for background queue (ARQ) and real-time Pub/Sub (SSE)
+    REDIS_URL: str | None = None
+    REDIS_PRIVATE_URL: str | None = None
+    REDISHOST: str | None = None
+    REDISPORT: int | None = None
+    REDISPASSWORD: str | None = None
+    REDISUSER: str | None = None
+
     CORS_ORIGINS: list[str] = ["http://localhost:3000"]
 
     JWT_SECRET_KEY: str | None = None
@@ -178,6 +186,19 @@ class Settings(BaseSettings):
                 )
             base = "http://localhost:8000"
         return f"{base.rstrip('/')}/api/v1/public/widget.js"
+
+    @property
+    def effective_redis_url(self) -> str | None:
+        """The resolved Redis connection URL, handling Railway variables and local dev."""
+        if self.REDIS_URL:
+            return self.REDIS_URL
+        if self.REDIS_PRIVATE_URL:
+            return self.REDIS_PRIVATE_URL
+        if self.REDISHOST and self.REDISPORT:
+            user = self.REDISUSER or "default"
+            pwd = f":{self.REDISPASSWORD}@" if self.REDISPASSWORD else "@"
+            return f"redis://{user}{pwd}{self.REDISHOST}:{self.REDISPORT}"
+        return None
 
     model_config = SettingsConfigDict(
         env_file=(

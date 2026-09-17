@@ -44,3 +44,8 @@ async def record_audit(
     )
     db.add(event)
     await db.commit()
+
+    if project_id is not None:
+        from app.core.redis import publish_audit_event
+
+        await publish_audit_event(event, project_id=project_id)

@@ -109,6 +109,11 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
         shutdown_io_executor()
+        from app.core.redis import close_redis
+        from app.jobs.queue import close_arq_pool
+
+        await close_arq_pool()
+        await close_redis()
         await close_database_connections()
 
 

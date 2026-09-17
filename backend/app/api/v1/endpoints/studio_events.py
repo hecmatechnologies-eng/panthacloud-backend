@@ -1,9 +1,11 @@
 import asyncio
 import json
+import logging
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Annotated
 
+import redis
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
@@ -12,6 +14,7 @@ from app.api.deps import authorize_project_stream
 from app.core.database import get_session_factory
 from app.models.audit_event import AuditEvent
 
+logger = logging.getLogger("fussion.studio_events")
 router = APIRouter(prefix="/organizations/{org_id}/projects", tags=["Studio Events"])
 
 
@@ -56,21 +59,52 @@ async def stream_project_events(
         for frame in initial_frames:
             yield frame
 
-        while not await request.is_disconnected():
-            async with session_factory() as db:
-                stmt = select(AuditEvent).where(AuditEvent.project_id == authorized_project_id)
-                if last_created_at is not None:
-                    stmt = stmt.where(AuditEvent.created_at > last_created_at)
-                stmt = stmt.order_by(AuditEvent.created_at.asc())
-                new_events = (await db.execute(stmt)).scalars().all()
-                new_frames = [_frame(event) for event in new_events]
-                if new_events:
-                    last_created_at = new_events[-1].created_at
+        from app.core.redis import get_redis, project_event_channel
 
-            for frame in new_frames:
-                yield frame
-            yield ": keepalive\n\n"
-            await asyncio.sleep(1)
+        redis_client = get_redis()
+        if redis_client is not None:
+            channel = project_event_channel(authorized_project_id)
+            pubsub = redis_client.pubsub()
+            await pubsub.subscribe(channel)
+            try:
+                while not await request.is_disconnected():
+                    try:
+                        # Non-blocking get_message check with 15s timeout for SSE keepalive
+                        message = await asyncio.wait_for(
+                            pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0),
+                            timeout=15.0,
+                        )
+                        if message and message.get("type") == "message":
+                            try:
+                                payload = json.loads(message["data"])
+                                yield f"id: {payload.get('id', '')}\nevent: studio.activity\ndata: {json.dumps(payload)}\n\n"
+                            except (json.JSONDecodeError, TypeError):
+                                pass
+                    except TimeoutError:
+                        yield ": keepalive\n\n"
+            finally:
+                try:
+                    await pubsub.unsubscribe(channel)
+                    await pubsub.aclose()
+                except (redis.RedisError, OSError, ConnectionError, RuntimeError) as exc:
+                    logger.debug("Error unsubscribing pubsub: %s", exc)
+        else:
+            # Fallback polling loop when Redis is unconfigured (development / unit tests)
+            while not await request.is_disconnected():
+                async with session_factory() as db:
+                    stmt = select(AuditEvent).where(AuditEvent.project_id == authorized_project_id)
+                    if last_created_at is not None:
+                        stmt = stmt.where(AuditEvent.created_at > last_created_at)
+                    stmt = stmt.order_by(AuditEvent.created_at.asc())
+                    new_events = (await db.execute(stmt)).scalars().all()
+                    new_frames = [_frame(event) for event in new_events]
+                    if new_events:
+                        last_created_at = new_events[-1].created_at
+
+                for frame in new_frames:
+                    yield frame
+                yield ": keepalive\n\n"
+                await asyncio.sleep(1)
 
     return StreamingResponse(
         event_generator(),
