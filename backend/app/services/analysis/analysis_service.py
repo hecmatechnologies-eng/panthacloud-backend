@@ -39,7 +39,10 @@ async def analyze_website_integration(
     organization: Organization,
     project: Project,
 ) -> WebsiteAnalysis:
-    workspace_path, workspace_ref = workspace_manager.allocate_workspace(
+    # A run-scoped workspace, not the snapshot-shaped one: this flow's scope id is the integration,
+    # which is stable across runs, so a derived path would be shared by concurrent analyses and
+    # poisoned by a run that was killed before its teardown.
+    workspace_path, workspace_ref = workspace_manager.allocate_run_workspace(
         organization.id, project.id, integration.id
     )
     try:
@@ -47,6 +50,11 @@ async def analyze_website_integration(
         # the repository.
         gateway = get_model_gateway()
         token = await resolve_github_token(integration)
+
+        # Release the connection back to the pool before the long-running network clone
+        # and filesystem validation scan to prevent DB connection starvation.
+        await db.commit()
+
         commit_sha = await clone_repository(
             clone_url_for(integration, token), integration.default_branch, workspace_path
         )

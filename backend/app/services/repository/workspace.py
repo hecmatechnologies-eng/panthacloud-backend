@@ -1,6 +1,7 @@
 import logging
 import os
 import shutil
+import time
 import uuid
 from pathlib import Path
 
@@ -15,6 +16,14 @@ class SecurityViolationError(Exception):
 
 class WorkspaceLimitExceededError(Exception):
     """Raised when repository contents exceed configured resource thresholds."""
+
+
+def _mtime(path: Path) -> float:
+    """A path's mtime, or +inf when it cannot be read — unreadable means "do not sweep it"."""
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return float("inf")
 
 
 class WorkspaceManager:
@@ -45,6 +54,34 @@ class WorkspaceManager:
         # Opaque reference token, never revealing the real server filesystem path
         workspace_ref = f"ws-{snapshot_id.hex[:16]}"
         return path, workspace_ref
+
+    def allocate_run_workspace(
+        self,
+        organization_id: uuid.UUID,
+        project_id: uuid.UUID,
+        scope_id: uuid.UUID,
+    ) -> tuple[Path, str]:
+        """A workspace for one self-contained run: clone, work, tear down.
+
+        Unlike `allocate_workspace`, the leaf is unique per call, and that is the whole point.
+        `allocate_workspace`'s path is *derived* from its ids, which `inspection` and `discovery`
+        rely on to find a snapshot's checkout. A run whose `scope_id` is stable across runs cannot
+        use it: the analysis flow keys its workspace on the integration id, so a deterministic path
+        meant two concurrent analyses shared one directory — the second clone failed against a
+        non-empty directory, and the first run's teardown deleted the tree underneath it. It also
+        meant a hard-killed run (a redeploy mid-analysis) left a directory that blocked every later
+        run of that integration, permanently and invisibly.
+
+        Each run owning its own leaf fixes both: concurrent runs cannot collide, and an orphan can
+        never block a new run. Reclaiming the orphan is `sweep_expired`'s job.
+        """
+        allocation_id = uuid.uuid4()
+        path = (
+            self.get_workspace_path(organization_id, project_id, scope_id)
+            / f"run-{allocation_id.hex[:16]}"
+        )
+        path.mkdir(parents=True, exist_ok=True)
+        return path, f"ws-{allocation_id.hex[:16]}"
 
     def assert_path_contained(self, workspace_path: Path, target_path: Path) -> Path:
         """
@@ -165,7 +202,73 @@ class WorkspaceManager:
         if workspace_path.exists():
             logger.warning("Workspace %s survived teardown and must be removed manually.", workspace_path)
             return False
+        self._prune_empty_parents(workspace_path)
         return True
+
+    def _prune_empty_parents(self, workspace_path: Path) -> None:
+        """Remove the tenant directories a run workspace leaves behind once it is gone.
+
+        Stops at the first directory that still has content, so a concurrent run's sibling is never
+        disturbed, and never removes the base directory itself.
+        """
+        current = workspace_path.parent
+        while current != self.base_dir and current.is_relative_to(self.base_dir):
+            try:
+                next(current.iterdir())
+                return  # a sibling is present — possibly a run still in flight
+            except StopIteration:
+                pass
+            except OSError:
+                return
+            try:
+                current.rmdir()
+            except OSError:
+                return
+            current = current.parent
+
+    def sweep_expired(self) -> int:
+        """Remove workspaces older than ``WORKSPACE_RETENTION_HOURS``; return how many went.
+
+        Nothing else reclaims a workspace whose process was killed before its ``finally`` — a
+        redeploy or an OOM mid-analysis. Left alone they accumulate until the disk fills, at which
+        point every tenant's analysis fails, so this runs at startup where a redeploy's orphans are
+        exactly what it will find.
+
+        Directories are visited bottom-up. A directory is kept when it is recent, when any of its
+        children was kept, or when any of its children is recent — so a run that is still in flight
+        survives even when the tenant directories above it have not changed in hours. Retention is
+        measured in hours and a run lasts minutes, so the direction of error is deliberate: an
+        orphan that lingers one more sweep costs disk, while sweeping a live run corrupts it.
+        """
+        base = self.base_dir
+        if not base.exists():
+            return 0
+        cutoff = time.time() - settings.WORKSPACE_RETENTION_HOURS * 3600
+        removed = 0
+        kept: set[Path] = set()
+
+        for root, _dirs, _files in os.walk(base, topdown=False):
+            path = Path(root)
+            # Never the base directory itself, and never through a link out of the tree.
+            if path == base or path.is_symlink():
+                continue
+            try:
+                entries = list(path.iterdir())
+                recent = path.stat().st_mtime >= cutoff
+            except OSError:
+                kept.add(path)
+                continue
+            if (
+                recent
+                or any(entry in kept for entry in entries)
+                or any(_mtime(entry) >= cutoff for entry in entries)
+            ):
+                kept.add(path)
+                continue
+            if self.cleanup_workspace(path):
+                removed += 1
+                logger.info("Swept expired workspace %s", path)
+        return removed
 
 
 workspace_manager = WorkspaceManager()

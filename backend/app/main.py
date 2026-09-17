@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -10,6 +11,8 @@ from app.api.v1.router import api_v1_router
 from app.core.config import settings
 from app.core.database import close_database_connections
 from app.core.errors import register_error_handlers
+from app.services.repository.executor import run_in_io_thread, shutdown_io_executor
+from app.services.repository.workspace import workspace_manager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -57,6 +60,23 @@ def validate_embedding_configuration() -> None:
     logger.info("Embedding provider: %s", settings.EMBEDDING_PROVIDER)
 
 
+async def _periodic_workspace_sweep(interval_seconds: float = 900.0) -> None:
+    """Periodically sweep expired workspaces in the background."""
+    logger.info("Starting background workspace sweeper (interval: %ss)", interval_seconds)
+    try:
+        while True:
+            await asyncio.sleep(interval_seconds)
+            try:
+                swept = await run_in_io_thread(workspace_manager.sweep_expired)
+                if swept:
+                    logger.info("Background sweep reclaimed %d expired workspace(s)", swept)
+            except Exception:
+                logger.warning("Background workspace sweep encountered an error", exc_info=True)
+    except asyncio.CancelledError:
+        logger.info("Background workspace sweeper cancelled")
+        raise
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting Fussion Backend (%s) in %s mode", settings.APP_NAME, settings.APP_ENV)
@@ -66,9 +86,30 @@ async def lifespan(app: FastAPI):
     from app.agents.registry import register_default_agents
 
     register_default_agents()
-    yield
-    logger.info("Shutting down Fussion Backend, closing resources...")
-    await close_database_connections()
+    # A run killed before its teardown — a redeploy or an OOM mid-analysis — leaves its clone on
+    # disk, and nothing else reclaims it. Startup is where a previous process's orphans are found.
+    try:
+        swept = workspace_manager.sweep_expired()
+        if swept:
+            logger.info("Swept %d expired workspace(s) at startup", swept)
+    except OSError:
+        # Housekeeping must never prevent the application from starting.
+        logger.warning("Workspace sweep failed at startup", exc_info=True)
+
+    # Start periodic background sweeper task for running servers
+    sweeper_task = asyncio.create_task(_periodic_workspace_sweep())
+
+    try:
+        yield
+    finally:
+        logger.info("Shutting down Fussion Backend, closing resources...")
+        sweeper_task.cancel()
+        try:
+            await sweeper_task
+        except asyncio.CancelledError:
+            pass
+        shutdown_io_executor()
+        await close_database_connections()
 
 
 def create_application() -> FastAPI:

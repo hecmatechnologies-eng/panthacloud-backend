@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -8,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.protected_paths import protected_reason
+from app.core.tasks import create_cancellation_event, register_task
 from app.models.assistant import Assistant
 from app.models.audit_event import AuditEvent
 from app.models.knowledge import KnowledgeBase
@@ -115,6 +117,15 @@ class IntegrationPipeline:
         run_id = uuid.uuid4()
         short_run = run_id.hex[:8]
         branch_name = f"fussion/integration/{short_run}"
+
+        cancel_event = create_cancellation_event()
+        current_task = asyncio.current_task()
+        if current_task is not None:
+            await register_task(run_id, current_task, cancel_event)
+
+        def _assert_not_cancelled() -> None:
+            if cancel_event.is_set():
+                raise asyncio.CancelledError(f"Integration run {run_id} cancelled.")
 
         # 1. Allocate sandbox
         sandbox_path, sandbox_ref = self.workspace.allocate(org_id, project.id, run_id)
@@ -258,6 +269,7 @@ class IntegrationPipeline:
             )
 
             # 9. Create integration branch
+            _assert_not_cancelled()
             await git_provider.create_branch(
                 owner=integration.repository_owner,
                 repo=integration.repository_name,
@@ -268,6 +280,7 @@ class IntegrationPipeline:
             )
 
             # 10. Commit changes
+            _assert_not_cancelled()
             commit_message = f"feat(fussion): integrate assistant widget [run: {short_run}]"
             commit_sha = await git_provider.commit_files(
                 owner=integration.repository_owner,
@@ -279,6 +292,7 @@ class IntegrationPipeline:
             )
 
             # 11. Create Pull Request
+            _assert_not_cancelled()
             pr_title = "Integrate Fussion Assistant"
             pr_body = f"""## Fussion Assistant Integration
 
@@ -318,6 +332,7 @@ This automated Pull Request adds the Fussion storefront assistant integration fo
             )
 
             # 12. Update run & integration records to completion
+            _assert_not_cancelled()
             now = datetime.now(UTC)
             run.status = IntegrationRunStatus.PR_CREATED
             run.commit_sha = commit_sha
@@ -350,8 +365,26 @@ This automated Pull Request adds the Fussion storefront assistant integration fo
 
             return run
 
-        except Exception as exc:
+        except (asyncio.CancelledError, Exception) as exc:
             now = datetime.now(UTC)
+            if isinstance(exc, asyncio.CancelledError):
+                logger.info(f"Integration pipeline run {run_id} cancelled by user request.")
+                run.status = IntegrationRunStatus.CANCELLED
+                run.completed_at = now
+                integration.status = WebsiteIntegrationStatus.CONNECTED
+                await db.commit()
+                await db.refresh(run)
+                await _record_audit(
+                    db,
+                    org_id,
+                    project.id,
+                    user_id,
+                    "integration.run.cancelled",
+                    run.id,
+                    {"reason": "Cancelled by user request."},
+                )
+                raise
+
             error_msg = str(exc)
             refused = isinstance(exc, IntegrationRefusedError)
             if refused:

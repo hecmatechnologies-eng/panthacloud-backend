@@ -567,3 +567,58 @@ async def test_document_cascade_deletion(client: AsyncClient):
         chunks_after = await db.execute(chunks_stmt)
         assert len(chunks_after.scalars().all()) == 0
 
+
+# ============================================================================
+# 9. PgVector Query Execution Unit Test
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_pgvector_query_branch_construction():
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.models.knowledge import KnowledgeBase, KnowledgeChunk, KnowledgeDocument
+    from app.schemas.knowledge import KnowledgeQueryRequest
+    from app.services.knowledge.retrieval import query_knowledge_base
+
+    mock_db = AsyncMock()
+    mock_bind = MagicMock()
+    mock_bind.dialect.name = "postgresql"
+    mock_db.get_bind = MagicMock(return_value=mock_bind)
+
+    kb = KnowledgeBase(
+        id=uuid.uuid4(),
+        project_id=uuid.uuid4(),
+        name="Test KB",
+        embedding_model="deterministic-hash-384",
+        embedding_dimension=384,
+    )
+    doc = KnowledgeDocument(
+        id=uuid.uuid4(),
+        knowledge_base_id=kb.id,
+        filename="test.md",
+        content_type="text/markdown",
+        file_size_bytes=100,
+    )
+    chunk = KnowledgeChunk(
+        id=uuid.uuid4(),
+        document_id=doc.id,
+        chunk_index=0,
+        text="Hello world vector test",
+        embedding=[0.1] * 384,
+        embedding_model="deterministic-hash-384",
+    )
+
+    mock_result = MagicMock()
+    mock_result.all.return_value = [(chunk, doc, 0.15)]
+    mock_db.execute.return_value = mock_result
+
+    req = KnowledgeQueryRequest(query="Hello", top_k=5, score_threshold=0.0)
+    response = await query_knowledge_base(mock_db, kb, req)
+
+    assert response.total_matches == 1
+    assert response.results[0].text == "Hello world vector test"
+    assert response.results[0].score == 0.85
+    assert mock_db.execute.called
+
+

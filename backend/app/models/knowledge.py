@@ -2,6 +2,7 @@ import enum
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy import ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
@@ -15,6 +16,8 @@ if TYPE_CHECKING:
 
 # JSON type that falls back gracefully across PostgreSQL and SQLite
 JSONType = JSON().with_variant(JSONB, "postgresql")
+# Vector type with native pgvector in PostgreSQL and fallback to JSON in SQLite
+VectorColumnType = Vector().with_variant(JSON(), "sqlite")
 
 
 class DocumentStatus(str, enum.Enum):
@@ -161,7 +164,7 @@ class KnowledgeChunk(BaseModel):
         nullable=False,
     )
     embedding: Mapped[list[float]] = mapped_column(
-        JSONType,
+        VectorColumnType,
         nullable=False,
     )
     embedding_model: Mapped[str] = mapped_column(

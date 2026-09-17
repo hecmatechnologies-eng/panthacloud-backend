@@ -43,6 +43,18 @@ from app.models.model_usage import ModelUsage
 MODEL = "gemini-2.5-flash"
 
 
+@pytest.fixture(autouse=True)
+def _allow_the_test_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Declare this module's model allowed, rather than inheriting the deployment's allowlist.
+
+    The gateway refuses any model not on `settings.MODEL_ALLOWED_IDS`. Reading that from `.env` made
+    the suite's outcome depend on local configuration — and no single value satisfies both this
+    module (which pins a fixed model id) and the public-chat tests (which use the deployment's
+    `MODEL_ID`). Each module now states what it needs.
+    """
+    monkeypatch.setattr(settings, "MODEL_ALLOWED_IDS", [MODEL])
+
+
 def _request(text: str = "hello", max_output_tokens: int = 128) -> ModelRequest:
     return ModelRequest(
         model=MODEL,

@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.agents.base import AgentDefinition, Budget
+from app.core.config import settings
 from app.core.database import get_session_factory
 from app.harness.budget import RunBudgetExceeded
 from app.harness.context import ExecutionContext
@@ -185,7 +186,13 @@ async def _run(db, context, definition, runner, tool_gateway, registry, gateway)
 
 
 @pytest.mark.asyncio
-async def test_run_completes_and_records_usage_and_tool_calls(client: AsyncClient) -> None:
+async def test_run_completes_and_records_usage_and_tool_calls(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The run record stores the deployment's model id, so this test states the id it expects instead
+    # of inheriting `.env`. Inheriting made the assertion a statement about the developer's local
+    # configuration rather than about the harness.
+    monkeypatch.setattr(settings, "MODEL_ID", "gemini-2.5-flash")
     org_id, proj_id = await _setup(client, "c6_ok@example.com", "C6Ok")
     tool_gateway, registry, gateway = _deps()
     runner = FakeRunner(calls=[("read_tree", {"path": "."})])

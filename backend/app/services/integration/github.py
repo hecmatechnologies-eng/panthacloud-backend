@@ -1,6 +1,8 @@
+import asyncio
 import base64
 import hashlib
 import logging
+import random
 from typing import Any
 from urllib.parse import quote
 
@@ -100,9 +102,13 @@ class GitHubProvider(GitProvider):
         self,
         base_url: str = "https://api.github.com",
         transport: httpx.AsyncBaseTransport | None = None,
+        max_retries: int = 3,
+        retry_backoff: float = 0.5,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self._transport = transport
+        self._max_retries = max_retries
+        self._retry_backoff = retry_backoff
 
     def _headers(self, token: str | None = None) -> dict[str, str]:
         headers = {
@@ -114,6 +120,84 @@ class GitHubProvider(GitProvider):
             headers["Authorization"] = f"Bearer {token}"
         return headers
 
+    async def _request(
+        self,
+        method: str,
+        url: str,
+        token: str | None,
+        action: str,
+        params: dict[str, str] | None = None,
+        json: Any = None,
+    ) -> httpx.Response:
+        """Issue an HTTP request to GitHub with exponential backoff retries for transient errors."""
+        retries = self._max_retries
+        # In test environments using a mock transport, skip artificial delays
+        backoff = 0.0 if self._transport is not None else self._retry_backoff
+
+        last_error: Exception | None = None
+        for attempt in range(retries + 1):
+            try:
+                async with httpx.AsyncClient(transport=self._transport) as client:
+                    resp = await client.request(
+                        method=method,
+                        url=url,
+                        headers=self._headers(token),
+                        params=params,
+                        json=json,
+                        timeout=15.0,
+                    )
+            except httpx.TransportError as exc:
+                last_error = exc
+                if attempt < retries:
+                    delay = backoff * (2**attempt) + random.uniform(0, 0.1) if backoff > 0 else 0.0
+                    logger.warning(
+                        "GitHub request '%s %s' failed (%s); retrying (%d/%d) in %.2fs...",
+                        method,
+                        url,
+                        exc,
+                        attempt + 1,
+                        retries,
+                        delay,
+                    )
+                    if delay > 0:
+                        await asyncio.sleep(delay)
+                    continue
+                raise GitHubUnavailableError(
+                    f"Could not reach GitHub while {action}: {exc}", 503
+                ) from exc
+
+            # Transient responses: rate limit (429 or 403 secondary) or server error (>= 500)
+            if (_is_rate_limited(resp) or resp.status_code >= 500) and attempt < retries:
+                if self._transport is not None or backoff == 0.0:
+                    delay = 0.0
+                else:
+                    retry_after = resp.headers.get("retry-after")
+                    if retry_after and retry_after.isdigit():
+                        delay = min(float(retry_after), 10.0)
+                    else:
+                        delay = backoff * (2**attempt) + random.uniform(0, 0.1)
+
+                logger.warning(
+                    "GitHub request '%s %s' returned status %s; retrying (%d/%d) in %.2fs...",
+                    method,
+                    url,
+                    resp.status_code,
+                    attempt + 1,
+                    retries,
+                    delay,
+                )
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                continue
+
+            return resp
+
+        if last_error:
+            raise GitHubUnavailableError(
+                f"Could not reach GitHub while {action}: {last_error}", 503
+            ) from last_error
+        raise GitHubUnavailableError(f"GitHub is unavailable while {action}.", 503)
+
     async def _get(
         self,
         url: str,
@@ -121,14 +205,7 @@ class GitHubProvider(GitProvider):
         action: str,
         params: dict[str, str] | None = None,
     ) -> httpx.Response:
-        """GET that reports network failures as GitHubUnavailableError, not transport errors."""
-        try:
-            async with httpx.AsyncClient(transport=self._transport) as client:
-                return await client.get(
-                    url, headers=self._headers(token), params=params, timeout=15.0
-                )
-        except httpx.TransportError as exc:
-            raise GitHubUnavailableError(f"Could not reach GitHub while {action}: {exc}", 503) from exc
+        return await self._request("GET", url, token, action, params=params)
 
     @staticmethod
     def _json(resp: httpx.Response, action: str) -> Any:
@@ -205,20 +282,17 @@ class GitHubProvider(GitProvider):
     ) -> dict[str, Any]:
         # Branch from the commit the caller read. Required, never re-resolved here: that is the
         # read-then-branch race of CLAUDE.md §3.1.
-
-        async with httpx.AsyncClient(transport=self._transport) as client:
-            # 2. Create new reference
-            create_url = f"{self.base_url}/repos/{owner}/{repo}/git/refs"
-            body = {"ref": f"refs/heads/{new_branch}", "sha": base_sha}
-            create_resp = await client.post(
-                create_url, headers=self._headers(token), json=body, timeout=15.0
+        action = f"creating branch '{new_branch}'"
+        create_url = f"{self.base_url}/repos/{owner}/{repo}/git/refs"
+        body = {"ref": f"refs/heads/{new_branch}", "sha": base_sha}
+        create_resp = await self._request("POST", create_url, token, action, json=body)
+        if create_resp.status_code not in (200, 201):
+            _raise_for_status(create_resp, action)
+            raise GitHubAPIError(
+                f"Failed to create branch '{new_branch}': {create_resp.text}",
+                create_resp.status_code,
             )
-            if create_resp.status_code not in (200, 201):
-                raise GitHubAPIError(
-                    f"Failed to create branch '{new_branch}': {create_resp.text}",
-                    create_resp.status_code,
-                )
-            return create_resp.json()
+        return self._json(create_resp, action)
 
     async def commit_files(
         self,
@@ -234,85 +308,85 @@ class GitHubProvider(GitProvider):
             # validated target plus Fussion's own files; a step-D ChangeSet arrives here too.
             assert_safe_repo_path(path)
 
-        async with httpx.AsyncClient(transport=self._transport) as client:
-            headers = self._headers(token)
-
-            # 0. Never commit to the repository's default branch (CLAUDE.md §4.7). The mock has
-            # always refused this; the real provider did not, which made the fake stricter than
-            # the thing it stands in for, so no test could catch a caller that got it wrong.
-            repo_resp = await client.get(
-                f"{self.base_url}/repos/{owner}/{repo}", headers=headers, timeout=15.0
+        # 0. Never commit to the repository's default branch (CLAUDE.md §4.7). The mock has
+        # always refused this; the real provider did not, which made the fake stricter than
+        # the thing it stands in for, so no test could catch a caller that got it wrong.
+        repo_resp = await self._request(
+            "GET", f"{self.base_url}/repos/{owner}/{repo}", token, "reading the repository's default branch"
+        )
+        _raise_for_status(repo_resp, "reading the repository's default branch")
+        if repo_resp.json().get("default_branch") == branch:
+            raise GitHubAPIError(
+                f"Refusing to commit directly to the default branch '{branch}'. Fussion "
+                "commits to an integration branch and opens a pull request.",
+                422,
             )
-            # Fail closed: if the default branch cannot be read, the guard cannot be satisfied.
-            # `MockGitProvider` refuses unconditionally, so skipping the check on a non-200 would
-            # leave the fake stricter than the real provider on exactly the failure path.
-            _raise_for_status(repo_resp, "reading the repository's default branch")
-            if repo_resp.json().get("default_branch") == branch:
-                raise GitHubAPIError(
-                    f"Refusing to commit directly to the default branch '{branch}'. Fussion "
-                    "commits to an integration branch and opens a pull request.",
-                    422,
-                )
 
-            # 1. Get branch commit SHA
-            ref_url = f"{self.base_url}/repos/{owner}/{repo}/git/ref/heads/{branch}"
-            ref_resp = await client.get(ref_url, headers=headers, timeout=15.0)
-            if ref_resp.status_code != 200:
-                raise GitHubAPIError(f"Branch '{branch}' not found: {ref_resp.text}", ref_resp.status_code)
-            latest_commit_sha = _json_field(ref_resp, ("object", "sha"), "branch reference")
+        # 1. Get branch commit SHA
+        ref_url = f"{self.base_url}/repos/{owner}/{repo}/git/ref/heads/{branch}"
+        ref_resp = await self._request("GET", ref_url, token, f"reading branch '{branch}'")
+        if ref_resp.status_code != 200:
+            _raise_for_status(ref_resp, f"reading branch '{branch}'")
+            raise GitHubAPIError(f"Branch '{branch}' not found: {ref_resp.text}", ref_resp.status_code)
+        latest_commit_sha = _json_field(ref_resp, ("object", "sha"), "branch reference")
 
-            # 2. Get latest commit to find base tree
-            commit_url = f"{self.base_url}/repos/{owner}/{repo}/git/commits/{latest_commit_sha}"
-            commit_resp = await client.get(commit_url, headers=headers, timeout=15.0)
-            base_tree_sha = _json_field(commit_resp, ("tree", "sha"), "base commit")
+        # 2. Get latest commit to find base tree
+        commit_url = f"{self.base_url}/repos/{owner}/{repo}/git/commits/{latest_commit_sha}"
+        commit_resp = await self._request("GET", commit_url, token, "reading base commit")
+        base_tree_sha = _json_field(commit_resp, ("tree", "sha"), "base commit")
 
-            # 3. Create blobs & tree items
-            tree_items = []
-            for path, content in files.items():
-                blob_resp = await client.post(
-                    f"{self.base_url}/repos/{owner}/{repo}/git/blobs",
-                    headers=headers,
-                    json={"content": content, "encoding": "utf-8"},
-                    timeout=15.0,
-                )
-                blob_sha = _json_field(blob_resp, ("sha",), f"blob for '{path}'")
-                tree_items.append(
-                    {"path": path, "mode": "100644", "type": "blob", "sha": blob_sha}
-                )
-
-            # 4. Create new tree
-            tree_resp = await client.post(
-                f"{self.base_url}/repos/{owner}/{repo}/git/trees",
-                headers=headers,
-                json={"base_tree": base_tree_sha, "tree": tree_items},
-                timeout=15.0,
+        # 3. Create blobs & tree items
+        tree_items = []
+        for path, content in files.items():
+            blob_resp = await self._request(
+                "POST",
+                f"{self.base_url}/repos/{owner}/{repo}/git/blobs",
+                token,
+                f"creating blob for '{path}'",
+                json={"content": content, "encoding": "utf-8"},
             )
-            new_tree_sha = _json_field(tree_resp, ("sha",), "tree")
-
-            # 5. Create new commit
-            new_commit_resp = await client.post(
-                f"{self.base_url}/repos/{owner}/{repo}/git/commits",
-                headers=headers,
-                json={
-                    "message": commit_message,
-                    "tree": new_tree_sha,
-                    "parents": [latest_commit_sha],
-                },
-                timeout=15.0,
+            blob_sha = _json_field(blob_resp, ("sha",), f"blob for '{path}'")
+            tree_items.append(
+                {"path": path, "mode": "100644", "type": "blob", "sha": blob_sha}
             )
-            new_commit_sha = _json_field(new_commit_resp, ("sha",), "commit")
 
-            # 6. Update reference
-            patch_resp = await client.patch(
-                ref_url,
-                headers=headers,
-                json={"sha": new_commit_sha, "force": False},
-                timeout=15.0,
-            )
-            if patch_resp.status_code != 200:
-                raise GitHubAPIError(f"Failed to update branch ref: {patch_resp.text}", patch_resp.status_code)
+        # 4. Create new tree
+        tree_resp = await self._request(
+            "POST",
+            f"{self.base_url}/repos/{owner}/{repo}/git/trees",
+            token,
+            "creating git tree",
+            json={"base_tree": base_tree_sha, "tree": tree_items},
+        )
+        new_tree_sha = _json_field(tree_resp, ("sha",), "tree")
 
-            return new_commit_sha
+        # 5. Create new commit
+        new_commit_resp = await self._request(
+            "POST",
+            f"{self.base_url}/repos/{owner}/{repo}/git/commits",
+            token,
+            "creating commit",
+            json={
+                "message": commit_message,
+                "tree": new_tree_sha,
+                "parents": [latest_commit_sha],
+            },
+        )
+        new_commit_sha = _json_field(new_commit_resp, ("sha",), "commit")
+
+        # 6. Update reference
+        patch_resp = await self._request(
+            "PATCH",
+            ref_url,
+            token,
+            f"updating branch '{branch}' reference",
+            json={"sha": new_commit_sha, "force": False},
+        )
+        if patch_resp.status_code != 200:
+            _raise_for_status(patch_resp, f"updating branch '{branch}' reference")
+            raise GitHubAPIError(f"Failed to update branch ref: {patch_resp.text}", patch_resp.status_code)
+
+        return new_commit_sha
 
     async def create_pull_request(
         self,
@@ -331,11 +405,12 @@ class GitHubProvider(GitProvider):
             "head": head_branch,
             "base": base_branch,
         }
-        async with httpx.AsyncClient(transport=self._transport) as client:
-            resp = await client.post(url, headers=self._headers(token), json=payload, timeout=15.0)
-            if resp.status_code not in (200, 201):
-                raise GitHubAPIError(f"Failed to create pull request: {resp.text}", resp.status_code)
-            return resp.json()
+        action = "creating pull request"
+        resp = await self._request("POST", url, token, action, json=payload)
+        if resp.status_code not in (200, 201):
+            _raise_for_status(resp, action)
+            raise GitHubAPIError(f"Failed to create pull request: {resp.text}", resp.status_code)
+        return self._json(resp, action)
 
     async def get_pull_request(
         self,
@@ -345,13 +420,14 @@ class GitHubProvider(GitProvider):
         token: str | None = None,
     ) -> dict[str, Any]:
         url = f"{self.base_url}/repos/{owner}/{repo}/pulls/{pr_number}"
-        async with httpx.AsyncClient(transport=self._transport) as client:
-            resp = await client.get(url, headers=self._headers(token), timeout=15.0)
-            if resp.status_code == 404:
-                raise GitHubAPIError(f"Pull request #{pr_number} not found.", 404)
-            if resp.status_code >= 400:
-                raise GitHubAPIError(f"GitHub API error: {resp.text}", resp.status_code)
-            return resp.json()
+        action = f"reading pull request #{pr_number}"
+        resp = await self._request("GET", url, token, action)
+        if resp.status_code == 404:
+            raise GitHubAPIError(f"Pull request #{pr_number} not found.", 404)
+        if resp.status_code >= 400:
+            _raise_for_status(resp, action)
+            raise GitHubAPIError(f"GitHub API error: {resp.text}", resp.status_code)
+        return self._json(resp, action)
 
 
 class MockGitProvider(GitProvider):

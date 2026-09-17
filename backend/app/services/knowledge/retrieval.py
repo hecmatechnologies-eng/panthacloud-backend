@@ -28,7 +28,52 @@ async def query_knowledge_base(
     embedder = get_embedding_provider(kb.embedding_model, kb.embedding_dimension)
     query_emb = await embedder.embed_text(request.query)
 
-    # 2. Fetch all chunks from READY documents in this knowledge base
+    bind = db.get_bind()
+    dialect = getattr(bind, "dialect", None)
+    is_postgres = getattr(dialect, "name", "") == "postgresql"
+
+    if is_postgres:
+        # High-performance pgvector query pushed down directly to PostgreSQL engine (FR-109):
+        # Cosine distance = 1 - cosine_similarity.
+        # Score threshold T means distance <= 1 - T.
+        max_distance = 1.0 - request.score_threshold
+        distance_expr = KnowledgeChunk.embedding.cosine_distance(query_emb).label("distance")
+
+        stmt = (
+            select(KnowledgeChunk, KnowledgeDocument, distance_expr)
+            .join(KnowledgeDocument, KnowledgeDocument.id == KnowledgeChunk.document_id)
+            .where(
+                KnowledgeDocument.knowledge_base_id == kb.id,
+                KnowledgeDocument.status == DocumentStatus.READY,
+                KnowledgeChunk.embedding.cosine_distance(query_emb) <= max_distance,
+            )
+            .order_by(distance_expr.asc())
+            .limit(request.top_k)
+        )
+        result = await db.execute(stmt)
+        rows = result.all()
+
+        results = [
+            KnowledgeQueryResultItem(
+                chunk_id=chunk.id,
+                document_id=doc.id,
+                document_filename=doc.filename,
+                chunk_index=chunk.chunk_index,
+                page_number=chunk.page_number,
+                source_location=chunk.source_location,
+                text=chunk.text,
+                score=round(max(0.0, 1.0 - float(distance)), 4),
+            )
+            for chunk, doc, distance in rows
+        ]
+
+        return KnowledgeQueryResponse(
+            query=request.query,
+            total_matches=len(results),
+            results=results,
+        )
+
+    # 2. SQLite / Dev fallback: Fetch all chunks from READY documents in this knowledge base
     stmt = (
         select(KnowledgeChunk, KnowledgeDocument)
         .join(KnowledgeDocument, KnowledgeDocument.id == KnowledgeChunk.document_id)

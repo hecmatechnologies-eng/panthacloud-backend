@@ -14,8 +14,11 @@
 # syntax=docker/dockerfile:1
 FROM python:3.13-slim AS base
 
+# ripgrep backs the analyst's `search_code` tool. Without it the reader falls back to a pure-Python
+# filesystem walk that costs ~2.6s per search on a 2,709-file repository (14-18x slower) and scales
+# linearly with the file count, against a 300s run budget.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ca-certificates \
+    && apt-get install -y --no-install-recommends git ca-certificates ripgrep \
     && rm -rf /var/lib/apt/lists/*
 
 # Pinned to the uv that produced `uv.lock` (revision 3). An older uv than the one that wrote the

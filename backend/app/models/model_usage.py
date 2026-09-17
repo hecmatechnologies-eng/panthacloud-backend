@@ -25,6 +25,8 @@ class ModelUsage(BaseModel):
         # Serves the per-organization budget query and the ledger's time ordering; the single
         # organization_id index would be redundant with this.
         Index("ix_model_usage_org_created", "organization_id", "created_at"),
+        Index("ix_model_usage_project_created", "project_id", "created_at"),
+        Index("ix_model_usage_project_int", "project_id", "integration_id"),
     )
 
     organization_id: Mapped[uuid.UUID] = mapped_column(

@@ -16,6 +16,7 @@ from app.api.deps import (
 from app.core.database import get_db
 from app.core.permissions import Permission
 from app.core.secrets import secret_store
+from app.core.tasks import cancel_task
 from app.models.assistant import Assistant
 from app.models.github_installation import GitHubInstallation
 from app.models.knowledge import KnowledgeBase
@@ -562,6 +563,9 @@ async def cancel_integration_run(
         integration.status = WebsiteIntegrationStatus.CONNECTED
         await db.commit()
         await db.refresh(run)
+
+        # Signal and abort the in-flight pipeline task
+        await cancel_task(run.id)
 
         await record_audit(
             db,

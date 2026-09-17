@@ -11,10 +11,11 @@ platform, so there is one implementation rather than one per call site — and t
 and production exercise the same code.
 """
 
-import asyncio
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
+
+from app.services.repository.executor import run_in_io_thread
 
 
 async def run_git(
@@ -43,6 +44,7 @@ async def run_git(
         )
 
     try:
-        return await asyncio.to_thread(_invoke)
+        return await run_in_io_thread(_invoke)
     except subprocess.TimeoutExpired:
         raise TimeoutError(timeout_message) from None
+

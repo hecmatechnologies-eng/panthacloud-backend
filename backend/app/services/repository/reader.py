@@ -12,13 +12,17 @@ Two safety rules hold on every path, in every method:
   read tool that reached it would hand the model a credential (CLAUDE.md §4.2).
 """
 
-import asyncio
+import functools
+import json
 import os
+import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
 from app.core.protected_paths import protected_reason
+from app.services.repository.executor import run_in_io_thread
 from app.services.repository.workspace import SecurityViolationError, WorkspaceManager
 
 # Directories never worth listing, reading or searching: VCS metadata, dependencies and build
@@ -49,7 +53,38 @@ _DENIED_FILE_NAMES = frozenset(
 _DENIED_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".keystore", ".jks")
 
 _MAX_SEARCH_FILE_BYTES = 1_000_000
+# Only the pure-Python fallback needs a total-scan cap: its cost is linear in the bytes it reads, so
+# the cap bounds how long a search can take. ripgrep is fast enough that the cap is unnecessary, and
+# applying it there would silently truncate results on a large repository.
 _MAX_SEARCH_TOTAL_BYTES = 50_000_000
+_RIPGREP_TIMEOUT_SECONDS = 30.0
+
+# Directory globs for ripgrep, derived from the same ignore list the walker uses so both paths agree.
+# Both the root-level and nested forms are emitted because the two glob dialects differ on whether a
+# leading `**/` matches zero directories. Excluding them here also means ripgrep never opens
+# `.git/config`, which carries the clone's access token (CLAUDE.md §4.2).
+#
+# This is defence in depth, not the security boundary: `_is_denied` is still applied to every match
+# (it is the single source of truth, and it covers `protected_reason` patterns a glob cannot express).
+_EXCLUDE_GLOBS = tuple(
+    glob
+    for name in sorted(_IGNORED_DIRS)
+    for glob in (f"!{name}/**", f"!**/{name}/**")
+) + ("!.env*", "!**/.env*", "!*.pem", "!**/*.pem", "!*.key", "!**/*.key")
+
+# Each pattern needs its own `--glob`: passed bare, ripgrep reads them as paths to search.
+_EXCLUDE_GLOB_ARGS = tuple(
+    arg for pattern in _EXCLUDE_GLOBS for arg in ("--glob", pattern)
+)
+
+
+@functools.lru_cache(maxsize=1)
+def _ripgrep_path() -> str | None:
+    """The ripgrep binary, or None when it is not installed.
+
+    Resolved once: a missing binary must degrade to the fallback, not fail the search.
+    """
+    return shutil.which("rg")
 
 
 class RepositoryReaderError(Exception):
@@ -111,13 +146,13 @@ class LocalWorkspaceReader:
         self._workspace = workspace_manager or WorkspaceManager()
 
     async def list_tree(self, *, path: str = "", offset: int = 0, max_entries: int = 500) -> TreeListing:
-        return await asyncio.to_thread(self._list_tree, path, offset, max_entries)
+        return await run_in_io_thread(self._list_tree, path, offset, max_entries)
 
     async def read_file(self, *, path: str, offset: int = 0, limit: int = 200) -> FileContent:
-        return await asyncio.to_thread(self._read_file, path, offset, limit)
+        return await run_in_io_thread(self._read_file, path, offset, limit)
 
     async def search(self, *, query: str, offset: int = 0, max_results: int = 50) -> SearchResults:
-        return await asyncio.to_thread(self._search, query, offset, max_results)
+        return await run_in_io_thread(self._search, query, offset, max_results)
 
     # --- synchronous implementation, offloaded off the event loop ---------------------------
 
@@ -168,6 +203,96 @@ class LocalWorkspaceReader:
         )
 
     def _search(self, query: str, offset: int, max_results: int) -> SearchResults:
+        if _ripgrep_path() is not None:
+            return self._search_ripgrep(query, offset, max_results)
+        return self._search_python(query, offset, max_results)
+
+    def _search_ripgrep(self, query: str, offset: int, max_results: int) -> SearchResults:
+        """Search with ripgrep.
+
+        The previous implementation walked the whole tree and read every file on *every* call: ~2.6
+        seconds per search on a 2,709-file repository, against a 300-second run budget, and linear
+        in the file count. ripgrep does the same work in ~0.15 seconds (14-18x), and it is what
+        Claude Code and Cursor use as the primary way to find code.
+
+        ``--fixed-strings`` preserves the documented contract (a case-insensitive substring, not a
+        regex), which also means a query containing regex metacharacters cannot become a
+        catastrophic pattern. ``--no-ignore`` keeps behaviour independent of the customer's
+        ``.gitignore``; ``--hidden`` keeps the reader's contract that dotfiles such as ``.gitignore``
+        are searchable.
+        """
+        command = [
+            _ripgrep_path() or "rg",
+            "--json",
+            "--fixed-strings",
+            "--ignore-case",
+            "--no-ignore",
+            "--hidden",
+            "--max-filesize",
+            str(_MAX_SEARCH_FILE_BYTES),
+            *_EXCLUDE_GLOB_ARGS,
+            "--",
+            query,
+            ".",
+        ]
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=str(self._root),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=_RIPGREP_TIMEOUT_SECONDS,
+                # Exit codes are read below: 0 is matches, 1 is no matches, anything else is a
+                # failure. Raising here would collapse that distinction.
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RepositoryReaderError(
+                f"Search timed out after {int(_RIPGREP_TIMEOUT_SECONDS)} seconds. "
+                "Narrow the query."
+            ) from exc
+        except OSError as exc:
+            # Never interpolate the OSError: it embeds the absolute workspace path.
+            raise RepositoryReaderError("Could not run the repository search.") from exc
+
+        if completed.returncode not in (0, 1):
+            # 1 is "no matches"; anything else is a real failure.
+            raise RepositoryReaderError("Repository search failed.")
+
+        hits: list[SearchHit] = []
+        for line in completed.stdout.splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") != "match":
+                continue
+            data = event.get("data") or {}
+            try:
+                raw_path = data["path"]["text"]
+                line_number = int(data["line_number"])
+                text = data["lines"]["text"]
+            except (KeyError, TypeError, ValueError):
+                continue
+            # ripgrep is given "." as the root so paths stay relative and the workspace path never
+            # reaches the model. Windows emits `.\src\App.tsx`, so normalise to POSIX before use.
+            relative = raw_path.replace("\\", "/").removeprefix("./")
+            # Authoritative denial check, reusing the single source of truth. ripgrep never opens an
+            # ignored directory, but a protected path outside that list is only caught here.
+            if _is_denied(relative):
+                continue
+            hits.append(
+                SearchHit(path=relative, line_number=line_number, line=text.strip()[:200])
+            )
+
+        page = hits[offset : offset + max_results]
+        return SearchResults(
+            hits=page, total=len(hits), truncated=offset + max_results < len(hits)
+        )
+
+    def _search_python(self, query: str, offset: int, max_results: int) -> SearchResults:
         needle = query.lower()
         hits: list[SearchHit] = []
         bytes_scanned = 0

@@ -187,8 +187,17 @@ class _CachedToken:
 
 
 _token_cache: dict[int, _CachedToken] = {}
-_token_lock = asyncio.Lock()
+_token_locks: dict[int, asyncio.Lock] = {}
+_locks_guard = asyncio.Lock()
 _transport: httpx.AsyncBaseTransport | None = None
+
+
+async def _get_installation_lock(installation_id: int) -> asyncio.Lock:
+    """Resolve or create an asyncio.Lock keyed strictly by installation_id."""
+    async with _locks_guard:
+        if installation_id not in _token_locks:
+            _token_locks[installation_id] = asyncio.Lock()
+        return _token_locks[installation_id]
 
 
 def set_github_app_transport(transport: httpx.AsyncBaseTransport | None) -> None:
@@ -196,6 +205,7 @@ def set_github_app_transport(transport: httpx.AsyncBaseTransport | None) -> None
     global _transport
     _transport = transport
     _token_cache.clear()
+    _token_locks.clear()
 
 
 def _app_headers() -> dict[str, str]:
@@ -282,7 +292,16 @@ async def user_can_access_installation(user_token: str, installation_id: int) ->
 async def mint_installation_token(installation_id: int) -> str:
     """A valid installation access token, minted if the cached one is near expiry."""
     _require_configured()
-    async with _token_lock:
+
+    # 1. Fast path without lock
+    cached = _token_cache.get(installation_id)
+    if cached and cached.expires_at - _TOKEN_REFRESH_MARGIN_SECONDS > time.time():
+        return cached.token
+
+    # 2. Keyed lock per installation
+    lock = await _get_installation_lock(installation_id)
+    async with lock:
+        # Re-check cache inside lock in case another task refreshed it
         cached = _token_cache.get(installation_id)
         if cached and cached.expires_at - _TOKEN_REFRESH_MARGIN_SECONDS > time.time():
             return cached.token
