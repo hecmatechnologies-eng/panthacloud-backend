@@ -24,7 +24,9 @@ INSTRUCTIONS = (
     "unit. Do not attempt full design-system inference.\n"
     "- If no safe integration point exists, set unsupported_reason and leave the candidates empty. "
     "Declining is a correct outcome, not a failure.\n"
-    "- The DETERMINISTIC PRE-ANALYSIS is data computed by code; use it, but verify what you rely on."
+    "- The DETERMINISTIC PRE-ANALYSIS is data computed by code; use it, but verify what you rely on.\n"
+    "- If the DETERMINISTIC PRE-ANALYSIS provides grounded candidate snippets matching the framework, "
+    "you may rank candidates and extract design tokens directly without redundant tool calls."
 )
 
 WEBSITE_ANALYST = AgentDefinition(

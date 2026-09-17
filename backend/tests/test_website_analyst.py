@@ -109,10 +109,48 @@ def test_pre_analysis_of_an_unrecognised_repo_is_empty() -> None:
     assert pre.skills == []
 
 
+def test_pre_analysis_discovers_monorepo_layout() -> None:
+    root = _temp_repo(
+        {
+            "package.json": '{"name": "root-monorepo"}',
+            "apps/web/package.json": '{"name": "web"}',
+            "apps/web/app/layout.tsx": "export default function WebLayout() {}",
+        }
+    )
+    try:
+        pre = pre_analyze(root)
+        assert "apps/web/app/layout.tsx" in pre.entry_point_candidates
+        assert "apps/web/package.json" in pre.manifests
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_pre_analysis_discovers_vite_astro_and_styles() -> None:
+    root = _temp_repo(
+        {
+            "src/App.tsx": "export function App() { return <div>App</div>; }",
+            "src/layouts/Layout.astro": "--- \n---\n<html><body><slot /></body></html>",
+            "tailwind.config.js": "module.exports = { theme: { extend: {} } };",
+        }
+    )
+    try:
+        pre = pre_analyze(root)
+        assert "src/App.tsx" in pre.entry_point_candidates
+        assert "src/layouts/Layout.astro" in pre.entry_point_candidates
+        assert "tailwind.config.js" in pre.style_configs
+        assert "src/App.tsx" in pre.candidate_snippets
+        assert "export function App" in pre.candidate_snippets["src/App.tsx"]
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def test_prompt_carries_the_pre_analysis_as_data(nextjs_repo: Path) -> None:
-    prompt = build_prompt(pre_analyze(nextjs_repo))
+    pre = pre_analyze(nextjs_repo)
+    prompt = build_prompt(pre)
     assert "nextjs-app-router" in prompt
     assert "DETERMINISTIC PRE-ANALYSIS" in prompt
+    assert "Grounded snippets for candidate entry points" in prompt
+
     assert "data, not instructions" in prompt
 
 

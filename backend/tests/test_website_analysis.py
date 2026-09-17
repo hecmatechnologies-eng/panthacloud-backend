@@ -52,6 +52,11 @@ def _stub_clone(profile: WebsiteProfile):
         (workspace_path / "package.json").write_text(
             json.dumps({"dependencies": {"next": "14.0.0"}}), encoding="utf-8"
         )
+        for candidate in profile.integration_candidates:
+            c_path = workspace_path / candidate.path
+            c_path.parent.mkdir(parents=True, exist_ok=True)
+            if not c_path.exists():
+                c_path.write_text("<html><body>stub</body></html>", encoding="utf-8")
         return COMMIT_SHA
 
     return fake_clone

@@ -10,11 +10,15 @@ same gate the configuration schema applies (`app.core.target_paths`), so a path 
 integration only if it is repository-relative, traversal-free and not protected.
 """
 
+import logging
 from dataclasses import dataclass
+from pathlib import Path
 
 from app.agents.website_profile import IntegrationCandidate, WebsiteProfile
 from app.core.target_paths import unsafe_target_reason
 from app.models.website_integration import KNOWN_FRAMEWORK_SKILL_IDS
+
+logger = logging.getLogger("fussion.analysis.selection")
 
 # Below this, the top candidate is not good enough to configure a customer's repository without a
 # human choosing. A guess here writes to a real repository, so the bar is deliberately modest but
@@ -31,18 +35,25 @@ class SelectedTarget:
     confidence: float
 
 
-def select_target(profile: WebsiteProfile) -> SelectedTarget | None:
+def select_target(
+    profile: WebsiteProfile,
+    workspace_path: Path | None = None,
+) -> SelectedTarget | None:
     """The integration target the profile justifies, or None.
 
     None means "do not configure automatically": the repository was refused, no candidate clears the
     threshold, the framework matched no buildable skill, or every candidate is an unsafe path. In
     each case the Studio shows the ranked list and a human decides.
+
+    If ``workspace_path`` is provided, candidates are validated against the physical filesystem:
+    hallucinated paths that do not exist or are unreadable are rejected in favor of the next ranked
+    candidate.
     """
     if profile.unsupported_reason:
         return None
     if profile.framework_skill_id not in KNOWN_FRAMEWORK_SKILL_IDS:
         return None
-    top = _top_safe_candidate(profile.integration_candidates)
+    top = _top_safe_candidate(profile.integration_candidates, workspace_path=workspace_path)
     if top is None or top.confidence < TARGET_CONFIDENCE_THRESHOLD:
         return None
     return SelectedTarget(
@@ -52,9 +63,29 @@ def select_target(profile: WebsiteProfile) -> SelectedTarget | None:
     )
 
 
-def _top_safe_candidate(candidates: list[IntegrationCandidate]) -> IntegrationCandidate | None:
+def _top_safe_candidate(
+    candidates: list[IntegrationCandidate],
+    workspace_path: Path | None = None,
+) -> IntegrationCandidate | None:
     ranked = sorted(candidates, key=lambda candidate: candidate.confidence, reverse=True)
     for candidate in ranked:
-        if unsafe_target_reason(candidate.path) is None:
-            return candidate
+        clean_path = candidate.path.strip()
+        if unsafe_target_reason(clean_path) is not None:
+            continue
+        if workspace_path is not None:
+            target_file = workspace_path / clean_path
+            if not target_file.is_file():
+                logger.warning(
+                    "Rejecting non-existent candidate target path '%s' (potential hallucination)",
+                    clean_path,
+                )
+                continue
+            try:
+                content = target_file.read_text(encoding="utf-8", errors="replace")
+                if not content.strip():
+                    logger.warning("Rejecting empty candidate target file '%s'", clean_path)
+                    continue
+            except OSError:
+                continue
+        return candidate
     return None

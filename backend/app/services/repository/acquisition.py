@@ -129,11 +129,12 @@ class RepositoryAcquisitionService:
         else:
             clone_url = repository.url or f"https://github.com/{repository.full_name}.git"
 
-        # Controlled Git clone with a structured argument list and no shell expansion.
+        # Controlled Git clone with blobless filtering (--filter=blob:none) for fast acquisition
         clone_args = [
             "clone",
             "--depth",
             "1",
+            "--filter=blob:none",
             "--branch",
             snapshot.branch,
             clone_url,
@@ -149,6 +150,30 @@ class RepositoryAcquisitionService:
                     f"{settings.ACQUISITION_TIMEOUT_SECONDS} seconds."
                 ),
             )
+            if clone.returncode != 0:
+                # Fallback to standard shallow clone if filtering is rejected
+                if workspace_path.exists():
+                    import shutil
+
+                    shutil.rmtree(workspace_path, ignore_errors=True)
+                fallback_args = [
+                    "clone",
+                    "--depth",
+                    "1",
+                    "--branch",
+                    snapshot.branch,
+                    clone_url,
+                    str(workspace_path),
+                ]
+                clone = await run_git(
+                    fallback_args,
+                    timeout_seconds=float(settings.ACQUISITION_TIMEOUT_SECONDS),
+                    timeout_message=(
+                        "Repository acquisition timed out after "
+                        f"{settings.ACQUISITION_TIMEOUT_SECONDS} seconds."
+                    ),
+                )
+
             if clone.returncode != 0:
                 err_msg = sanitize_git_output(
                     clone.stderr.decode("utf-8", errors="replace"), auth_token

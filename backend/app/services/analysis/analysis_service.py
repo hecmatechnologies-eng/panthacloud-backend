@@ -101,7 +101,7 @@ async def analyze_website_integration(
         # repository, a below-threshold candidate or an unsafe path leaves the integration's
         # existing configuration untouched (a fresh integration keeps its server defaults). The
         # Studio shows the ranked list for a human to choose.
-        selected = select_target(profile) if profile is not None else None
+        selected = select_target(profile, workspace_path=workspace_path) if profile is not None else None
         if selected is not None:
             integration.framework_skill_id = selected.framework_skill_id
             integration.widget_target_path = selected.widget_target_path

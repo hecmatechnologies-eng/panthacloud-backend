@@ -59,3 +59,44 @@ def test_skips_unsafe_candidates_and_uses_the_next_safe_one() -> None:
     selected = select_target(profile)
     assert selected is not None
     assert selected.widget_target_path == "index.html"
+
+
+def test_verification_gate_rejects_hallucinated_candidate_and_picks_existing(tmp_path) -> None:
+    # Physical file setup: only app/layout.tsx exists, src/app/layout.tsx is hallucinated
+    (tmp_path / "app").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "app" / "layout.tsx").write_text("export default function Root() {}", encoding="utf-8")
+
+    profile = WebsiteProfile(
+        framework_skill_id="nextjs-app-router",
+        integration_candidates=[
+            _candidate("src/app/layout.tsx", 0.95),  # Does not exist on disk
+            _candidate("app/layout.tsx", 0.85),      # Real physical file
+        ],
+    )
+    selected = select_target(profile, workspace_path=tmp_path)
+    assert selected is not None
+    assert selected.widget_target_path == "app/layout.tsx"
+    assert selected.confidence == 0.85
+
+
+def test_verification_gate_rejects_empty_candidate(tmp_path) -> None:
+    (tmp_path / "index.html").write_text("", encoding="utf-8")  # Empty file
+
+    profile = WebsiteProfile(
+        framework_skill_id="generic-html",
+        integration_candidates=[_candidate("index.html", 0.95)],
+    )
+    assert select_target(profile, workspace_path=tmp_path) is None
+
+
+def test_verification_gate_declines_when_all_candidates_hallucinated(tmp_path) -> None:
+    profile = WebsiteProfile(
+        framework_skill_id="nextjs-app-router",
+        integration_candidates=[
+            _candidate("app/layout.tsx", 0.95),
+            _candidate("src/app/layout.tsx", 0.90),
+        ],
+    )
+    # Neither candidate exists in tmp_path
+    assert select_target(profile, workspace_path=tmp_path) is None
+
