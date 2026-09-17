@@ -168,7 +168,6 @@ async def _begin_install(client: AsyncClient, org_id: str, token: str) -> str:
     assert callback.status_code == 303, callback.text
     location = callback.headers["location"]
     assert location.startswith("https://github.com/login/oauth/authorize?client_id=Iv1.test&state=")
-    assert "redirect_uri=" in location
     raw_state = location.split("state=", 1)[1]
     if "&" in raw_state:
         raw_state = raw_state.split("&", 1)[0]

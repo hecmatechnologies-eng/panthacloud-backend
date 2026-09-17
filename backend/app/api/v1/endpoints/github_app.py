@@ -156,9 +156,8 @@ async def github_install_callback(
 
     try:
         oauth_state = create_oauth_state(organization_id, user_id, installation_id, nonce)
-        target_redirect = f"{settings.effective_public_api_url}/api/v1/github/oauth/callback"
         redirect = RedirectResponse(
-            build_oauth_authorize_url(oauth_state, redirect_uri=target_redirect),
+            build_oauth_authorize_url(oauth_state),
             status_code=status.HTTP_303_SEE_OTHER,
         )
         _set_state_cookie(redirect, nonce)
