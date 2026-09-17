@@ -14,6 +14,7 @@ async def test_root_health_endpoint(client: AsyncClient):
     assert data["service"] == "fussion-backend"
     assert "database" in data
     assert data["database"]["status"] == "connected"
+    assert "redis" in data
 
 
 @pytest.mark.asyncio
@@ -26,6 +27,8 @@ async def test_api_v1_health_endpoint(client: AsyncClient):
     assert data["environment"] == "test"
     assert data["database"]["status"] == "connected"
     assert "type" in data["database"]
+    assert "redis" in data
+    assert data["redis"]["status"] == "not_configured"
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,5 @@
 import logging
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -33,10 +34,12 @@ def create_access_token(
     subject: str,
     expires_delta: timedelta | None = None,
     extra_claims: dict[str, Any] | None = None,
+    token_version: int = 1,
 ) -> str:
-    """
-    Generate a signed JWT access token.
-    Claims remain minimal: sub (user_id), iat, exp.
+    """Generate a signed JWT access token.
+
+    Claims: sub (user_id), jti (unique token identifier for revocation),
+    token_version (for global user revocation), iat, exp.
     Authoritative state (organizations, roles, permissions) is always resolved server-side.
     """
     now = datetime.now(UTC)
@@ -47,6 +50,8 @@ def create_access_token(
 
     to_encode: dict[str, Any] = {
         "sub": str(subject),
+        "jti": str(uuid.uuid4()),
+        "token_version": token_version,
         "iat": int(now.timestamp()),
         "exp": int(expire.timestamp()),
     }

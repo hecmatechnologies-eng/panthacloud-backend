@@ -238,18 +238,18 @@ async def _prepare_turn(
     window = settings.PUBLIC_CHAT_RATE_LIMIT_WINDOW_SECONDS
     # IP first: it is the cheapest shed, and it does not require the tenant to be known yet.
     if client_ip:
-        rate_limiter.check("ip", client_ip, settings.PUBLIC_CHAT_RATE_LIMIT_PER_IP, window)
+        await rate_limiter.check("ip", client_ip, settings.PUBLIC_CHAT_RATE_LIMIT_PER_IP, window)
 
     ctx = await resolve_tenant(db, public_key, origin)
 
     # IP, integration and organization are all server-derived and cannot be reset by the caller.
-    rate_limiter.check(
+    await rate_limiter.check(
         "integration",
         str(ctx.integration_id),
         settings.PUBLIC_CHAT_RATE_LIMIT_PER_INTEGRATION,
         window,
     )
-    rate_limiter.check(
+    await rate_limiter.check(
         "organization",
         str(ctx.organization_id),
         settings.PUBLIC_CHAT_RATE_LIMIT_PER_ORGANIZATION,
@@ -263,7 +263,7 @@ async def _prepare_turn(
     # gets a fresh session (and a fresh counter) every time. The enforceable bounds are the IP,
     # integration and organization scopes above. A conversation scope is deferred with B5's usage
     # accounting — one conversation per session at MVP, so it would duplicate this one.
-    rate_limiter.check(
+    await rate_limiter.check(
         "session",
         str(session.id),
         settings.PUBLIC_CHAT_RATE_LIMIT_PER_SESSION,

@@ -24,6 +24,7 @@ from app.services.auth.exceptions import (
     InvalidTokenError,
     OAuthEmailUnverifiedError,
     TokenExpiredError,
+    TokenRevokedError,
     UserAlreadyExistsError,
     UserNotFoundError,
 )
@@ -43,7 +44,7 @@ class AuthService:
 
     @staticmethod
     async def register(db: AsyncSession, payload: RegisterRequest) -> tuple[User, str]:
-        """Registers a new user, default personal organization, and initial OWNER membership."""
+        """Handles user registration, creates default organization, and generates token."""
         normalized_email = str(payload.email).strip().lower()
 
         stmt = select(User).where(User.email == normalized_email)
@@ -84,7 +85,7 @@ class AuthService:
         await db.commit()
         await db.refresh(user)
 
-        token = create_access_token(subject=str(user.id))
+        token = create_access_token(subject=str(user.id), token_version=user.token_version)
         return user, token
 
     @staticmethod
@@ -102,7 +103,7 @@ class AuthService:
         if not user.is_active:
             raise InactiveUserError()
 
-        token = create_access_token(subject=str(user.id))
+        token = create_access_token(subject=str(user.id), token_version=user.token_version)
         return user, token
 
     @staticmethod
@@ -122,6 +123,22 @@ class AuthService:
         except (jwt.PyJWTError, ValueError):
             raise InvalidTokenError()
 
+        # 1. Check single-token revocation blacklist (jti)
+        jti = payload.get("jti")
+        if jti:
+            from app.core.redis import is_token_blacklisted
+
+            if await is_token_blacklisted(jti):
+                raise TokenRevokedError()
+
+        # 2. Check user-wide revocation timestamp (iat < revoked_before)
+        iat = payload.get("iat")
+        if iat:
+            from app.core.redis import is_user_revoked
+
+            if await is_user_revoked(user_id, iat):
+                raise TokenRevokedError()
+
         stmt = select(User).where(User.id == user_id)
         result = await db.execute(stmt)
         user = result.scalar_one_or_none()
@@ -132,7 +149,47 @@ class AuthService:
         if not user.is_active:
             raise InactiveUserError()
 
+        # 3. Check persistent token_version match
+        token_version = payload.get("token_version", 1)
+        if user.token_version != token_version:
+            raise TokenRevokedError()
+
         return user
+
+    @staticmethod
+    async def revoke_token(token: str) -> bool:
+        """Revoke a single access token by adding its jti to the blacklist."""
+        try:
+            payload = decode_access_token(token)
+            jti = payload.get("jti")
+            exp = payload.get("exp")
+            if not jti or not exp:
+                return False
+
+            import time
+
+            now = int(time.time())
+            ttl = max(1, exp - now)
+            from app.core.redis import blacklist_token
+
+            return await blacklist_token(jti, ttl_seconds=ttl)
+        except (jwt.PyJWTError, ValueError, TypeError, KeyError):
+            return False
+
+    @staticmethod
+    async def revoke_all_sessions(db: AsyncSession, user: User) -> None:
+        """Revoke all active sessions for a user globally across all devices."""
+        import time
+
+        now = int(time.time())
+        from app.core.redis import set_user_revoked_before
+
+        await set_user_revoked_before(user.id, now)
+
+        user.token_version += 1
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
 
     @classmethod
     async def link_or_create_oauth_user(
@@ -189,7 +246,7 @@ class AuthService:
             await db.commit()
             await db.refresh(user)
 
-            token = create_access_token(subject=str(user.id))
+            token = create_access_token(subject=str(user.id), token_version=user.token_version)
             return user, token
 
         # 3. Account not found: Check if a user with this email exists
@@ -224,7 +281,10 @@ class AuthService:
             await db.commit()
             await db.refresh(existing_user)
 
-            token = create_access_token(subject=str(existing_user.id))
+            token = create_access_token(
+                subject=str(existing_user.id),
+                token_version=existing_user.token_version,
+            )
             return existing_user, token
 
         # 4. First-time registration via OAuth: Create user + account + personal organization
@@ -268,5 +328,8 @@ class AuthService:
         await db.commit()
         await db.refresh(new_user)
 
-        token = create_access_token(subject=str(new_user.id))
+        token = create_access_token(
+            subject=str(new_user.id),
+            token_version=new_user.token_version,
+        )
         return new_user, token

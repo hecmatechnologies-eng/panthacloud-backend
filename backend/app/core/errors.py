@@ -18,6 +18,7 @@ from app.services.auth.exceptions import (
     OAuthProviderError,
     OAuthStateInvalidError,
     TokenExpiredError,
+    TokenRevokedError,
     UserAlreadyExistsError,
     UserNotFoundError,
 )
@@ -143,6 +144,15 @@ def register_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(TokenExpiredError)
     async def token_expired_handler(request: Request, exc: TokenExpiredError):
+        return create_error_response(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            code="UNAUTHORIZED",
+            message=exc.message,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    @app.exception_handler(TokenRevokedError)
+    async def token_revoked_handler(request: Request, exc: TokenRevokedError):
         return create_error_response(
             status_code=status.HTTP_401_UNAUTHORIZED,
             code="UNAUTHORIZED",

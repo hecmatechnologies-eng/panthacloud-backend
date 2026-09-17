@@ -5,9 +5,10 @@ from typing import Annotated, Any
 import jwt
 from fastapi import APIRouter, Cookie, Depends, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import bearer_scheme, get_current_user
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.user import User
@@ -157,8 +158,8 @@ async def oauth_callback(
                 return RedirectResponse(
                     url=target_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT
                 )
-        except Exception:
-            pass
+        except (jwt.PyJWTError, ValueError):
+            logger.debug("OAuth state is not a GitHub App state JWT; proceeding with standard flow")
 
     # 1. Handle provider error redirects (e.g. user denied consent)
     if error:
@@ -230,3 +231,28 @@ async def get_me(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> UserRead:
     return UserRead.model_validate(current_user)
+
+
+@router.post(
+    "/logout",
+    summary="Log out the current session and revoke the bearer token",
+)
+async def logout(
+    token_auth: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> dict[str, str]:
+    if token_auth and token_auth.credentials:
+        await AuthService.revoke_token(token_auth.credentials)
+    return {"status": "ok", "message": "Successfully logged out."}
+
+
+@router.post(
+    "/logout-all",
+    summary="Revoke all active sessions and tokens for the authenticated user",
+)
+async def logout_all(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict[str, str]:
+    await AuthService.revoke_all_sessions(db, current_user)
+    return {"status": "ok", "message": "Successfully logged out of all devices."}

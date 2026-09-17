@@ -49,6 +49,13 @@ class TokenExpiredError(AuthServiceError):
         super().__init__(message)
 
 
+class TokenRevokedError(AuthServiceError):
+    """Raised when an authentication token has been revoked or session invalidated."""
+
+    def __init__(self, message: str = "Authentication token has been revoked.") -> None:
+        super().__init__(message)
+
+
 class InvalidTokenError(AuthServiceError):
     """Raised when a token cannot be validated or is missing required claims."""
 

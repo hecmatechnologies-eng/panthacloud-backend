@@ -136,3 +136,109 @@ async def subscribe_project_events(
             await pubsub.aclose()
         except (redis.RedisError, OSError, ValueError) as exc:
             logger.debug("Error closing pubsub subscriber: %s", exc)
+
+
+# In-memory fallback sets for token revocation when Redis is unconfigured (testing/local dev)
+_local_blacklist: set[str] = set()
+_local_user_revoked: dict[str, int] = {}
+
+TOKEN_BLACKLIST_PREFIX = "fussion:token:blacklist"
+USER_REVOKED_PREFIX = "fussion:user:revoked_before"
+
+
+async def blacklist_token(jti: str, ttl_seconds: int = 86400) -> bool:
+    """Add a JWT ID (jti) to the revocation blacklist with a given TTL.
+
+    Uses Redis if available, or falls back to in-memory set for test environments.
+    """
+    client = get_redis()
+    if client is not None:
+        try:
+            key = f"{TOKEN_BLACKLIST_PREFIX}:{jti}"
+            await client.set(key, "1", ex=max(1, ttl_seconds))
+            return True
+        except (redis.RedisError, OSError, ValueError) as exc:
+            logger.warning("Failed to blacklist token in Redis: %s", exc)
+
+    _local_blacklist.add(jti)
+    return True
+
+
+async def is_token_blacklisted(jti: str) -> bool:
+    """Check if a JWT ID (jti) has been revoked."""
+    client = get_redis()
+    if client is not None:
+        try:
+            key = f"{TOKEN_BLACKLIST_PREFIX}:{jti}"
+            exists = await client.exists(key)
+            return bool(exists)
+        except (redis.RedisError, OSError, ValueError) as exc:
+            logger.warning("Failed to check token blacklist in Redis: %s", exc)
+
+    return jti in _local_blacklist
+
+
+async def set_user_revoked_before(
+    user_id: uuid.UUID | str,
+    timestamp: int,
+    ttl_seconds: int = 86400,
+) -> bool:
+    """Set the timestamp before which all issued tokens for a user are considered revoked."""
+    u_id = str(user_id)
+    client = get_redis()
+    if client is not None:
+        try:
+            key = f"{USER_REVOKED_PREFIX}:{u_id}"
+            await client.set(key, str(timestamp), ex=max(1, ttl_seconds))
+            return True
+        except (redis.RedisError, OSError, ValueError) as exc:
+            logger.warning("Failed to set user revocation in Redis: %s", exc)
+
+    _local_user_revoked[u_id] = timestamp
+    return True
+
+
+async def is_user_revoked(user_id: uuid.UUID | str, issued_at: int) -> bool:
+    """Check if a token was issued before the user's latest revocation timestamp."""
+    u_id = str(user_id)
+    client = get_redis()
+    if client is not None:
+        try:
+            key = f"{USER_REVOKED_PREFIX}:{u_id}"
+            val = await client.get(key)
+            if val is not None:
+                return issued_at < int(val)
+        except (redis.RedisError, OSError, ValueError) as exc:
+            logger.warning("Failed to check user revocation in Redis: %s", exc)
+
+    revoked_before = _local_user_revoked.get(u_id)
+    if revoked_before is not None:
+        return issued_at < revoked_before
+    return False
+
+
+def reset_token_blacklist() -> None:
+    """Reset the in-memory token blacklist (for unit testing)."""
+    _local_blacklist.clear()
+    _local_user_revoked.clear()
+
+
+async def check_redis_connectivity() -> tuple[bool, float | None]:
+    """Check connectivity to Redis with ping latency.
+
+    Returns:
+        (is_healthy, latency_ms)
+    """
+    import time
+
+    client = get_redis()
+    if client is None:
+        return False, None
+    try:
+        start = time.perf_counter()
+        res = await client.ping()
+        latency_ms = round((time.perf_counter() - start) * 1000, 2)
+        return bool(res), latency_ms
+    except (redis.RedisError, OSError, ValueError) as exc:
+        logger.warning("Redis health check failed: %s", exc)
+        return False, None
