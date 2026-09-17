@@ -1,6 +1,8 @@
+import logging
 import urllib.parse
-from typing import Annotated
+from typing import Annotated, Any
 
+import jwt
 from fastapi import APIRouter, Cookie, Depends, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +26,8 @@ from app.services.auth.oauth import (
     create_oauth_state,
     verify_oauth_state,
 )
+
+logger = logging.getLogger("fussion.auth")
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -104,15 +108,18 @@ async def oauth_login(
         state=state,
     )
     redirect = RedirectResponse(url=auth_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
-    redirect.set_cookie(
-        key="fussion_oauth_state",
-        value=state,
-        httponly=True,
-        samesite="lax",
-        secure=settings.is_production,
-        max_age=settings.OAUTH_STATE_EXPIRE_MINUTES * 60,
-        path="/",
-    )
+    cookie_kwargs: dict[str, Any] = {
+        "key": "fussion_oauth_state",
+        "value": state,
+        "httponly": True,
+        "samesite": "lax",
+        "secure": settings.is_production,
+        "max_age": settings.OAUTH_STATE_EXPIRE_MINUTES * 60,
+        "path": "/",
+    }
+    if settings.COOKIE_DOMAIN:
+        cookie_kwargs["domain"] = settings.COOKIE_DOMAIN
+    redirect.set_cookie(**cookie_kwargs)
     return redirect
 
 
@@ -131,6 +138,28 @@ async def oauth_callback(
     error_description: Annotated[str | None, Query()] = None,
     fussion_oauth_state: Annotated[str | None, Cookie()] = None,
 ) -> RedirectResponse:
+    # 0. Detect if this callback belongs to GitHub App installation flow rather than user login
+    if state and code and provider == "github":
+        try:
+            payload = jwt.decode(
+                state,
+                settings.effective_jwt_secret_key,
+                algorithms=[settings.JWT_ALGORITHM],
+            )
+            if payload.get("purpose") == "github_app_oauth_state":
+                logger.info(
+                    "Detected GitHub App OAuth state in auth callback; forwarding to github oauth callback"
+                )
+                target_url = (
+                    f"{settings.effective_public_api_url}/api/v1/github/oauth/callback"
+                    f"?code={urllib.parse.quote(code)}&state={urllib.parse.quote(state)}"
+                )
+                return RedirectResponse(
+                    url=target_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT
+                )
+        except Exception:
+            pass
+
     # 1. Handle provider error redirects (e.g. user denied consent)
     if error:
         err_msg = error_description or error
@@ -160,7 +189,10 @@ async def oauth_callback(
     # 5. Clear state cookie and redirect to frontend with session token
     target_url = f"{settings.FRONTEND_URL}/login?oauth_token={urllib.parse.quote(token)}"
     redirect = RedirectResponse(url=target_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
-    redirect.delete_cookie(key="fussion_oauth_state", path="/")
+    delete_kwargs: dict[str, Any] = {"key": "fussion_oauth_state", "path": "/"}
+    if settings.COOKIE_DOMAIN:
+        delete_kwargs["domain"] = settings.COOKIE_DOMAIN
+    redirect.delete_cookie(**delete_kwargs)
     return redirect
 
 

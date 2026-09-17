@@ -168,7 +168,11 @@ async def _begin_install(client: AsyncClient, org_id: str, token: str) -> str:
     assert callback.status_code == 303, callback.text
     location = callback.headers["location"]
     assert location.startswith("https://github.com/login/oauth/authorize?client_id=Iv1.test&state=")
-    return location.split("state=", 1)[1]
+    assert "redirect_uri=" in location
+    raw_state = location.split("state=", 1)[1]
+    if "&" in raw_state:
+        raw_state = raw_state.split("&", 1)[0]
+    return raw_state
 
 
 @pytest.mark.asyncio
@@ -554,4 +558,24 @@ async def test_credential_resolver_mints_for_an_app_linked_integration(
 
     assert resolved == "ghs_test_token"
     assert any(request.endswith("/access_tokens") for request in github_app.requests)
+
+
+@pytest.mark.asyncio
+async def test_auth_callback_forwards_github_app_state(
+    client: AsyncClient, github_app: _FakeGitHub
+) -> None:
+    """If GitHub routes the user to /auth/oauth/github/callback instead of /github/oauth/callback,
+    the auth endpoint detects purpose=github_app_oauth_state and 307-redirects to the right endpoint.
+    """
+    token, org_id = await register_user(client, "forward_state@example.com", "ForwardState")
+    oauth_state = await _begin_install(client, org_id, token)
+
+    resp = await client.get(
+        f"/api/v1/auth/oauth/github/callback?code=test-code&state={oauth_state}"
+    )
+    assert resp.status_code == 307
+    location = resp.headers["location"]
+    assert "/api/v1/github/oauth/callback" in location
+    assert "code=test-code" in location
+    assert f"state={oauth_state}" in location
 

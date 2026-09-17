@@ -158,12 +158,15 @@ def build_install_url(state: str) -> str:
     )
 
 
-def build_oauth_authorize_url(state: str) -> str:
+def build_oauth_authorize_url(state: str, redirect_uri: str | None = None) -> str:
     _require_configured()
-    return (
+    url = (
         f"{GITHUB_OAUTH_AUTHORIZE_URL}?client_id={quote(settings.GITHUB_APP_CLIENT_ID or '')}"
         f"&state={quote(state)}"
     )
+    if redirect_uri:
+        url += f"&redirect_uri={quote(redirect_uri)}"
+    return url
 
 
 def build_app_jwt() -> str:

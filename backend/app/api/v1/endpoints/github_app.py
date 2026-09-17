@@ -15,7 +15,7 @@ offering a button that cannot work.
 import logging
 import secrets
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Response, status
 from fastapi.responses import RedirectResponse
@@ -64,15 +64,18 @@ _STATE_COOKIE = "fussion_github_state"
 
 
 def _set_state_cookie(response: Response, nonce: str) -> None:
-    response.set_cookie(
-        _STATE_COOKIE,
-        nonce,
-        max_age=settings.GITHUB_APP_STATE_TTL_SECONDS,
-        httponly=True,
-        samesite="lax",
-        secure=settings.is_production,
-        path="/",
-    )
+    cookie_kwargs: dict[str, Any] = {
+        "key": _STATE_COOKIE,
+        "value": nonce,
+        "max_age": settings.GITHUB_APP_STATE_TTL_SECONDS,
+        "httponly": True,
+        "samesite": "lax",
+        "secure": settings.is_production,
+        "path": "/",
+    }
+    if settings.COOKIE_DOMAIN:
+        cookie_kwargs["domain"] = settings.COOKIE_DOMAIN
+    response.set_cookie(**cookie_kwargs)
 
 
 def _nonce_matches(cookie_nonce: str | None, state_nonce: str) -> None:
@@ -153,8 +156,10 @@ async def github_install_callback(
 
     try:
         oauth_state = create_oauth_state(organization_id, user_id, installation_id, nonce)
+        target_redirect = f"{settings.effective_public_api_url}/api/v1/github/oauth/callback"
         redirect = RedirectResponse(
-            build_oauth_authorize_url(oauth_state), status_code=status.HTTP_303_SEE_OTHER
+            build_oauth_authorize_url(oauth_state, redirect_uri=target_redirect),
+            status_code=status.HTTP_303_SEE_OTHER,
         )
         _set_state_cookie(redirect, nonce)
         return redirect
@@ -262,7 +267,10 @@ async def github_oauth_callback(
     redirect = RedirectResponse(
         f"{settings.FRONTEND_URL}/studio?github=connected", status_code=status.HTTP_303_SEE_OTHER
     )
-    redirect.delete_cookie(_STATE_COOKIE, path="/")
+    delete_kwargs: dict[str, Any] = {"key": _STATE_COOKIE, "path": "/"}
+    if settings.COOKIE_DOMAIN:
+        delete_kwargs["domain"] = settings.COOKIE_DOMAIN
+    redirect.delete_cookie(**delete_kwargs)
     return redirect
 
 

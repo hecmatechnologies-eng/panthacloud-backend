@@ -145,6 +145,21 @@ class Settings(BaseSettings):
     RAILWAY_PUBLIC_DOMAIN: str | None = None
     RAILWAY_STATIC_URL: str | None = None
 
+    # Shared cookie domain across frontend studio and api (e.g. .ai-mwalimu.com)
+    COOKIE_DOMAIN: str | None = None
+
+    @property
+    def effective_public_api_url(self) -> str:
+        """The base URL for this API as reachable by outside callers/browsers."""
+        base = self.PUBLIC_API_URL
+        if not base and self.RAILWAY_PUBLIC_DOMAIN:
+            base = f"https://{self.RAILWAY_PUBLIC_DOMAIN}"
+        elif not base and self.RAILWAY_STATIC_URL:
+            base = f"https://{self.RAILWAY_STATIC_URL}"
+        if not base:
+            base = "http://localhost:8000"
+        return base.rstrip("/")
+
     @property
     def widget_script_url(self) -> str:
         """The widget bundle's public URL, as a customer's browser will load it."""
