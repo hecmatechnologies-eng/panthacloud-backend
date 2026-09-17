@@ -6,6 +6,7 @@ Gracefully falls back to direct execution or in-process background tasks when Re
 
 import logging
 import uuid
+from typing import Any
 
 import redis
 from arq import create_pool
@@ -100,3 +101,30 @@ async def enqueue_pipeline_execution(
             logger.warning("Failed to enqueue pipeline job to ARQ: %s", exc)
             return None
     return None
+
+
+async def get_job_info(job_id: str) -> dict[str, Any] | None:
+    """Retrieve status and result of an ARQ job."""
+    from arq.jobs import Job, JobStatus
+
+    pool = await get_arq_pool()
+    if pool is None:
+        return None
+
+    try:
+        job = Job(job_id, pool)
+        status = await job.status()
+        status_str = status.value if isinstance(status, JobStatus) else str(status)
+        info: dict[str, Any] = {
+            "job_id": job_id,
+            "status": status_str,
+        }
+        if status == JobStatus.complete:
+            try:
+                info["result"] = await job.result(timeout=0)
+            except TimeoutError:
+                pass
+        return info
+    except (redis.RedisError, OSError, ConnectionError, RuntimeError, ValueError) as exc:
+        logger.warning("Failed to query job %s info: %s", job_id, exc)
+        return None

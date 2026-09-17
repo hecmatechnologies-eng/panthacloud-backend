@@ -3,7 +3,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,7 +30,7 @@ from app.models.website_integration import (
     WebsiteIntegration,
     WebsiteIntegrationStatus,
 )
-from app.schemas.website_analysis import WebsiteAnalysisRead
+from app.schemas.website_analysis import AnalysisJobResponse, WebsiteAnalysisRead
 from app.schemas.website_integration import (
     DiffFileItem,
     IntegrationPlanPayload,
@@ -694,10 +694,11 @@ async def get_run_pull_request(
 
 @router.post(
     "/analyze",
-    response_model=WebsiteAnalysisRead,
+    response_model=WebsiteAnalysisRead | AnalysisJobResponse,
     summary="Analyse the repository and detect the integration profile",
 )
 async def analyze_website_integration_endpoint(
+    response: Response,
     integration: Annotated[WebsiteIntegration, Depends(get_current_website_integration)],
     project: Annotated[Project, Depends(get_current_project)],
     tenant: Annotated[
@@ -706,8 +707,29 @@ async def analyze_website_integration_endpoint(
     ],
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
-) -> WebsiteAnalysisRead:
+    run_async: Annotated[bool, Query(alias="async", description="Execute analysis asynchronously via ARQ task queue")] = False,
+    prefer: Annotated[str | None, Header()] = None,
+) -> WebsiteAnalysisRead | AnalysisJobResponse:
     """Clone the repository at a pinned revision, run the analyst, and persist the detected profile."""
+    should_run_async = run_async or (prefer is not None and "respond-async" in prefer.lower())
+    if should_run_async:
+        from app.jobs.queue import enqueue_analysis
+
+        job_id = await enqueue_analysis(
+            org_id=tenant[0].id,
+            proj_id=project.id,
+            integration_id=integration.id,
+        )
+        if job_id:
+            response.status_code = status.HTTP_202_ACCEPTED
+            return AnalysisJobResponse(
+                status="queued",
+                job_id=job_id,
+                poll_url=f"/api/v1/organizations/{tenant[0].id}/projects/{project.id}/website-integrations/analyze/jobs/{job_id}",
+                events_url=f"/api/v1/organizations/{tenant[0].id}/projects/{project.id}/events/stream",
+            )
+        logger.info("ARQ Redis unconfigured or unavailable; executing analysis synchronously")
+
     from app.harness.budget import RunBudgetExceeded
     from app.harness.runner import AgentBudgetExceededError, AgentRunnerError, StructuredOutputError
     from app.llm.gateway import BudgetExceededError, ModelNotConfiguredError
@@ -759,6 +781,60 @@ async def analyze_website_integration_endpoint(
         {"commit_sha": analysis.commit_sha, "framework_skill_id": analysis.framework_skill_id},
     )
     return WebsiteAnalysisRead.model_validate(analysis)
+
+
+@router.get(
+    "/analyze/jobs/{job_id}",
+    summary="Check status and result of background repository analysis job",
+)
+async def get_analysis_job_status(
+    job_id: str,
+    integration: Annotated[WebsiteIntegration, Depends(get_current_website_integration)],
+    project: Annotated[Project, Depends(get_current_project)],
+    tenant: Annotated[
+        tuple[Organization, Membership],
+        Depends(require_permission(Permission.INTEGRATION_VIEW)),
+    ],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict[str, object]:
+    """Return status, completion state, and detected profile of a background analysis job."""
+    from typing import Any
+
+    from app.jobs.queue import get_job_info
+    from app.models.website_analysis import WebsiteAnalysis
+
+    info: dict[str, Any] | None = await get_job_info(job_id)
+    if info is not None:
+        if info.get("status") == "complete":
+            stmt = (
+                select(WebsiteAnalysis)
+                .where(WebsiteAnalysis.integration_id == integration.id)
+                .order_by(WebsiteAnalysis.created_at.desc())
+                .limit(1)
+            )
+            analysis = (await db.execute(stmt)).scalar_one_or_none()
+            if analysis:
+                info["analysis"] = WebsiteAnalysisRead.model_validate(analysis).model_dump(mode="json")
+        return info
+
+    stmt = (
+        select(WebsiteAnalysis)
+        .where(WebsiteAnalysis.integration_id == integration.id)
+        .order_by(WebsiteAnalysis.created_at.desc())
+        .limit(1)
+    )
+    analysis = (await db.execute(stmt)).scalar_one_or_none()
+    if analysis:
+        return {
+            "job_id": job_id,
+            "status": "complete",
+            "analysis": WebsiteAnalysisRead.model_validate(analysis).model_dump(mode="json"),
+        }
+
+    return {
+        "job_id": job_id,
+        "status": "not_found",
+    }
 
 
 @router.get(

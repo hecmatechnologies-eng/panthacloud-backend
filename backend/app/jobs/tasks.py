@@ -15,6 +15,7 @@ from app.models.organization import Organization
 from app.models.project import Project
 from app.models.website_integration import WebsiteIntegration
 from app.services.analysis.analysis_service import analyze_website_integration
+from app.services.audit import record_audit
 from app.services.integration.pipeline import pipeline_service
 
 logger = logging.getLogger("fussion.jobs.tasks")
@@ -41,17 +42,50 @@ async def analyze_website_integration_task(
             logger.error(err)
             return {"status": "failed", "error": err}
 
+        await record_audit(
+            db,
+            org.id,
+            project.id,
+            None,
+            "website.analysis.started",
+            integration.id,
+            {"integration_id": str(integration.id)},
+        )
+
         try:
             analysis = await analyze_website_integration(
                 db, integration=integration, organization=org, project=project
+            )
+            await record_audit(
+                db,
+                org.id,
+                project.id,
+                None,
+                "website.analysis.completed",
+                integration.id,
+                {
+                    "analysis_id": str(analysis.id),
+                    "commit_sha": analysis.commit_sha,
+                    "framework_skill_id": analysis.framework_skill_id,
+                },
             )
             return {
                 "status": "completed",
                 "analysis_id": str(analysis.id),
                 "framework_skill_id": analysis.framework_skill_id,
+                "commit_sha": analysis.commit_sha,
             }
         except Exception as exc:
             logger.exception("Analysis background task failed")
+            await record_audit(
+                db,
+                org.id,
+                project.id,
+                None,
+                "website.analysis.failed",
+                integration.id,
+                {"error": str(exc)},
+            )
             return {"status": "failed", "error": str(exc)}
 
 

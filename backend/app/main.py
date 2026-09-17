@@ -2,6 +2,7 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
+import redis
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -99,10 +100,37 @@ async def lifespan(app: FastAPI):
     # Start periodic background sweeper task for running servers
     sweeper_task = asyncio.create_task(_periodic_workspace_sweep())
 
+    # Start embedded ARQ background worker if Redis is configured
+    arq_worker = None
+    arq_worker_task = None
+    if settings.effective_redis_url and settings.APP_ENV != "test":
+        try:
+            from arq.worker import create_worker
+
+            from app.jobs.worker import WorkerSettings
+
+            arq_worker = create_worker(WorkerSettings)
+            arq_worker_task = asyncio.create_task(arq_worker.async_run())
+            logger.info("Started embedded ARQ background worker for task queue")
+        except (redis.RedisError, OSError, ConnectionError, RuntimeError, ValueError) as exc:
+            logger.warning("Failed to start embedded ARQ worker: %s", exc)
+
     try:
         yield
     finally:
         logger.info("Shutting down Fussion Backend, closing resources...")
+        if arq_worker is not None:
+            try:
+                await arq_worker.close()
+            except (redis.RedisError, OSError, ConnectionError, RuntimeError) as exc:
+                logger.debug("Error closing embedded ARQ worker: %s", exc)
+        if arq_worker_task is not None:
+            arq_worker_task.cancel()
+            try:
+                await arq_worker_task
+            except (asyncio.CancelledError, OSError, RuntimeError):
+                pass
+
         sweeper_task.cancel()
         try:
             await sweeper_task

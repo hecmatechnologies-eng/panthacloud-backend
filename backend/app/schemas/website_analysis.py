@@ -24,3 +24,12 @@ class WebsiteAnalysisRead(BaseModel):
     protected_paths: list[str] = []
     unsupported_reason: str | None = None
     created_at: datetime
+
+
+class AnalysisJobResponse(BaseModel):
+    """Response returned when an analysis job is enqueued asynchronously (HTTP 202)."""
+
+    status: str
+    job_id: str
+    poll_url: str
+    events_url: str
