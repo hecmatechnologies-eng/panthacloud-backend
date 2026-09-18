@@ -128,6 +128,17 @@ class Settings(BaseSettings):
     RETRIEVAL_TOP_K: int = 5
     RETRIEVAL_SCORE_THRESHOLD: float = 0.0
 
+    # Object storage plane (Cloudflare R2 / S3-compatible).
+    # When credentials are provided, documents are stored in R2.
+    # When unconfigured (local dev / tests), falls back to STORAGE_LOCAL_DIR.
+    R2_ACCOUNT_ID: str | None = None
+    R2_ACCESS_KEY_ID: str | None = None
+    R2_SECRET_ACCESS_KEY: str | None = None
+    R2_BUCKET_NAME: str = "fussion-knowledge"
+    R2_ENDPOINT_URL: str | None = None
+    R2_PUBLIC_URL: str | None = None
+    STORAGE_LOCAL_DIR: str = "./data/storage"
+
     # Skills (step C). Defaults to the repository's skills/ tree beside the backend; override when
     # the backend is installed non-editable, where the default would not resolve.
     SKILLS_ROOT: str | None = None
@@ -199,6 +210,20 @@ class Settings(BaseSettings):
             user = self.REDISUSER or "default"
             pwd = f":{self.REDISPASSWORD}@" if self.REDISPASSWORD else "@"
             return f"redis://{user}{pwd}{self.REDISHOST}:{self.REDISPORT}"
+        return None
+
+    @property
+    def is_r2_configured(self) -> bool:
+        """True if Cloudflare R2 credentials are fully configured."""
+        return bool(self.R2_ACCOUNT_ID and self.R2_ACCESS_KEY_ID and self.R2_SECRET_ACCESS_KEY)
+
+    @property
+    def effective_r2_endpoint(self) -> str | None:
+        """The resolved S3-compatible API endpoint for Cloudflare R2."""
+        if self.R2_ENDPOINT_URL:
+            return self.R2_ENDPOINT_URL.rstrip("/")
+        if self.R2_ACCOUNT_ID:
+            return f"https://{self.R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
         return None
 
     model_config = SettingsConfigDict(

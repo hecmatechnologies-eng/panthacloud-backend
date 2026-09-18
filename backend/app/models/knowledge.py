@@ -114,6 +114,19 @@ class KnowledgeDocument(BaseModel):
         default=0,
         nullable=False,
     )
+    storage_key: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+    )
+    storage_url: Mapped[str | None] = mapped_column(
+        String(1000),
+        nullable=True,
+    )
+    file_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        index=True,
+    )
     metadata_: Mapped[dict[str, Any]] = mapped_column(
         "metadata",
         JSONType,

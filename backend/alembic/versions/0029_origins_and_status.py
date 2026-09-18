@@ -1,6 +1,6 @@
 """allowed_origins guardrails and integration status expansion
 
-Revision ID: 0029_allowed_origins_guardrails_and_integration_status
+Revision ID: 0029_origins_and_status
 Revises: 0028_user_token_version
 Create Date: 2026-09-18 07:00:00.000000
 
@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0029_allowed_origins_guardrails_and_integration_status"
+revision: str = "0029_origins_and_status"
 down_revision: str | None = "0028_user_token_version"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

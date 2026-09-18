@@ -1,3 +1,5 @@
+import hashlib
+import logging
 import os
 import uuid
 from typing import Any
@@ -10,6 +12,9 @@ from app.models.knowledge import DocumentStatus, KnowledgeBase, KnowledgeChunk, 
 from app.models.user import User
 from app.services.knowledge.chunking import extract_and_chunk
 from app.services.knowledge.embeddings import get_embedding_provider
+from app.services.storage import get_storage_provider
+
+logger = logging.getLogger("fussion.knowledge.ingestion")
 
 MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
 
@@ -121,6 +126,17 @@ def validate_file_metadata(filename: str, content_type: str, content: bytes) -> 
     return safe_filename, norm_content_type
 
 
+async def delete_document_storage(storage_key: str | None) -> None:
+    """Safely delete associated file from object storage."""
+    if not storage_key:
+        return
+    storage = get_storage_provider()
+    try:
+        await storage.delete(storage_key)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to delete storage key %s: %s", storage_key, exc)
+
+
 async def ingest_document(
     db: AsyncSession,
     kb: KnowledgeBase,
@@ -131,13 +147,15 @@ async def ingest_document(
 ) -> KnowledgeDocument:
     """
     Full document ingestion pipeline:
-    Validate -> Create Document (PROCESSING) -> Extract -> Chunk -> Embed -> Persist -> READY
+    Validate -> Hash -> Storage Upload -> Extract -> Chunk -> Embed -> Persist -> READY
+    Rolls back storage upload if extraction or embedding fails.
     """
     raw_content = await file.read()
     filename = file.filename or "document.txt"
     content_type = file.content_type or "application/octet-stream"
 
     safe_filename, norm_content_type = validate_file_metadata(filename, content_type, raw_content)
+    file_hash = hashlib.sha256(raw_content).hexdigest()
 
     # Create document in DB with PROCESSING state
     doc = KnowledgeDocument(
@@ -147,6 +165,7 @@ async def ingest_document(
         file_size_bytes=len(raw_content),
         status=DocumentStatus.PROCESSING,
         chunks_count=0,
+        file_hash=file_hash,
         metadata_={},
     )
     db.add(doc)
@@ -161,10 +180,30 @@ async def ingest_document(
         user_id=user_id,
         event_type="knowledge.document.uploaded",
         resource_id=doc.id,
-        payload={"filename": safe_filename, "file_size_bytes": len(raw_content)},
+        payload={"filename": safe_filename, "file_size_bytes": len(raw_content), "file_hash": file_hash},
     )
 
+    storage = get_storage_provider()
+    storage_key = f"tenants/{org_id}/projects/{project_id}/documents/{doc.id}/{safe_filename}"
+    storage_uploaded = False
+
     try:
+        # Upload raw file bytes to object storage
+        storage_url = await storage.upload(
+            key=storage_key,
+            data=raw_content,
+            content_type=norm_content_type,
+            metadata={
+                "document_id": str(doc.id),
+                "project_id": str(project_id),
+                "organization_id": str(org_id),
+                "file_hash": file_hash,
+            },
+        )
+        storage_uploaded = True
+        doc.storage_key = storage_key
+        doc.storage_url = storage_url
+
         # Extract and chunk
         raw_text, extracted_chunks = extract_and_chunk(
             content_type=norm_content_type,
@@ -210,12 +249,21 @@ async def ingest_document(
             user_id=user_id,
             event_type="knowledge.document.processed",
             resource_id=doc.id,
-            payload={"chunks_count": doc.chunks_count},
+            payload={"chunks_count": doc.chunks_count, "storage_key": storage_key},
         )
         return doc
 
     except Exception as exc:  # noqa: BLE001
         await db.rollback()
+        # Clean up storage object on processing failure to avoid orphaned files
+        if storage_uploaded:
+            try:
+                await storage.delete(storage_key)
+            except Exception:
+                logger.warning("Failed to clean up storage object %s on rollback", storage_key, exc_info=True)
+            doc.storage_key = None
+            doc.storage_url = None
+
         # Mark document as FAILED with clean sanitized message
         doc.status = DocumentStatus.FAILED
         doc.error_message = f"Processing failed: {exc!s}"

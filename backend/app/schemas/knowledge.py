@@ -29,6 +29,10 @@ class KnowledgeDocumentRead(BaseModel):
     status: DocumentStatus
     error_message: str | None = None
     chunks_count: int = 0
+    storage_key: str | None = None
+    storage_url: str | None = None
+    file_hash: str | None = None
+    download_url: str | None = None
     created_at: datetime
     updated_at: datetime
     chunks: list[KnowledgeChunkRead] = []

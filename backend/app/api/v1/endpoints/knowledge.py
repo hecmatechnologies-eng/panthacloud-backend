@@ -1,7 +1,7 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -24,8 +24,9 @@ from app.schemas.knowledge import (
     KnowledgeQueryRequest,
     KnowledgeQueryResponse,
 )
-from app.services.knowledge.ingestion import ingest_document
+from app.services.knowledge.ingestion import delete_document_storage, ingest_document
 from app.services.knowledge.retrieval import query_knowledge_base
+from app.services.storage import StorageNotFoundError, get_storage_provider
 
 router = APIRouter(
     prefix="/organizations/{org_id}/projects/{project_id}/knowledge",
@@ -33,7 +34,11 @@ router = APIRouter(
 )
 
 
-def _to_doc_read(doc: KnowledgeDocument) -> KnowledgeDocumentRead:
+def _to_doc_read(
+    doc: KnowledgeDocument,
+    org_id: uuid.UUID | None = None,
+    project_id: uuid.UUID | None = None,
+) -> KnowledgeDocumentRead:
     chunks_read = [
         KnowledgeChunkRead(
             id=c.id,
@@ -46,6 +51,10 @@ def _to_doc_read(doc: KnowledgeDocument) -> KnowledgeDocumentRead:
         )
         for c in (doc.chunks or [])
     ]
+    download_url = None
+    if org_id and project_id and doc.storage_key:
+        download_url = f"/api/v1/organizations/{org_id}/projects/{project_id}/knowledge/documents/{doc.id}/download"
+
     return KnowledgeDocumentRead(
         id=doc.id,
         knowledge_base_id=doc.knowledge_base_id,
@@ -55,6 +64,10 @@ def _to_doc_read(doc: KnowledgeDocument) -> KnowledgeDocumentRead:
         status=doc.status,
         error_message=doc.error_message,
         chunks_count=doc.chunks_count,
+        storage_key=doc.storage_key,
+        storage_url=doc.storage_url,
+        file_hash=doc.file_hash,
+        download_url=download_url,
         created_at=doc.created_at,
         updated_at=doc.updated_at,
         chunks=chunks_read,
@@ -99,7 +112,7 @@ async def upload_document(
     )
     res = await db.execute(stmt)
     refreshed_doc = res.scalar_one()
-    return _to_doc_read(refreshed_doc)
+    return _to_doc_read(refreshed_doc, org_id, project_id)
 
 
 @router.get(
@@ -128,7 +141,7 @@ async def list_documents(
     )
     result = await db.execute(stmt)
     docs = result.scalars().all()
-    return [_to_doc_read(d) for d in docs]
+    return [_to_doc_read(d, org_id, project_id) for d in docs]
 
 
 @router.get(
@@ -149,7 +162,47 @@ async def get_document(
     """
     Returns document metadata and extracted chunks with citations.
     """
-    return _to_doc_read(doc)
+    return _to_doc_read(doc, org_id, project_id)
+
+
+@router.get(
+    "/documents/{document_id}/download",
+    summary="Download the raw uploaded document",
+)
+async def download_document(
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    document_id: uuid.UUID,
+    tenant: Annotated[
+        tuple[Organization, Membership],
+        Depends(require_permission(Permission.KNOWLEDGE_VIEW)),
+    ],
+    doc: Annotated[KnowledgeDocument, Depends(get_current_knowledge_document)],
+) -> Response:
+    """
+    Download raw original document file from object storage (R2 or local).
+    """
+    if not doc.storage_key:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document storage file not found",
+        )
+    storage = get_storage_provider()
+    try:
+        data = await storage.download(doc.storage_key)
+    except StorageNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Storage object not found",
+        ) from exc
+    return Response(
+        content=data,
+        media_type=doc.content_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{doc.filename}"',
+            "Content-Length": str(len(data)),
+        },
+    )
 
 
 @router.delete(
@@ -169,10 +222,13 @@ async def delete_document(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> None:
     """
-    Deletes a knowledge document and cascades deletion to all associated chunks.
+    Deletes a knowledge document, removes its object from storage, and cascades
+    deletion to all associated chunks.
     """
+    storage_key = doc.storage_key
     await db.delete(doc)
     await db.commit()
+    await delete_document_storage(storage_key)
 
 
 @router.post(
