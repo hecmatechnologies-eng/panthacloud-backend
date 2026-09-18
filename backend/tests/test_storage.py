@@ -1,6 +1,6 @@
 """Unit tests for object storage providers (Local and Cloudflare R2)."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from botocore.exceptions import ClientError
@@ -135,15 +135,26 @@ async def test_r2_storage_not_found_handling():
 
 def test_storage_provider_factory_and_override():
     set_storage_provider(None)
-    # Default unconfigured settings -> LocalStorageProvider
-    default_provider = get_storage_provider()
-    assert isinstance(default_provider, LocalStorageProvider)
+    # When R2 credentials are not set -> LocalStorageProvider
+    with patch("app.services.storage.settings.R2_ACCESS_KEY_ID", ""):
+        set_storage_provider(None)
+        default_provider = get_storage_provider()
+        assert isinstance(default_provider, LocalStorageProvider)
+
+    # When R2 credentials are set -> R2StorageProvider
+    with patch("app.services.storage.settings.R2_ACCOUNT_ID", "acc"), \
+         patch("app.services.storage.settings.R2_ACCESS_KEY_ID", "key"), \
+         patch("app.services.storage.settings.R2_SECRET_ACCESS_KEY", "secret"), \
+         patch("app.services.storage.settings.R2_BUCKET_NAME", "bucket"):
+        set_storage_provider(None)
+        r2_prov = get_storage_provider()
+        assert isinstance(r2_prov, R2StorageProvider)
 
     # Test override
     mock_provider = MagicMock()
     set_storage_provider(mock_provider)
     assert get_storage_provider() is mock_provider
+    set_storage_provider(None)
 
     # Reset
     set_storage_provider(None)
-    assert isinstance(get_storage_provider(), LocalStorageProvider)
