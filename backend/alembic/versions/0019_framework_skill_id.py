@@ -10,6 +10,7 @@ skill package rather than an enum value and a migration.
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 # revision identifiers, used by Alembic.

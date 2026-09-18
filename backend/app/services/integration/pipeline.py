@@ -212,22 +212,81 @@ class IntegrationPipeline:
                     "modifies an existing file; check the widget target path and default branch."
                 )
 
-            # 6. Generate deterministic artifacts from the real file contents. A file with no safe
-            # insertion point is refused, not guessed at: appending blind produced a layout that
-            # did not compile, and the validator cannot see inside a managed block.
+            # 6. Pre-populate target in sandbox
+            self.workspace.write_file(sandbox_path, target_path, original_target)
+
+            # Check if autonomous CodingAgent can be invoked
+            from app.llm.gateway import ModelNotConfiguredError, get_model_gateway
+
             try:
-                generated_files = generate_artifacts(
-                    public_key=integration.public_key,
-                    script_url=settings.widget_script_url,
-                    assistant_data=asst_data,
-                    framework_skill_id=integration.framework_skill_id,
-                    widget_target_path=target_path,
-                    existing_target_content=original_target,
-                )
-            except WidgetInjectionError as exc:
-                raise IntegrationRefusedError(
-                    f"Cannot integrate into '{target_path}': {exc}"
-                ) from exc
+                gateway = get_model_gateway()
+            except ModelNotConfiguredError:
+                gateway = None
+            generated_files = None
+
+            if gateway is not None and getattr(settings, "ENABLE_CODING_AGENT", True) and settings.APP_ENV != "test":
+                try:
+                    from app.harness.context import ExecutionContext
+                    from app.harness.runner import PydanticAIRunner
+                    from app.services.integration.coder import execute_coding_agent
+                    from app.tools.gateway import ApprovedPlan, ToolGateway
+                    from app.tools.registry import registry as global_registry
+
+                    context = ExecutionContext(
+                        organization_id=org_id,
+                        project_id=project.id,
+                        repository_id=None,
+                        environment=settings.APP_ENV,
+                        agent_name="coding_agent",
+                        agent_version="1.0.0",
+                        capabilities=frozenset({"repository.read", "workspace.write"}),
+                        integration_id=integration.id,
+                        commit_sha=base_sha,
+                        workspace_reference=str(sandbox_path),
+                    )
+                    approved_plan = ApprovedPlan(
+                        plan_id=str(run_id), approved_by=user_id or org_id
+                    )
+                    tool_gateway = ToolGateway(global_registry)
+                    runner = PydanticAIRunner()
+
+                    _, generated_files = await execute_coding_agent(
+                        db,
+                        context=context,
+                        plan=plan,
+                        approved_plan=approved_plan,
+                        sandbox_path=sandbox_path,
+                        integration=integration,
+                        assistant_data=asst_data,
+                        original_target=original_target,
+                        runner=runner,
+                        gateway=gateway,
+                        tool_gateway=tool_gateway,
+                        registry=global_registry,
+                        workspace_provider=self.workspace,
+                    )
+                except Exception as exc:  # noqa: BLE001 - Resilient fallback to deterministic generator
+                    logger.warning(
+                        "Autonomous CodingAgent failed (%s), falling back to deterministic artifact generator",
+                        exc,
+                    )
+                    generated_files = None
+
+            # Fallback to deterministic generator if CodingAgent wasn't run or failed
+            if not generated_files:
+                try:
+                    generated_files = generate_artifacts(
+                        public_key=integration.public_key,
+                        script_url=settings.widget_script_url,
+                        assistant_data=asst_data,
+                        framework_skill_id=integration.framework_skill_id,
+                        widget_target_path=target_path,
+                        existing_target_content=original_target,
+                    )
+                except WidgetInjectionError as exc:
+                    raise IntegrationRefusedError(
+                        f"Cannot integrate into '{target_path}': {exc}"
+                    ) from exc
 
             # 6b. Record the exact change set this run generated, so the Studio serves what the pull
             # request contains rather than re-deriving it (C12, CLAUDE.md §3.7). Recorded before

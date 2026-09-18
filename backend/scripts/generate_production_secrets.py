@@ -9,6 +9,7 @@ Outputs values formatted for direct pasting into Railway's Variables dashboard.
 """
 
 from secrets import token_urlsafe
+
 from cryptography.fernet import Fernet
 
 

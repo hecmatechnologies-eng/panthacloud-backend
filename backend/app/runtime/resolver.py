@@ -4,22 +4,39 @@ Turns an untrusted ``public_key`` and ``Origin`` header into a trusted :class:`T
 or refuses. This is the runtime plane's tenancy boundary: every later runtime call resolves its
 scope from the returned context, never from anything the caller supplies.
 
-Nothing calls this yet — B1 stored the key and origins, and B4 is the first public endpoint that
-consumes them.
+Supports:
+- Verified registered origins.
+- Ephemeral preview origins (e.g. *.vercel.app) with provisional auto-registration.
+- Fast-deploy self-healing fallback when customer deploys before webhook delivery.
+- Origin telemetry (updates last_seen_at).
 """
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.origins import normalize_origin
+from app.core.origins import (
+    get_origin_aliases,
+    is_preview_origin,
+    is_private_or_loopback_origin,
+    normalize_origin,
+)
 from app.models.allowed_origin import AllowedOrigin
 from app.models.project import Project
-from app.models.website_integration import WebsiteIntegration
+from app.models.website_integration import (
+    IntegrationRun,
+    WebsiteIntegration,
+    WebsiteIntegrationStatus,
+)
+
+logger = logging.getLogger("fussion.resolver")
 
 # One message for every refusal cause. An unknown key, an unregistered origin and an origin
 # registered to a different integration must be indistinguishable to the caller (FR-108): a
@@ -71,13 +88,13 @@ async def resolve_tenant(
         # not our own UI, and FR-108 requires one indistinguishable refusal.
         raise TenantResolutionError() from None
 
-    # One query for both conditions. Joining rather than branching means an unknown key and an
-    # unregistered origin take the same path and cannot be told apart by response or code path.
+    # Fast path: Query for existing registered AllowedOrigin
     stmt = (
         select(
             WebsiteIntegration.id,
             WebsiteIntegration.project_id,
             Project.organization_id,
+            AllowedOrigin.id.label("origin_id"),
         )
         .join(Project, Project.id == WebsiteIntegration.project_id)
         .join(AllowedOrigin, AllowedOrigin.integration_id == WebsiteIntegration.id)
@@ -87,13 +104,114 @@ async def resolve_tenant(
         )
     )
     row = (await db.execute(stmt)).first()
-    if row is None:
+    if row is not None:
+        integration_id, project_id, organization_id, origin_id = row
+        try:
+            origin_obj = await db.get(AllowedOrigin, origin_id)
+            if origin_obj is not None:
+                origin_obj.last_seen_at = datetime.now(UTC)
+                await db.commit()
+        except SQLAlchemyError:
+            await db.rollback()
+
+        return TenantContext(
+            organization_id=organization_id,
+            project_id=project_id,
+            integration_id=integration_id,
+            origin=canonical_origin,
+        )
+
+    # If not registered, enforce strict sanitization: loopback/private/tunnel domains cannot auto-bind.
+    if is_private_or_loopback_origin(canonical_origin):
         raise TenantResolutionError()
 
-    integration_id, project_id, organization_id = row
-    return TenantContext(
-        organization_id=organization_id,
-        project_id=project_id,
-        integration_id=integration_id,
-        origin=canonical_origin,
+    # Look up integration by public key
+    intg_stmt = (
+        select(WebsiteIntegration, Project.organization_id)
+        .join(Project, Project.id == WebsiteIntegration.project_id)
+        .where(WebsiteIntegration.public_key == public_key)
     )
+    intg_row = (await db.execute(intg_stmt)).first()
+    if intg_row is None:
+        raise TenantResolutionError()
+
+    integration, organization_id = intg_row
+
+    # Determine eligibility for provisional auto-discovery
+    is_preview = is_preview_origin(canonical_origin)
+    should_provisional_bind = False
+    source = "auto_provisional"
+
+    if is_preview:
+        should_provisional_bind = True
+        source = "preview_provisional"
+    elif integration.status in (
+        WebsiteIntegrationStatus.PR_MERGED,
+        WebsiteIntegrationStatus.DEPLOYED,
+    ):
+        should_provisional_bind = True
+        source = "auto_provisional"
+    elif integration.status == WebsiteIntegrationStatus.PR_CREATED:
+        # Self-healing check: Has the PR been merged on GitHub even if webhook was delayed?
+        try:
+            run_stmt = (
+                select(IntegrationRun)
+                .where(IntegrationRun.integration_id == integration.id)
+                .order_by(IntegrationRun.created_at.desc())
+            )
+            run = (await db.execute(run_stmt)).scalars().first()
+            if run and run.pull_request_number:
+                from app.services.integration.credentials import resolve_github_token
+                from app.services.integration.github import get_git_provider
+
+                provider = get_git_provider()
+                token = None
+                try:
+                    token = await resolve_github_token(db, integration)
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("Could not resolve github token for self-healing: %s", exc)
+                pr_data = await provider.get_pull_request(
+                    integration.repository_owner,
+                    integration.repository_name,
+                    run.pull_request_number,
+                    token,
+                )
+                if pr_data and (pr_data.get("merged") or pr_data.get("status") == "merged"):
+                    integration.status = WebsiteIntegrationStatus.PR_MERGED
+                    run.status = WebsiteIntegrationStatus.PR_MERGED
+                    should_provisional_bind = True
+                    source = "auto_provisional"
+        except Exception:
+            logger.debug("PR status check fallback encountered an error", exc_info=True)
+
+    if should_provisional_bind:
+        aliases = get_origin_aliases(canonical_origin)
+        for alias in aliases:
+            existing_stmt = select(AllowedOrigin).where(
+                AllowedOrigin.integration_id == integration.id,
+                AllowedOrigin.origin == alias,
+            )
+            existing = (await db.execute(existing_stmt)).scalar_one_or_none()
+            if existing is None:
+                db.add(
+                    AllowedOrigin(
+                        integration_id=integration.id,
+                        origin=alias,
+                        is_verified=False,
+                        source=source,
+                        last_seen_at=datetime.now(UTC),
+                    )
+                )
+        try:
+            await db.commit()
+        except SQLAlchemyError:
+            await db.rollback()
+
+        return TenantContext(
+            organization_id=organization_id,
+            project_id=integration.project_id,
+            integration_id=integration.id,
+            origin=canonical_origin,
+        )
+
+    raise TenantResolutionError()

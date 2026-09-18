@@ -1,7 +1,8 @@
 import uuid
+from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import UUID
 
@@ -35,6 +36,20 @@ class AllowedOrigin(BaseModel):
         # One bound, shared with the validator, so the two cannot drift apart.
         String(MAX_ORIGIN_LENGTH),
         nullable=False,
+    )
+    is_verified: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        nullable=False,
+    )
+    source: Mapped[str] = mapped_column(
+        String(50),
+        default="manual",
+        nullable=False,
+    )
+    last_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
     )
 
     website_integration: Mapped["WebsiteIntegration"] = relationship(

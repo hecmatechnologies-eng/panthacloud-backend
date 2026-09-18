@@ -156,3 +156,67 @@ async def remove_allowed_origin(
 
     await db.delete(allowed)
     await db.commit()
+
+
+@router.post(
+    "/{origin_id}/confirm",
+    response_model=AllowedOriginRead,
+    summary="Confirm a provisional allowed origin as verified",
+)
+async def confirm_allowed_origin(
+    origin_id: uuid.UUID,
+    integration: Annotated[WebsiteIntegration, Depends(get_current_website_integration)],
+    tenant: Annotated[
+        tuple[Organization, Membership],
+        Depends(require_permission(Permission.INTEGRATION_UPDATE)),
+    ],
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> AllowedOriginRead:
+    stmt = select(AllowedOrigin).where(
+        AllowedOrigin.id == origin_id,
+        AllowedOrigin.integration_id == integration.id,
+    )
+    allowed = (await db.execute(stmt)).scalar_one_or_none()
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Allowed origin not found for this integration.",
+        )
+
+    allowed.is_verified = True
+    # Also register sibling apex/www alias if applicable
+    from app.core.origins import get_origin_aliases
+
+    aliases = get_origin_aliases(allowed.origin)
+    for alias in aliases:
+        if alias != allowed.origin:
+            existing_stmt = select(AllowedOrigin).where(
+                AllowedOrigin.integration_id == integration.id,
+                AllowedOrigin.origin == alias,
+            )
+            existing = (await db.execute(existing_stmt)).scalar_one_or_none()
+            if existing is None:
+                db.add(
+                    AllowedOrigin(
+                        integration_id=integration.id,
+                        origin=alias,
+                        is_verified=True,
+                        source="auto_alias",
+                    )
+                )
+
+    await db.commit()
+    await db.refresh(allowed)
+
+    await record_audit(
+        db,
+        tenant[0].id,
+        integration.project_id,
+        user.id,
+        "integration.origin.confirmed",
+        integration.id,
+        {"origin": allowed.origin},
+    )
+    return AllowedOriginRead.model_validate(allowed)
+

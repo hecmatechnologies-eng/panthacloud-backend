@@ -196,7 +196,7 @@ async def test_origin_add_list_delete(client: AsyncClient) -> None:
     assert add_resp.status_code == 201
     added = add_resp.json()
     assert added["origin"] == "https://shop.example.com"
-    assert set(added) == {"id", "origin", "created_at"}
+    assert {"id", "origin", "created_at"}.issubset(set(added))
 
     second = await client.post(url, headers=hdr, json={"origin": "http://localhost:3000"})
     assert second.status_code == 201

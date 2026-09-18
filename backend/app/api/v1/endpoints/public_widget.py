@@ -16,6 +16,7 @@ from fastapi import APIRouter, Request, Response, status
 router = APIRouter(tags=["Public Widget"])
 
 _WIDGET_PATH = Path(__file__).resolve().parents[3] / "runtime" / "widget" / "fussion-widget.js"
+_MIN_WIDGET_PATH = Path(__file__).resolve().parents[3] / "runtime" / "widget" / "fussion-widget.min.js"
 
 # Read once: the file cannot change while the process runs, and a widget request must not touch disk.
 _source: str | None = None
@@ -25,7 +26,8 @@ _etag: str | None = None
 def _load() -> tuple[str, str]:
     global _source, _etag
     if _source is None:
-        _source = _WIDGET_PATH.read_text(encoding="utf-8")
+        target_path = _MIN_WIDGET_PATH if _MIN_WIDGET_PATH.exists() else _WIDGET_PATH
+        _source = target_path.read_text(encoding="utf-8")
         digest = hashlib.sha256(_source.encode("utf-8")).hexdigest()[:32]
         _etag = f'"{digest}"'
     return _source, _etag

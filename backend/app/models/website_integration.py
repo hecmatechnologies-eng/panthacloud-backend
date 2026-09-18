@@ -47,6 +47,8 @@ class WebsiteIntegrationStatus(str, enum.Enum):
     VALIDATING = "VALIDATING"
     READY_FOR_PR = "READY_FOR_PR"
     PR_CREATED = "PR_CREATED"
+    PR_MERGED = "PR_MERGED"
+    DEPLOYED = "DEPLOYED"
     FAILED = "FAILED"
 
 

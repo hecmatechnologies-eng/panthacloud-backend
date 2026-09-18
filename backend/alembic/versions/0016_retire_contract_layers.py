@@ -12,6 +12,7 @@ migration stays reversible on both SQLite and Postgres.
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 # revision identifiers, used by Alembic.

@@ -140,6 +140,7 @@ class Settings(BaseSettings):
     GITHUB_APP_SLUG: str | None = None
     GITHUB_APP_CLIENT_ID: str | None = None
     GITHUB_APP_CLIENT_SECRET: str | None = None
+    GITHUB_APP_WEBHOOK_SECRET: str | None = None
     # The signed `state` that binds an install callback to the org and user that started it.
     GITHUB_APP_STATE_TTL_SECONDS: int = 600
     # Where the install callback sends the browser back to, after recording the installation.

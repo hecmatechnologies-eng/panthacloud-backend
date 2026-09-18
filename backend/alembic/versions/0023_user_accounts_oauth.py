@@ -12,8 +12,9 @@ Step: Decouple user identity from local credentials to support OAuth (GitHub, Go
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "0023_user_accounts_oauth"

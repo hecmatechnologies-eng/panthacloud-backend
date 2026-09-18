@@ -48,10 +48,13 @@ def register_agent(definition: AgentDefinition) -> None:
 
 def register_default_agents() -> None:
     """Register the built-in agents. One line per agent — adding one is not a core edit."""
+    from app.agents.coding_agent import CODING_AGENT
     from app.agents.website_analyst import WEBSITE_ANALYST
 
     if not registry.contains(WEBSITE_ANALYST.name, WEBSITE_ANALYST.version):
         registry.register(WEBSITE_ANALYST)
+    if not registry.contains(CODING_AGENT.name, CODING_AGENT.version):
+        registry.register(CODING_AGENT)
 
 
 def get_agent(name: str, version: str) -> AgentDefinition:

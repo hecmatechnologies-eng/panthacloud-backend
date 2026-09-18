@@ -2,14 +2,14 @@ import asyncio
 import sys
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+import app.models  # noqa: F401
+from alembic import context
 from app.core.config import settings
 from app.core.database import Base
-import app.models  # noqa: F401
 
 # psycopg's async driver cannot run on Windows' default ProactorEventLoop, and `asyncio.run` below
 # would create one. Set the Selector policy before that happens (CLAUDE.md §8).

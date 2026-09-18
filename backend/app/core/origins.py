@@ -88,3 +88,88 @@ def _normalize_host(hostname: str) -> str:
     if not all(_DNS_LABEL.match(label) for label in labels):
         raise ValueError("Origin host is not a valid domain name.")
     return ascii_host
+
+
+_PREVIEW_DOMAIN_SUFFIXES = (
+    ".vercel.app",
+    ".netlify.app",
+    ".pages.dev",
+    ".amplifyapp.com",
+    ".up.railway.app",
+)
+
+_TUNNEL_DOMAIN_SUFFIXES = (
+    ".ngrok.io",
+    ".ngrok-free.app",
+    ".loca.lt",
+    ".trycloudflare.com",
+)
+
+
+def is_preview_origin(raw_origin: str) -> bool:
+    """Check if an origin is an ephemeral preview domain (e.g. *.vercel.app)."""
+    try:
+        parts = urlsplit(raw_origin.strip())
+        host = (parts.hostname or "").lower()
+        return any(host.endswith(suffix) for suffix in _PREVIEW_DOMAIN_SUFFIXES)
+    except (ValueError, AttributeError):
+        return False
+
+
+def is_private_or_loopback_origin(raw_origin: str) -> bool:
+    """Check if an origin is localhost, a loopback IP, private RFC1918/RFC4193 network,
+    or an ephemeral tunnel (ngrok, etc.). These must NEVER be auto-bound as production domains.
+    """
+    try:
+        parts = urlsplit(raw_origin.strip())
+        host = (parts.hostname or "").lower()
+        if host in _LOOPBACK_HOSTS:
+            return True
+        if any(host.endswith(suffix) for suffix in _TUNNEL_DOMAIN_SUFFIXES):
+            return True
+        try:
+            addr = ipaddress.ip_address(host)
+            return addr.is_loopback or addr.is_private or addr.is_link_local
+        except ValueError:
+            pass
+        return False
+    except (ValueError, AttributeError):
+        return True
+
+
+def get_origin_aliases(canonical_origin: str) -> list[str]:
+    """Return a list of canonical origin strings including automatic apex/www sibling alias.
+
+    e.g. https://sweets.com -> [https://sweets.com, https://www.sweets.com]
+         https://www.sweets.com -> [https://www.sweets.com, https://sweets.com]
+    """
+    try:
+        parts = urlsplit(canonical_origin)
+        scheme = parts.scheme.lower()
+        hostname = (parts.hostname or "").lower()
+        port = parts.port
+
+        if not hostname or hostname in _LOOPBACK_HOSTS or is_private_or_loopback_origin(canonical_origin):
+            return [canonical_origin]
+
+        try:
+            ipaddress.ip_address(hostname)
+            return [canonical_origin]
+        except ValueError:
+            pass
+
+        port_suffix = f":{port}" if port and port != _DEFAULT_PORTS.get(scheme) else ""
+
+        if hostname.startswith("www."):
+            apex = hostname[4:]
+            if "." in apex:
+                sibling = f"{scheme}://{apex}{port_suffix}"
+                return [canonical_origin, sibling]
+        elif "." in hostname and not is_preview_origin(canonical_origin):
+            sibling = f"{scheme}://www.{hostname}{port_suffix}"
+            return [canonical_origin, sibling]
+
+        return [canonical_origin]
+    except (ValueError, AttributeError):
+        return [canonical_origin]
+

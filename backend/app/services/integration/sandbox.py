@@ -16,15 +16,19 @@ WINDOWS_DEVICE_NAMES = {
 }
 
 
-class SandboxSecurityError(Exception):
+class SandboxError(Exception):
+    """Base exception for all sandbox errors."""
+
+
+class SandboxSecurityError(SandboxError):
     """Raised when a sandbox file operation violates containment or path rules."""
 
 
-class SandboxLimitExceededError(Exception):
+class SandboxLimitExceededError(SandboxError):
     """Raised when sandbox resource limits are exceeded."""
 
 
-class SandboxNotSupportedError(Exception):
+class SandboxNotSupportedError(SandboxError):
     """Raised when code execution is requested but no sandbox backend exists (CLAUDE.md §4.6)."""
 
 
@@ -200,3 +204,7 @@ class LocalWorkspaceProvider:
         real_sandbox = sandbox_path.resolve()
         if real_sandbox.exists():
             shutil.rmtree(real_sandbox, ignore_errors=True)
+
+
+workspace_provider = LocalWorkspaceProvider()
+

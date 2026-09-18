@@ -114,6 +114,9 @@ class AllowedOriginRead(BaseModel):
 
     id: uuid.UUID
     origin: str
+    is_verified: bool = True
+    source: str = "manual"
+    last_seen_at: datetime | None = None
     created_at: datetime
 
 
