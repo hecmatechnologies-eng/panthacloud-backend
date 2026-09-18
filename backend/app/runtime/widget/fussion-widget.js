@@ -30,21 +30,43 @@
 (function () {
   "use strict";
 
-  var script = document.currentScript || document.querySelector("script[data-fussion-key]");
+  var script =
+    document.currentScript ||
+    document.querySelector("script[data-fussion-key]") ||
+    document.querySelector("script[data-panthacloud-key]");
   if (!script) {
     console.error("[Fussion] could not determine the widget script element.");
     return;
   }
   var config = {
-    publicKey: script.getAttribute("data-fussion-key"),
-    name: script.getAttribute("data-fussion-name") || "Assistant",
-    brandColor: script.getAttribute("data-fussion-brand-color") || "#4338ca",
-    textColor: script.getAttribute("data-fussion-text-color") || "#ffffff",
-    position: script.getAttribute("data-fussion-position") || "BOTTOM_RIGHT",
-    welcome: script.getAttribute("data-fussion-welcome") || "",
+    publicKey:
+      script.getAttribute("data-fussion-key") ||
+      script.getAttribute("data-panthacloud-key"),
+    name:
+      script.getAttribute("data-fussion-name") ||
+      script.getAttribute("data-panthacloud-name") ||
+      "Assistant",
+    brandColor:
+      script.getAttribute("data-fussion-brand-color") ||
+      script.getAttribute("data-panthacloud-brand-color") ||
+      "#4338ca",
+    textColor:
+      script.getAttribute("data-fussion-text-color") ||
+      script.getAttribute("data-panthacloud-text-color") ||
+      "#ffffff",
+    position:
+      script.getAttribute("data-fussion-position") ||
+      script.getAttribute("data-panthacloud-position") ||
+      "BOTTOM_RIGHT",
+    welcome:
+      script.getAttribute("data-fussion-welcome") ||
+      script.getAttribute("data-panthacloud-welcome") ||
+      "",
   };
   if (!config.publicKey) {
-    console.error("[Fussion] widget script is missing its data-fussion-key attribute.");
+    console.error(
+      "[Fussion] widget script is missing its data-fussion-key (or data-panthacloud-key) attribute.",
+    );
     return;
   }
 
