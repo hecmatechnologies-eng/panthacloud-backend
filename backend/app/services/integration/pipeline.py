@@ -21,6 +21,7 @@ from app.models.website_integration import (
     WebsiteIntegrationStatus,
 )
 from app.services.analysis.queries import get_latest_analysis
+from app.services.audit import record_audit as _record_audit
 from app.services.integration.artifacts import WidgetInjectionError, generate_artifacts
 from app.services.integration.changeset import build_change_set
 from app.services.integration.credentials import GitHubCredentialError, resolve_github_token
@@ -34,33 +35,6 @@ logger = logging.getLogger("fussion.integration.pipeline")
 
 class IntegrationRefusedError(Exception):
     """The integration was declined because its configuration cannot be applied safely."""
-
-
-async def _record_audit(
-    db: AsyncSession,
-    org_id: uuid.UUID,
-    project_id: uuid.UUID,
-    user_id: uuid.UUID | None,
-    event_type: str,
-    resource_id: uuid.UUID,
-    payload: dict[str, Any] | None = None,
-) -> None:
-    # Ensure secrets never leak into audit payload
-    clean_payload = dict(payload or {})
-    for key in ("token", "github_token", "encrypted_secrets", "secret", "password"):
-        clean_payload.pop(key, None)
-
-    event = AuditEvent(
-        organization_id=org_id,
-        project_id=project_id,
-        user_id=user_id,
-        event_type=event_type,
-        resource_type="website_integration",
-        resource_id=resource_id,
-        payload=clean_payload,
-    )
-    db.add(event)
-    await db.commit()
 
 
 class IntegrationPipeline:
