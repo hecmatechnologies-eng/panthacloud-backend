@@ -140,15 +140,7 @@ async def test_website_integration_crud_and_secrets(client: AsyncClient) -> None
     assert get_resp.json()["id"] == data["id"]
     assert get_resp.json()["has_credentials"] is True
 
-    # 4. Verify alias /website-integration also works
-    alias_resp = await client.get(
-        f"/api/v1/organizations/{org_id}/projects/{proj_id}/website-integration",
-        headers=hdr,
-    )
-    assert alias_resp.status_code == 200
-    assert alias_resp.json()["id"] == data["id"]
-
-    # 5. Duplicate creation in same project is rejected
+    # 4. Duplicate creation in same project is rejected
     dup_resp = await client.post(
         f"/api/v1/organizations/{org_id}/projects/{proj_id}/website-integrations",
         headers=hdr,

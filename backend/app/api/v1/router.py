@@ -51,10 +51,6 @@ api_v1_router.include_router(
     allowed_origins.router,
     prefix="/organizations/{org_id}/projects/{project_id}/website-integrations/origins",
 )
-api_v1_router.include_router(
-    website_integrations.router,
-    prefix="/organizations/{org_id}/projects/{project_id}/website-integration",
-)
 # GitHub and third-party webhooks
 api_v1_router.include_router(webhooks.router, prefix="/webhooks")
 # Runtime plane: unauthenticated, tenanted by public key + Origin (B4).
