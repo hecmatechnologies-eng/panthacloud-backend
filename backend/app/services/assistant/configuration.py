@@ -17,6 +17,7 @@ from app.schemas.assistant import (
     MockPreviewPayload,
 )
 from app.services.assistant.validation import validate_assistant_fields
+from app.services.audit import record_audit as _record_audit
 
 
 def get_default_assistant_data(project_name: str) -> dict[str, Any]:
@@ -33,28 +34,6 @@ def get_default_assistant_data(project_name: str) -> dict[str, Any]:
         "starter_prompt": "What can you tell me about your products?",
         "is_enabled": True,
     }
-
-
-async def _record_audit(
-    db: AsyncSession,
-    org_id: uuid.UUID,
-    project_id: uuid.UUID,
-    user_id: uuid.UUID | None,
-    event_type: str,
-    resource_id: uuid.UUID,
-    payload: dict[str, Any] | None = None,
-) -> None:
-    event = AuditEvent(
-        organization_id=org_id,
-        project_id=project_id,
-        user_id=user_id,
-        event_type=event_type,
-        resource_type="assistant",
-        resource_id=resource_id,
-        payload=payload or {},
-    )
-    db.add(event)
-    await db.commit()
 
 
 async def update_assistant_configuration(
@@ -84,6 +63,7 @@ async def update_assistant_configuration(
         event_type="assistant.configuration.updated",
         resource_id=assistant.id,
         payload={k: str(v) for k, v in data.items()},
+        resource_type="assistant",
     )
 
     return assistant
@@ -115,6 +95,7 @@ async def reset_assistant_configuration(
         event_type="assistant.configuration.reset",
         resource_id=assistant.id,
         payload={"reset_to_defaults": True},
+        resource_type="assistant",
     )
 
     return assistant
