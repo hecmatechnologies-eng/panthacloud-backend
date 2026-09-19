@@ -6,6 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api.deps import (
     get_current_project,
@@ -357,7 +358,11 @@ async def get_integration_plan(
     assistant = (await db.execute(stmt_asst)).scalar_one_or_none()
     asst_data = {"is_enabled": assistant.is_enabled} if assistant else None
 
-    stmt_kb = select(KnowledgeBase).where(KnowledgeBase.project_id == project.id)
+    stmt_kb = (
+        select(KnowledgeBase)
+        .options(selectinload(KnowledgeBase.documents))
+        .where(KnowledgeBase.project_id == project.id)
+    )
     kb = (await db.execute(stmt_kb)).scalar_one_or_none()
     has_kb = bool(kb and len(kb.documents) > 0)
 
