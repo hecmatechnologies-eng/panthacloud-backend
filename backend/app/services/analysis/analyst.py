@@ -94,6 +94,26 @@ async def analyze_repository(
     carrying ``unsupported_reason``.
     """
     pre_analysis = pre_analyze(repo_root, loader)
+    if context.integration_id is not None and context.project_id is not None:
+        from app.services.audit import record_audit
+
+        await record_audit(
+            db,
+            context.organization_id,
+            context.project_id,
+            None,
+            "website.analysis.pre_analysis",
+            context.integration_id,
+            {
+                "framework_skill_matches": [
+                    {"skill_id": match.skill_id, "version": match.version, "confidence": match.confidence}
+                    for match in pre_analysis.skills
+                ],
+                "manifests": pre_analysis.manifests,
+                "entry_points_count": len(pre_analysis.entry_point_candidates),
+                "protected_paths_count": len(pre_analysis.protected_paths),
+            },
+        )
     captured: list[AgentRunResult] = []
 
     async def on_result(result: AgentRunResult) -> None:

@@ -22,6 +22,7 @@ from app.models.website_integration import WebsiteIntegration
 from app.services.analysis.analyst import analyze_repository
 from app.services.analysis.clone import clone_repository, clone_url_for
 from app.services.analysis.selection import select_target
+from app.services.audit import record_audit
 from app.services.integration.credentials import resolve_github_token
 from app.services.repository.reader import LocalWorkspaceReader
 from app.services.repository.workspace import workspace_manager
@@ -60,6 +61,20 @@ async def analyze_website_integration(
         )
         workspace_manager.check_workspace_limits(workspace_path)
 
+        await record_audit(
+            db,
+            organization.id,
+            project.id,
+            None,
+            "website.analysis.started",
+            integration.id,
+            {
+                "integration_id": str(integration.id),
+                "commit_sha": commit_sha,
+                "default_branch": integration.default_branch,
+            },
+        )
+
         context = ExecutionContext(
             organization_id=organization.id,
             project_id=project.id,
@@ -85,9 +100,21 @@ async def analyze_website_integration(
                 tool_gateway=ToolGateway(registry),
                 registry=registry,
             )
-        except Exception:
+        except Exception as exc:
             # The harness marked the run FAILED and flushed it; commit so get_db's rollback does
             # not discard the failure record (FR-089).
+            try:
+                await record_audit(
+                    db,
+                    organization.id,
+                    project.id,
+                    None,
+                    "website.analysis.failed",
+                    integration.id,
+                    {"error": str(exc)},
+                )
+            except Exception:
+                logger.warning("Failed to record audit failure event", exc_info=True)
             await db.commit()
             raise
 
@@ -115,6 +142,23 @@ async def analyze_website_integration(
 
         await db.commit()
         await db.refresh(analysis)
+
+        await record_audit(
+            db,
+            organization.id,
+            project.id,
+            None,
+            "website.analysis.completed",
+            integration.id,
+            {
+                "analysis_id": str(analysis.id),
+                "commit_sha": analysis.commit_sha,
+                "framework_skill_id": analysis.framework_skill_id,
+                "unsupported_reason": analysis.unsupported_reason,
+                "candidates_count": len(analysis.integration_candidates) if analysis.integration_candidates else 0,
+            },
+        )
+
         return analysis
     finally:
         workspace_manager.cleanup_workspace(workspace_path)
