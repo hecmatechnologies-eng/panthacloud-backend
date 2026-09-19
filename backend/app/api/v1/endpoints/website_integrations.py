@@ -459,6 +459,22 @@ async def start_integration_run(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> IntegrationRunRead:
+    # Prevent concurrent runs on the same integration
+    stmt_active = select(IntegrationRun).where(
+        IntegrationRun.integration_id == integration.id,
+        IntegrationRun.status.in_([
+            IntegrationRunStatus.RUNNING,
+            IntegrationRunStatus.VALIDATING,
+            IntegrationRunStatus.PENDING,
+        ]),
+    )
+    active_run = (await db.execute(stmt_active)).scalars().first()
+    if active_run:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"An integration run ({active_run.id}) is already in progress for this repository.",
+        )
+
     try:
         run = await pipeline_service.execute(
             db=db,

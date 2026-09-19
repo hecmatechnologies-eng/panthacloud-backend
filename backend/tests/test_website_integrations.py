@@ -3,6 +3,7 @@ import json
 import tempfile
 import uuid
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -1434,3 +1435,43 @@ async def test_project_cascade_deletion(client: AsyncClient) -> None:
 
         stmt_r = select(IntegrationRun).where(IntegrationRun.id == uuid.UUID(run_id))
         assert (await db.execute(stmt_r)).scalar_one_or_none() is None
+
+
+@pytest.mark.asyncio
+async def test_start_run_rejects_concurrent_active_run(client: AsyncClient) -> None:
+    token, _, org_id = await register_user(client, "active_run_owner@example.com", "ActiveRunOwner")
+    hdr = {"Authorization": f"Bearer {token}"}
+    proj_id = await create_project(client, token, org_id, "Active Run Proj", "active-run-proj")
+
+    mock_git = MockGitProvider()
+    mock_git.add_file("fussion-org", "storefront", "app/layout.tsx", read_fixture("app/layout.tsx"))
+    set_git_provider(mock_git)
+
+    integ_resp = await client.post(
+        f"/api/v1/organizations/{org_id}/projects/{proj_id}/website-integrations",
+        headers=hdr,
+        json={"repository_owner": "fussion-org", "repository_name": "storefront"},
+    )
+    integ_id = uuid.UUID(integ_resp.json()["id"])
+
+    # Manually insert an active run in RUNNING status
+    session_factory = get_session_factory()
+    async with session_factory() as db:
+        active_run = IntegrationRun(
+            id=uuid.uuid4(),
+            integration_id=integ_id,
+            status=IntegrationRunStatus.RUNNING,
+            branch_name="fussion/integration/active",
+            sandbox_ref="sb-active",
+            started_at=datetime.now(UTC),
+        )
+        db.add(active_run)
+        await db.commit()
+
+    # Attempting to start another run must return 409 Conflict
+    run_resp = await client.post(
+        f"/api/v1/organizations/{org_id}/projects/{proj_id}/website-integrations/runs",
+        headers=hdr,
+    )
+    assert run_resp.status_code == 409
+    assert "already in progress" in run_resp.json()["detail"].lower()

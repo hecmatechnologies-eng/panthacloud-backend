@@ -197,6 +197,7 @@ class IntegrationPipeline:
             except ModelNotConfiguredError:
                 gateway = None
             generated_files = None
+            used_coding_agent = False
 
             if gateway is not None and getattr(settings, "ENABLE_CODING_AGENT", True) and settings.APP_ENV != "test":
                 try:
@@ -239,6 +240,8 @@ class IntegrationPipeline:
                         registry=global_registry,
                         workspace_provider=self.workspace,
                     )
+                    if generated_files:
+                        used_coding_agent = True
                 except Exception as exc:  # noqa: BLE001 - Resilient fallback to deterministic generator
                     logger.warning(
                         "Autonomous CodingAgent failed (%s), falling back to deterministic artifact generator",
@@ -327,6 +330,11 @@ class IntegrationPipeline:
             # 11. Create Pull Request
             _assert_not_cancelled()
             pr_title = "Integrate Fussion Assistant"
+            generation_desc = (
+                "- Generation: **Autonomous Coding Agent** — with deterministic static validation and AST verification."
+                if used_coding_agent
+                else "- Generation: **deterministic** — no AI model was involved in producing this change."
+            )
             pr_body = f"""## Fussion Assistant Integration
 
 This automated Pull Request adds the Fussion storefront assistant integration for **{project.name}**.
@@ -344,7 +352,7 @@ This automated Pull Request adds the Fussion storefront assistant integration fo
 ### What Fussion checked
 - Static validation: **passed** — every changed path was declared in the plan, existing content
   outside Fussion's marked blocks is unchanged, and the generated code carries no credentials.
-- Generation: **deterministic** — no AI model was involved in producing this change.
+{generation_desc}
 - Your default branch: **untouched** — these commits are on `{branch_name}`.
 
 ### What Fussion did NOT check
