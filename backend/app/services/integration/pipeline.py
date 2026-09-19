@@ -28,7 +28,7 @@ from app.services.integration.credentials import GitHubCredentialError, resolve_
 from app.services.integration.github import get_git_provider
 from app.services.integration.planner import IntegrationPlanner
 from app.services.integration.sandbox import LocalWorkspaceProvider
-from app.services.integration.validation import StaticValidator
+from app.services.integration.validation import StaticValidationError, StaticValidator
 
 logger = logging.getLogger("fussion.integration.pipeline")
 
@@ -419,7 +419,7 @@ This automated Pull Request adds the Fussion storefront assistant integration fo
                 raise
 
             error_msg = str(exc)
-            refused = isinstance(exc, IntegrationRefusedError)
+            refused = isinstance(exc, (IntegrationRefusedError, StaticValidationError))
             if refused:
                 logger.warning(f"Integration pipeline run {run_id} refused: {error_msg}")
             else:

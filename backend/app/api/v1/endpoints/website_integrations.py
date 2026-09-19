@@ -57,6 +57,7 @@ from app.services.integration.github import (
 )
 from app.services.integration.pipeline import IntegrationRefusedError, pipeline_service
 from app.services.integration.planner import IntegrationPlanner
+from app.services.integration.validation import StaticValidationError
 
 logger = logging.getLogger("fussion.integration.api")
 
@@ -467,7 +468,7 @@ async def start_integration_run(
             user_id=user.id,
         )
         return IntegrationRunRead.model_validate(run)
-    except IntegrationRefusedError as exc:
+    except (IntegrationRefusedError, StaticValidationError) as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Integration refused: {exc}",
