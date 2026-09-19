@@ -24,6 +24,7 @@ from app.schemas.knowledge import (
     KnowledgeQueryRequest,
     KnowledgeQueryResponse,
 )
+from app.services.audit import record_audit
 from app.services.knowledge.ingestion import delete_document_storage, ingest_document
 from app.services.knowledge.retrieval import query_knowledge_base
 from app.services.storage import StorageNotFoundError, get_storage_provider
@@ -226,9 +227,21 @@ async def delete_document(
     deletion to all associated chunks.
     """
     storage_key = doc.storage_key
+    filename = doc.filename
     await db.delete(doc)
     await db.commit()
     await delete_document_storage(storage_key)
+
+    await record_audit(
+        db=db,
+        org_id=org_id,
+        project_id=project_id,
+        user_id=tenant[1].user_id if tenant and len(tenant) > 1 else None,
+        event_type="knowledge.document.deleted",
+        resource_id=document_id,
+        payload={"filename": filename, "document_id": str(document_id)},
+        resource_type="knowledge_document",
+    )
 
 
 @router.post(

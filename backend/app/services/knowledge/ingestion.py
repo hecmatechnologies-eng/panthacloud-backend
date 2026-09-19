@@ -28,6 +28,9 @@ ALLOWED_MIME_TYPES = {
 }
 
 
+from app.services.audit import record_audit
+
+
 async def _record_audit(
     db: AsyncSession,
     org_id: uuid.UUID,
@@ -37,22 +40,20 @@ async def _record_audit(
     resource_id: uuid.UUID,
     payload: dict[str, Any] | None = None,
 ) -> None:
-    """Helper to record audit events for knowledge operations."""
+    """Helper to record audit events for knowledge operations and publish to Redis."""
     try:
-        event = AuditEvent(
-            organization_id=org_id,
+        await record_audit(
+            db=db,
+            org_id=org_id,
             project_id=project_id,
             user_id=user_id,
             event_type=event_type,
-            resource_type="knowledge_document",
             resource_id=resource_id,
             payload=payload or {},
+            resource_type="knowledge_document",
         )
-        db.add(event)
-        await db.commit()
     except Exception:  # noqa: BLE001
-        # Audit failure must not crash the primary operational path
-        await db.rollback()
+        logger.warning("Audit recording failed for %s", event_type, exc_info=True)
 
 
 def validate_file_metadata(filename: str, content_type: str, content: bytes) -> tuple[str, str]:
