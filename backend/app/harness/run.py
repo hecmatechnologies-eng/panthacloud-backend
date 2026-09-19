@@ -45,6 +45,29 @@ async def start_agent_run(
     # Commit before the model is called. A run that fails must still leave a record (FR-089), and a
     # session poisoned mid-run must not be able to erase one that was only flushed.
     await db.commit()
+
+    if context.project_id is not None:
+        try:
+            import json
+            from app.core.redis import get_redis, project_event_channel
+
+            client = get_redis()
+            if client is not None:
+                channel = project_event_channel(context.project_id)
+                payload = {
+                    "id": str(run.id),
+                    "event_type": f"agent.run.{definition.name}.started",
+                    "payload": {
+                        "run_id": str(run.id),
+                        "agent_name": definition.name,
+                        "agent_version": definition.version,
+                    },
+                    "created_at": run.started_at.isoformat(),
+                }
+                await client.publish(channel, json.dumps(payload))
+        except Exception:
+            pass
+
     return run
 
 
@@ -63,6 +86,34 @@ async def finish_agent_run(
     # Committed, not flushed: the terminal state is the half of the record that must survive even
     # when the caller's transaction is later rolled back.
     await db.commit()
+
+    if run.project_id is not None:
+        try:
+            import json
+            from app.core.redis import get_redis, project_event_channel
+
+            client = get_redis()
+            if client is not None:
+                channel = project_event_channel(run.project_id)
+                event_name = (
+                    f"agent.run.{run.agent_name}.completed"
+                    if status == AgentRunStatus.COMPLETED
+                    else f"agent.run.{run.agent_name}.failed"
+                )
+                payload = {
+                    "id": str(run.id),
+                    "event_type": event_name,
+                    "payload": {
+                        "run_id": str(run.id),
+                        "agent_name": run.agent_name,
+                        "status": status.value if hasattr(status, "value") else str(status),
+                        "failure_reason": failure_reason,
+                    },
+                    "created_at": run.completed_at.isoformat() if run.completed_at else utc_now().isoformat(),
+                }
+                await client.publish(channel, json.dumps(payload))
+        except Exception:
+            pass
 
 
 async def record_run_metadata(

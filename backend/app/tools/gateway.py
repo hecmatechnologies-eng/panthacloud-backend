@@ -203,6 +203,33 @@ async def record_tool_call(
     )
     db.add(call)
     await db.flush()
+
+    if run.project_id is not None:
+        try:
+            from app.core.redis import get_redis, project_event_channel
+            from app.models.base import utc_now
+
+            client = get_redis()
+            if client is not None:
+                channel = project_event_channel(run.project_id)
+                payload = {
+                    "id": str(call.id) if hasattr(call, "id") and call.id else str(uuid.uuid4()),
+                    "event_type": "agent.tool.executed",
+                    "payload": {
+                        "run_id": str(run.id),
+                        "agent_name": run.agent_name,
+                        "tool_name": tool_name,
+                        "sequence": call.sequence,
+                        "outcome": outcome,
+                        "duration_ms": duration_ms,
+                        "error_message": error_message,
+                    },
+                    "created_at": call.created_at.isoformat() if hasattr(call, "created_at") and call.created_at else utc_now().isoformat(),
+                }
+                await client.publish(channel, json.dumps(payload))
+        except Exception:
+            logger.debug("Could not publish tool call event to Redis", exc_info=True)
+
     return call
 
 
