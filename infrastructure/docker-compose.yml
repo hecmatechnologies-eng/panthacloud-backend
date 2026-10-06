@@ -1,6 +1,8 @@
 services:
   postgres:
-    image: postgres:17-alpine
+    # pgvector-enabled image: migration 0027 runs CREATE EXTENSION vector, which the
+    # stock postgres:17-alpine image does not ship.
+    image: pgvector/pgvector:pg17
     container_name: fussion-postgres
     restart: unless-stopped
     environment:
