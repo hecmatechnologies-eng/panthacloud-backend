@@ -8,35 +8,79 @@
 
 ## 1. Embeddings: deterministic hash → real model embeddings
 
-**Current:** `DeterministicHashEmbeddingProvider` (lexical, no semantics)
-**Target:** `GeminiEmbeddingProvider` (or other real provider) — already scaffolded.
+> **Status: COMPLETE (2026-10-10).** Verified end to end against live Gemini embeddings.
+> Only the optional quality work below remains.
+
+**What was already true before this task** (the original plan was written against an older
+snapshot and was wrong on three of its four rows):
+
+- **Factory already wired.** `app/core/config.py` already defaults to
+  `EMBEDDING_PROVIDER=gemini`, `EMBEDDING_MODEL=gemini-embedding-001`,
+  `EMBEDDING_DIMENSION=768`. `build_default_embedding_provider()` is called at KB creation
+  (`app/api/deps.py:274`); `validate_embedding_configuration()` runs at startup
+  (`app/main.py:90`).
+- **`GeminiEmbeddingProvider` is complete**, not a stub — batched at 100, unit-normalised.
+- **No re-embed migration is needed.** `knowledge_chunks.embedding` is an *unconstrained*
+  `vector` (migrations 0027/0030), so the 384 → 768 dimension change needs no DDL.
+- **The deterministic test assertions are correct as written.** `tests/conftest.py` pins
+  `EMBEDDING_PROVIDER=deterministic` so the suite never calls a paid API. Do not "fix" this.
+
+**What was actually done:**
+
+1. `backend/.env` — set `EMBEDDING_API_KEY` (gitignored and untracked; never committed).
+2. Seeded the empty database: org → project → knowledge base → document.
+3. **Fixed a real defect in `scripts/seed_knowledge.py`.** It stored the whole document as a
+   single 1052-character chunk, blending pricing / streaming / sandboxing / framework-detection
+   into one vector. That compressed every score into a 0.42–0.56 band and made retrieval look
+   far worse than it is. It now runs the document through the real `extract_and_chunk_markdown`
+   (3 chunks), batch-embeds, and clears prior chunks so re-running is idempotent.
+
+**Verification** — paraphrases sharing no literal tokens with the source document:
+
+| Query | score | @ threshold 0.55 |
+|---|---|---|
+| "What does the premium tier cost per month?" | 0.5593 | 1 match |
+| "how much do customers pay to go live" | 0.5893 | 1 match |
+| "how do you figure out what web technology a site uses" | 0.5703 | 1 match |
+| "does the system touch production code directly" | 0.6520 | 3 matches |
+| *control:* "what is the wifi password for guest rooms" | 0.4489 | **0 matches** |
+| *control:* "when does the breakfast buffet open" | 0.4241 | **0 matches** |
+
+Paraphrases retrieve; irrelevant queries are gated out at `score_threshold=0.55`.
+
+**Remaining optional quality work (not required for demo):**
 
 | Task | Location | Effort |
 |---|---|---|
-| Wire real provider in factory | `backend/app/services/knowledge/embeddings.py` | 1h |
-| Add config keys | `backend/.env.example` (already documented: `EMBEDDING_PROVIDER`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL_ID`) | — |
-| Migration: re-embed existing chunks | New alembic revision: `ALTER COLUMN embedding TYPE vector USING (new_embedding::vector)` | 2h |
-| Update tests asserting deterministic output | `backend/tests/test_knowledge.py`, `test_knowledge_e2e.py` | 2h |
+| Retrieval-quality eval | New case type in `app/evals/` — only the engineering agent is evaluated today | 1 day |
+| Hybrid retrieval / rerank | `app/services/knowledge/retrieval.py` is vector-only: no BM25 lexical arm, no reranker | 2–3 days |
 
-**Note:** Can demo with placeholder; semantic quality only needed for production QA.
+**Note:** A practical threshold for this corpus is **0.55**. Below ~0.50 the controls start
+leaking through; above ~0.65 recall degrades. Tune against a real corpus before trusting it.
 
 ---
 
 ## 2. Agent/harness/tool layer: internal → API-exposed
+
+> **Status re-verified 2026-10-10: also partly stale.** Three of the five rows are already
+> done — see the correction table below.
 
 **Current:** Runs inside backend via ARQ workers; no public API.
 **Target:** Public API so frontend (and external clients) can start/inspect agent runs.
 
 | Task | Location | Effort |
 |---|---|---|
-| Public Pydantic schemas | `backend/app/schemas/agent.py` (new) | 2h |
-| API endpoints: `POST /agent-runs`, `GET /agent-runs/{id}`, `GET /agent-runs/{id}/events` (SSE) | `backend/app/api/v1/endpoints/agent_runs.py` (new) | 1 day |
-| AuthZ: org-member scoping | `backend/app/core/permissions.py` | 4h |
-| Rate limits / budgets per org | Extend `backend/app/core/rate_limit.py` + `app/jobs/queue.py` | 1 day |
+| ~~Public Pydantic schemas~~ | **done** — `app/schemas/agent_run.py` (`AgentRunSummaryRead`, `AgentRunRead`) | done |
+| ~~`GET` agent-run endpoints~~ | **done** — `app/api/v1/endpoints/agent_runs.py` exposes list, get-by-id (+ tool log), project usage, org budget | done |
+| ~~AuthZ: org-member scoping~~ | **done** — `app/core/permissions.py` exists and is wired | done |
+| **`POST /agent-runs`** — nothing can *start* a run over HTTP | `app/api/v1/endpoints/agent_runs.py` | 1 day |
+| **`GET /agent-runs/{id}/events`** — no SSE stream of a live run | new, mirroring `studio_events.py` | 1 day |
+| Rate limits / budgets per org | `app/core/rate_limit.py` + `app/jobs/queue.py` | 1 day |
 | Frontend: replace mock agent runs | `frontend/src/lib/api/resources.ts`, hooks, components | 2–3 days |
 
-**Decision point:** Does the demo need external agent API, or is internal worker-triggered
-enough? If internal is fine, skip this entire workstream.
+The real gap is narrower than "build the agent API": reads already exist. What is missing is
+the **write** path (start a run) and **streaming**. Until those land, runs are only
+worker-triggered — which is exactly what §4 below assumes, so the demo path is unaffected.
 
 ---
 

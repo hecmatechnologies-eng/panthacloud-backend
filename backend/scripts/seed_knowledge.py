@@ -7,10 +7,11 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from app.core.database import get_session_factory
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from app.models.organization import Organization
 from app.models.project import Project
 from app.models.knowledge import KnowledgeBase, KnowledgeDocument, KnowledgeChunk, DocumentStatus
+from app.services.knowledge.chunking import extract_and_chunk_markdown
 from app.services.knowledge.embeddings import get_embedding_provider
 
 OVERVIEW_TEXT = """# Panthacloud Platform Overview
@@ -79,22 +80,35 @@ async def main():
             await session.flush()
             print(f"Created KnowledgeDocument {doc.id}")
 
-            # 4. Generate Chunk and Embedding
-            provider = get_embedding_provider("gemini-embedding-001", 768)
-            vector = await provider.embed_text(OVERVIEW_TEXT)
-            chunk = KnowledgeChunk(
+        # 4. Chunk through the real chunker, then batch-embed.
+        # Storing the whole document as one vector blends every topic together and flattens
+        # the score range, which misrepresents retrieval quality in any demo built on it.
+        raw = OVERVIEW_TEXT.encode("utf-8")
+        _, chunks = extract_and_chunk_markdown(raw)
+        existing_chunks = await session.execute(
+            select(KnowledgeChunk).where(KnowledgeChunk.document_id == doc.id)
+        )
+        for stale in existing_chunks.scalars().all():
+            await session.delete(stale)
+        await session.flush()
+
+        provider = get_embedding_provider(kb.embedding_model, kb.embedding_dimension)
+        vectors = await provider.embed_batch([c.text for c in chunks])
+        for chunk, vector in zip(chunks, vectors):
+            session.add(KnowledgeChunk(
                 id=uuid.uuid4(),
                 document_id=doc.id,
-                chunk_index=0,
-                text=OVERVIEW_TEXT,
-                token_count=len(OVERVIEW_TEXT.split()),
+                chunk_index=chunk.chunk_index,
+                text=chunk.text,
+                page_number=chunk.page_number,
+                source_location=chunk.source_location,
+                token_count=chunk.token_count,
                 embedding=vector,
-                embedding_model="gemini-embedding-001",
+                embedding_model=provider.model_id,
                 metadata_={"section": "overview", "source": "panthacloud_overview.md"},
-            )
-            session.add(chunk)
-            await session.flush()
-            print("Created KnowledgeChunk with Gemini vector embeddings!")
+            ))
+        await session.flush()
+        print(f"Stored {len(chunks)} chunk(s) with {provider.model_id} embeddings")
 
         await session.commit()
         print("Knowledge base seeded successfully!")
