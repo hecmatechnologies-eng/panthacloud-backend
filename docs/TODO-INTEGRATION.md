@@ -94,6 +94,24 @@ State: `website_analyst` and `coding_agent` run through the harness today. For K
 
 Each runs with the org's `ExecutionContext`, so runs, costs, and tool calls attribute to K Hotels automatically.
 
+### 4.1 Prerequisites before adding any colleague — from `standards-alignment.md`
+
+`website_analyst` and `coding_agent` are **kept as colleagues, sequenced through the pipeline
+with shared task state** — not upgraded into collaborating agents. That matches the *"shared
+tasks, context"* shape without importing direct agent-to-agent messaging and the ASI07
+controls it would require. **No change to the arrangement.**
+
+What must be fixed first is **eval coverage asymmetry**:
+
+| Gap | Why it blocks a new colleague |
+|---|---|
+| **G6** — `coding_agent` has no eval cases | A new colleague inherits an assurance model where the *existing* write-capable agent is untested |
+| **G8** — live coding-agent path untested | `pipeline.py:202` disables the agent when `APP_ENV == "test"`; new colleagues added through the same assembly inherit the blind spot |
+| **G7** — `approved_by` can be an organisation | Any colleague that writes inherits an approval record that does not reliably identify a human |
+| **§5.2 ASI01** — repository content unfenced | Every colleague that reads tenant content needs the shared `fence_untrusted()` helper first |
+
+Sequence: **G6 and G8 → G7 → ASI01 fence → new colleagues.**
+
 ## 5. Level L3 — Shared runtime agent (customer-facing, per-org resolution)
 
 State: read-only answering with citations, per-project instructions, tenant resolution, rate limits. Under the new decision (ADR-002) this becomes a **bounded agent loop with tools, resolved per org**. Build items for K Hotels:
