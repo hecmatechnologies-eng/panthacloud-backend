@@ -40,8 +40,60 @@ jobs:
             .venv/bin/agentskills validate "$skill"
           done
 
+      - name: Apply Migrations
+        # APP_ENV must NOT be "test" here. config.effective_database_url ignores a
+        # Postgres DATABASE_URL when APP_ENV is test/testing and returns
+        # FALLBACK_SQLITE_URL instead, so migrations would silently run against SQLite
+        # and pass without exercising pgvector at all.
+        run: .venv/bin/alembic upgrade head
+        env:
+          APP_ENV: development
+          DATABASE_URL: "postgresql+psycopg://postgres:postgres@localhost:5432/fussion_ci"
+
+      - name: Assert Migrations Created pgvector Objects
+        run: |
+          set -e
+          .venv/bin/alembic current
+          test "$(psql "$DATABASE_URL_SQL" -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'")" -ge 20
+          test "$(psql "$DATABASE_URL_SQL" -tAc "SELECT count(*) FROM pg_extension WHERE extname='vector'")" -eq 1
+        env:
+          APP_ENV: development
+          DATABASE_URL: "postgresql+psycopg://postgres:postgres@localhost:5432/fussion_ci"
+          DATABASE_URL_SQL: "postgresql://postgres:postgres@localhost:5432/fussion_ci"
+
+      # NOTE: `alembic check` is deliberately NOT a gate yet. On a clean tree it reports
+      # false positives - migrations create *named* unique constraints while the models
+      # declare bare `unique=True`, and Postgres reflects JSON columns as
+      # JSON(astext_type=Text()). Real drift is indistinguishable from that noise today.
+      # Fix the model/migration naming convention first, then enable it.
+
+      - name: Run Evals
+        # Also runs inside the pytest suite; repeated here so a corpus regression is
+        # reported as an eval failure rather than buried in test output.
+        run: .venv/bin/pytest tests/test_evals.py -v
+        env:
+          APP_ENV: test
+          FALLBACK_SQLITE_URL: "sqlite+aiosqlite:///:memory:"
+
       - name: Run Pytest Test Suite
         run: .venv/bin/pytest tests
         env:
           APP_ENV: test
-          FALLBACK_SQLITE_URL: sqlite+aiosqlite:///:memory:
+          FALLBACK_SQLITE_URL: "sqlite+aiosqlite:///:memory:"
+
+    services:
+      postgres:
+        # pgvector, not plain postgres: migration 0027 creates the vector extension
+        # and knowledge_chunks.embedding is a vector column.
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: fussion_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
