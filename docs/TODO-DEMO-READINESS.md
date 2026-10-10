@@ -2,8 +2,9 @@
 
 > Consolidated from architecture review. Three workstreams to reach an end-to-end demo.
 >
-> **Companion:** `TODO-INTEGRATION.md` — the L0–L6 build plan for org-scoped agent
-> execution (colleague agents + shared runtime agent, per-org policy, channels, evals).
+> **Companions:** `TODO-INTEGRATION.md` — the L0–L6 build plan for org-scoped agent
+> execution. `TODO-KHOTELS-EVOLUTION.md` — what K Hotels needs on top of capabilities that
+> already exist, and which L0/L1/L3 rows this framing supersedes.
 > This document is the shorter "what is left before we can demo it" list.
 
 ## 1. Embeddings: deterministic hash → real model embeddings

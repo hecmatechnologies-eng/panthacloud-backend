@@ -7,6 +7,11 @@
 >
 > **Companion:** `TODO-DEMO-READINESS.md` — the shorter "what is left before an end-to-end
 > demo" list (embeddings, agent API, frontend slices). This document is the build plan.
+>
+> ⚠️ **Partly superseded.** `TODO-KHOTELS-EVOLUTION.md` scopes K Hotels as *evolution on top
+> of existing capabilities* rather than new architecture. Under that framing, **L0 and L3
+> largely evaporate and L1 shrinks to a thin bounds object.** Read that document before
+> starting any L0, L1 or L3 work. L2, L4, L5 and L6 stand.
 
 ## 1. The agent model as built (verified in code)
 
