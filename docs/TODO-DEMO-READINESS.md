@@ -63,25 +63,65 @@ leaking through; above ~0.65 recall degrades. Tune against a real corpus before 
 
 ## 2. Agent/harness/tool layer: internal → API-exposed
 
-> **Status re-verified 2026-10-10: also partly stale.** Three of the five rows are already
-> done — see the correction table below.
+> **Status re-verified 2026-10-11: NARROWED. Deferred in favour of `POST /{run_id}/retry`.**
+> Three of the five rows were already done, and an assessment of the remaining two found
+> **no caller for either**. See the assessment below before starting any work here.
 
-**Current:** Runs inside backend via ARQ workers; no public API.
-**Target:** Public API so frontend (and external clients) can start/inspect agent runs.
+**Original scope:** Runs inside backend via ARQ workers; no public API.
+**Revised scope:** one endpoint — retry a classified failure. Nothing else is justified yet.
+
+### Assessment (2026-10-11)
+
+The two proposed endpoints add almost nothing to the current state:
+
+| Proposed | Verdict |
+|---|---|
+| `POST /agent-runs` — start a run by name/version | **No caller.** The Studio triggers work through `website-integrations/analyze`; nothing wants to start an arbitrary agent by hand |
+| `GET /agent-runs/{id}/events` — per-run SSE | **Duplicates what exists.** A project-wide SSE stream already ships at `events/stream` (`studio_events.py`), and the frontend already consumes it via `src/lib/api/use-project-events.ts:33` |
+
+Supporting evidence:
+
+- **The frontend has zero references to `agent-runs`** — not in `resources.ts`, not in
+  `hooks.ts`, not in `mock.ts`. These endpoints have never had a consumer.
+- **Runs are already triggered:** `resources.ts:188` → `website-integrations/analyze` →
+  ARQ job → harness. Job status polling already exists at `resources.ts:208`.
+- **K Hotels needs none of it.** The runtime uses `ModelGateway` and never touches the
+  harness — and per `TODO-KHOTELS-EVOLUTION.md` §1, that stays true.
+- The module docstring (`agent_runs.py:1`) says *"Read-only agent-run and model-usage
+  endpoints"* — read-only is deliberate, not an oversight.
+
+### The real gap: FR-100 has no endpoint
+
+The data model already anticipates retry; the API just never offered it:
+
+- `app/models/agent_run.py:78` — `attempt` counter, **which nothing increments**
+- `app/models/agent_run.py:39-40` — `FailureClass`, and FR-100: *"every failure is
+  classified, and the class decides the response"*
+
+An `AgentRun` can fail, get classified, and sit in the database with **no way to retry it**
+short of re-triggering the entire pipeline from the top. That is the actual defect, and it is
+about half a day, not two days.
+
+### Revised task
 
 | Task | Location | Effort |
 |---|---|---|
-| ~~Public Pydantic schemas~~ | **done** — `app/schemas/agent_run.py` (`AgentRunSummaryRead`, `AgentRunRead`) | done |
-| ~~`GET` agent-run endpoints~~ | **done** — `app/api/v1/endpoints/agent_runs.py` exposes list, get-by-id (+ tool log), project usage, org budget | done |
-| ~~AuthZ: org-member scoping~~ | **done** — `app/core/permissions.py` exists and is wired | done |
-| **`POST /agent-runs`** — nothing can *start* a run over HTTP | `app/api/v1/endpoints/agent_runs.py` | 1 day |
-| **`GET /agent-runs/{id}/events`** — no SSE stream of a live run | new, mirroring `studio_events.py` | 1 day |
-| Rate limits / budgets per org | `app/core/rate_limit.py` + `app/jobs/queue.py` | 1 day |
-| Frontend: replace mock agent runs | `frontend/src/lib/api/resources.ts`, hooks, components | 2–3 days |
+| `POST /agent-runs/{run_id}/retry` — read `failure_class` to decide whether retry is permitted (FR-100 working as documented), increment `attempt`, re-enqueue the same agent + version + `prompt_hash`, return the new run id | `app/api/v1/endpoints/agent_runs.py` | half day |
+| ~~`POST /agent-runs`~~ | deferred — no caller | — |
+| ~~`GET /agent-runs/{id}/events`~~ | deferred — duplicates `events/stream` | — |
 
-The real gap is narrower than "build the agent API": reads already exist. What is missing is
-the **write** path (start a run) and **streaming**. Until those land, runs are only
-worker-triggered — which is exactly what §4 below assumes, so the demo path is unaffected.
+**Callers:** the Studio Runs page — which is itself unwired and belongs to §3. Building the
+retry endpoint first is defensible because it closes a documented requirement against columns
+that already exist; the UI can follow.
+
+**Original rows, for the record:**
+
+| Task | Location | Effort |
+|---|---|---|
+| ~~Public Pydantic schemas~~ | **done** — `app/schemas/agent_run.py` | done |
+| ~~`GET` agent-run endpoints~~ | **done** — list, get-by-id (+ tool log), usage, org budget | done |
+| ~~AuthZ: org-member scoping~~ | **done** — `app/core/permissions.py` | done |
+| Rate limits / budgets per org | **partly done** — `ModelGateway` already enforces per-org spend; `agent_runs.py:151` exposes `/usage/budget`. Confirm before scheduling | verify |
 
 ---
 
@@ -96,7 +136,7 @@ worker-triggered — which is exactly what §4 below assumes, so the demo path i
 | **Knowledge Base** | Upload, list, delete, retrieval preview | Upload UI, list, deletion, retrieval test panel | 3–4 days |
 | **Assistant Config** | Config CRUD, widget preview, allowed origins | Config editor, preview iframe, origins manager | 3–4 days |
 | **Runs / Integration Runs** | `GET /runs`, `GET /runs/{id}/diff` (currently 500), PR link | Run list, diff viewer (fix backend first), PR button | 2–3 days |
-| **Agent Runs** | Depends on #2 above | Run list, event stream, logs | 2–3 days |
+| **Agent Runs** | `GET /agent-runs`, `GET /agent-runs/{id}`, `/usage`, `/usage/budget` — **all already exist**. Retry from §2 | Run list, run detail + tool log, retry button. **No new event stream** — reuse `events/stream` | 2 days |
 | **Usage / Budget / Observability** | Metrics endpoints, SSE activity feed | Dashboard, charts, live activity | 2–3 days |
 
 **Pattern per slice:**
@@ -110,14 +150,17 @@ worker-triggered — which is exactly what §4 below assumes, so the demo path i
 
 ## 4. Shortest path to end-to-end demo (2–3 weeks)
 
-1. **Keep deterministic embeddings** — placeholder is fine for UI flow
-2. **Trigger agent runs from existing ARQ workers** — no new API needed
-3. **Wire these 4 frontend slices** (in order):
+1. ~~**Keep deterministic embeddings**~~ — **done.** Real Gemini embeddings are live and
+   verified (see §1). No longer a placeholder step.
+2. **Trigger agent runs from existing ARQ workers** — no new API needed, and §2 is now
+   narrowed to a single retry endpoint, so nothing on this path is blocked.
+3. **Set `MODEL_API_KEY`** — still the one hard blocker for anything that calls a model.
+4. **Wire these 4 frontend slices** (in order):
    - Integrations → Analysis (repo connect + analysis run)
    - Knowledge Base (upload + retrieval preview)
    - Assistant Config (config + widget preview)
    - Runs (list + diff + PR link — requires fixing `/runs/{id}/diff` 500)
-4. **Point embed snippet** at `app/runtime/widget/` public route
+5. **Point embed snippet** at `app/runtime/widget/` public route
 
 ---
 
