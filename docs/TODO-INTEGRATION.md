@@ -4,6 +4,9 @@
 > engineering plane, run through the harness) plus one **shared runtime agent**
 > (customer-facing, resolved per organisation). Every level below states what exists
 > in code, what must be built, where, and what it costs. K Hotels is Tenant #1.
+>
+> **Companion:** `TODO-DEMO-READINESS.md` — the shorter "what is left before an end-to-end
+> demo" list (embeddings, agent API, frontend slices). This document is the build plan.
 
 ## 1. The agent model as built (verified in code)
 
