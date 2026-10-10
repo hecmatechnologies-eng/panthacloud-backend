@@ -37,8 +37,20 @@ grounds poorly, or chain steps where step 2's parameters derive from step 1's ou
 Note this is **not** the same as sequential tool calls within one turn, which every provider
 already supports and which need no loop.
 
-**Action:** write `docs/architecture/ADR-002-runtime-loop-not-required.md`. Short. Its job
-is to stop the question being re-opened, and to name the trigger above.
+**Action:** ~~write `docs/architecture/ADR-002-runtime-loop-not-required.md`~~ — **done**, as
+`docs/architecture/ADR-002-no-runtime-agent-loop.md`. Short. Its job is to stop the question
+being re-opened, and to name the trigger above.
+
+> ⚠️ **Amended by `ADR-003-runtime-skills.md` (2026-10-11).** The reasoning above is correct for
+> K Hotels and still holds — the default runtime path stays tool-less, an approval gate is a
+> state machine, and the idle classifier is deterministic. But it foreclosed a requirement the
+> brief now makes explicit: serving **other domains**. Prose over a document corpus cannot
+> express "read this account balance" or "book this appointment", because
+> `runtime/assistant.py:88-99` caps tenant instructions at tone and domain detail.
+>
+> ADR-003 adds a per-domain skills registry and a routing step. **K Hotels itself needs none
+> of it** — K1–K7 below are unaffected and proceed as written. The skills work is future-domain
+> scope and is tracked in `TODO-INTEGRATION.md` L0/L1.
 
 ---
 
@@ -154,9 +166,9 @@ The L0–L6 plan was written assuming a runtime agent loop. On this framing:
 
 | Level | Change |
 |---|---|
-| **L0** Platform core (runtime loop + tool registry) | **Largely evaporates** — no loop |
-| **L1** `OrgAgentPolicy` | **Shrinks hard** — `system_instructions` + existing rate limits + existing budgets already are most of it. Becomes a thin bounds object, not a new model |
-| **L3** Shared runtime agent (lead-capture write, escalation path) | **Largely evaporates** — with staff approving, staff take the lead |
+| **L0** Platform core (runtime loop + tool registry) | **No loop** (ADR-002). But a runtime **tool registry** returns via ADR-003 — per-domain declarative skills bound to first-party executors, not a general tool protocol |
+| **L1** `OrgAgentPolicy` | **Shrinks hard** — `system_instructions` + rate limits + budgets already are most of it. ADR-003 moves the *capability* dimension into the skills registry, so L1 becomes bounds only (spend, idle threshold, autonomy tier) |
+| **L3** Shared runtime agent (lead-capture write, escalation path) | **Largely evaporates for K Hotels** — with staff approving, staff take the lead. Returns for later domains once ADR-003 skills exist |
 | L2 Colleague agents | unchanged |
 | L4 Channels | unchanged |
 | L5 Staff surfaces | unchanged — this is K6 |
@@ -170,7 +182,10 @@ Do not re-derive these; treat the L0/L1/L3 rows as superseded by this document.
 
 Recorded so these do not creep back in:
 
-- **A runtime agent loop.** See §1.
+- **A runtime agent loop.** See §1. ADR-003 adds capabilities, not a loop.
+- **Runtime skills, for K Hotels.** ADR-003 opens the seam for *later* domains. K Hotels is
+  served by retrieval + drafts + staff approval and needs no skill. Building an executor now
+  would be scope creep — wait for a second tenant that actually needs one.
 - **A `tools` field on `ModelRequest`/`ModelMessage`.** The MVP does not need it; adding it
   would touch the shared provider protocol and every adapter for a use case not yet proven.
 - **A2A / MCP.** Greenfield, no current requirement.

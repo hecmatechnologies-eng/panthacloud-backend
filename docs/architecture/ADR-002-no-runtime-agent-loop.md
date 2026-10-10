@@ -1,6 +1,7 @@
 # ADR-002 — K Hotels does not require a runtime agent loop
 
 **Status:** Accepted · **Date:** 2026-10-11 · **Supersedes:** none · **Amends:** ADR-001 §4
+· **Amended by:** [ADR-003](ADR-003-runtime-skills.md) (2026-10-11)
 
 ---
 
@@ -108,6 +109,13 @@ idle threshold is currently a constant rather than per-organisation.
 - `app/llm/base.py` — the absence of a `tools` field on `ModelRequest` / `ModelMessage` is
   what makes "no runtime tool calling" a structural property rather than a convention. Adding
   one is a deliberate change to this ADR.
+
+> **Amended by ADR-003 (2026-10-11).** This clause held for K Hotels, but the platform is
+> intended to serve multiple domains, and prose over a document corpus cannot express "read
+> this account balance" or "book this appointment". ADR-003 adds a per-domain skills registry
+> and a routing step, and introduces `ModelRequest.tools` as **optional and empty by default**.
+> The reasoning below still stands: the default path remains tool-less, an approval gate is
+> still a state machine rather than a loop, and the idle classifier is still deterministic.
 
 ---
 
