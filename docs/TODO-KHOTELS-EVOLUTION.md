@@ -62,7 +62,7 @@ The five-step prototype model maps onto these directly: **Receive** → `Visitor
 
 ## 3. Work items
 
-Ordered by dependency. **K1 is complete — K2 is now unblocked and is next.**
+Ordered by dependency. **K1 and K2 complete — K3 is next (first real code).**
 
 ### K1 — Wire `MODEL_API_KEY` · ✅ **DONE 2026-10-11**
 
@@ -92,9 +92,11 @@ The startup line `No model provider configured; public chat will return 503` is 
 the model correctly ignores them. The runtime's internal retrieval threshold could be raised
 so citations are suppressed on refusal. Cosmetic; the behaviour is already correct.
 
-### K2 — Write ADR-002 (short) · ~1h
+### K2 — Write ADR-002 · ✅ **DONE 2026-10-11**
 
-Per §1. Decision record only, no code.
+Written as `docs/architecture/ADR-002-no-runtime-agent-loop.md`. Records the decision, the
+alternatives, and the revisit trigger. Cross-referenced from ADR-001 §4 and `CLAUDE.md` §5,
+both of which are **upheld, not amended** — no import rule was relaxed.
 
 ### K3 — Session-outcome state · ~2h
 

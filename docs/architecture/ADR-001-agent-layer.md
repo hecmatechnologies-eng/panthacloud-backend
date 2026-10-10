@@ -55,6 +55,12 @@ adapter module and nowhere else. Swapping frameworks later is one file, not a re
 **4. The runtime plane uses no framework.** `retrieve → assemble → stream` is a direct
 provider call. No agent library on the highest-volume, lowest-latency path.
 
+> **Examined 2026-10-11 by [ADR-002](ADR-002-no-runtime-agent-loop.md) — upheld.** The K
+> Hotels guest desk appeared to need a runtime loop for its approval gate. It does not: an
+> approval gate is a state machine on a turn, not a loop, and the runtime could not tool-call
+> in any case (`ModelRequest` carries no tools field). This clause stands unchanged, and no
+> import rule was relaxed. ADR-002 records the revisit trigger.
+
 ---
 
 ## Rationale

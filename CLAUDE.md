@@ -337,6 +337,10 @@ tools, budgets, and approval gates. The visitor runtime is a single-turn pipelin
 resolve tenant → retrieve → assemble → stream. Do not force the runtime through the
 agent loop; it has different volume, latency, and risk.
 
+*This rule was examined and upheld on 2026-10-11 — see
+`docs/architecture/ADR-002-no-runtime-agent-loop.md`. An approval gate is a state machine
+on a turn, not an agent loop. Nothing here is relaxed.*
+
 ---
 
 ## 6. Principles, with Fussion-specific teeth
