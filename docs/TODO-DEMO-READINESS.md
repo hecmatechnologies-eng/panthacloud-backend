@@ -154,7 +154,9 @@ that already exist; the UI can follow.
    verified (see §1). No longer a placeholder step.
 2. **Trigger agent runs from existing ARQ workers** — no new API needed, and §2 is now
    narrowed to a single retry endpoint, so nothing on this path is blocked.
-3. **Set `MODEL_API_KEY`** — still the one hard blocker for anything that calls a model.
+3. ~~**Set `MODEL_API_KEY`**~~ — **done 2026-10-11.** Same Gemini key serves both embeddings
+   and `gemini-2.5-flash`. Verified via `POST /public/chat`: grounded answers with citations,
+   correct refusals out of scope, multi-turn history threaded.
 4. **Wire these 4 frontend slices** (in order):
    - Integrations → Analysis (repo connect + analysis run)
    - Knowledge Base (upload + retrieval preview)

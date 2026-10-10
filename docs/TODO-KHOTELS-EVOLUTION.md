@@ -62,19 +62,35 @@ The five-step prototype model maps onto these directly: **Receive** → `Visitor
 
 ## 3. Work items
 
-Ordered by dependency. **K1 blocks everything.**
+Ordered by dependency. **K1 is complete — K2 is now unblocked and is next.**
 
-### K1 — Wire `MODEL_API_KEY` · ~15 min · **BLOCKER**
+### K1 — Wire `MODEL_API_KEY` · ✅ **DONE 2026-10-11**
 
-Retrieval is verified working (real Gemini embeddings, paraphrases retrieve, controls gated
-out at `score_threshold=0.55`). But the startup log still reads:
+The same Gemini key used for embeddings also serves `gemini-2.5-flash`, so no second
+credential was needed. `backend/.env` now sets `MODEL_PROVIDER=gemini`,
+`MODEL_API_KEY`, `MODEL_ID=gemini-2.5-flash`, `MODEL_ALLOWED_IDS=["gemini-2.5-flash"]`.
+The startup line `No model provider configured; public chat will return 503` is **gone**.
 
-```
-No model provider configured; public chat will return 503.
-```
+**Verified end to end via `POST /api/v1/public/chat`:**
 
-Set `MODEL_PROVIDER`, `MODEL_ID`, `MODEL_ALLOWED_IDS`, `MODEL_API_KEY` in `backend/.env`.
-**Done when:** a `POST /public/chat` returns a grounded answer with citations.
+| Probe | Result |
+|---|---|
+| "staying with you next month… what would that cost?" | Correctly **refused** — KB holds Panthacloud pricing, not hotel pricing — and cited what it does have |
+| Follow-up in same session: "the three plans you just mentioned?" | Recalled turn 1 correctly, cited all three with scores |
+| "Does Panthacloud support real-time streaming, how does it avoid leaking styles?" | Answered from retrieval, top citation 0.6488 |
+| "What's the capital of France?" | Correctly refused, no fabrication |
+| "Can you book me a table at 7pm for four?" | Correctly refused, offered front desk per tenant instructions |
+
+**Dev bootstrap this required** (repeat on any fresh database):
+1. org → project (`panthacloud-frontend`) → knowledge base → seeded document
+2. a `WebsiteIntegration` row, to get a `public_key`
+3. an `AllowedOrigin` row (`http://localhost:3000`, `is_verified=true`) — **without it
+   `/public/chat` returns 403 "Unknown client key or unregistered origin"**
+4. an `Assistant` row with `system_instructions` — the tenant-policy seam from §2
+
+**Minor tuning note:** refusals still return low-scoring citations (0.42–0.47) even though
+the model correctly ignores them. The runtime's internal retrieval threshold could be raised
+so citations are suppressed on refusal. Cosmetic; the behaviour is already correct.
 
 ### K2 — Write ADR-002 (short) · ~1h
 
@@ -164,5 +180,5 @@ Recorded so these do not creep back in:
 
 ---
 
-*Created 2026-10-11. Item K1 supersedes the embeddings work completed in
-`TODO-DEMO-READINESS.md` §1.*
+*Created 2026-10-11. K1 (embeddings provider) completed same day; see
+`TODO-DEMO-READINESS.md` §1 for the embeddings work it builds on.*
