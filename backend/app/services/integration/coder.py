@@ -27,6 +27,7 @@ from app.models.website_integration import WebsiteIntegration
 from app.schemas.website_integration import IntegrationPlanPayload
 from app.services.integration.sandbox import LocalWorkspaceProvider
 from app.services.integration.validation import StaticValidationError, StaticValidator
+from app.services.killswitch import is_halted
 from app.tools.gateway import ApprovedPlan, ToolGateway
 from app.tools.registry import ToolRegistry
 from app.tools.workspace import build_workspace_tools
@@ -106,6 +107,7 @@ async def execute_coding_agent(
     prompt = build_coding_prompt(integration, plan, assistant_data)
 
     logger.info("Executing CodingAgent for integration %s at %s", integration.id, sandbox_path)
+    org_id = context.organization_id
     run = await run_agent(
         db,
         context=context,
@@ -117,6 +119,10 @@ async def execute_coding_agent(
         registry=registry,
         approved_plan=approved_plan,
         on_result=on_result,
+        # Consulted before every tool call, so an operator can stop a runaway run without
+        # waiting for the current step. Bound to this organization, so halting one tenant does
+        # not stop the others.
+        halt_check=lambda: is_halted(org_id),
     )
 
     # 2. Extract generated files from sandbox
@@ -163,6 +169,9 @@ async def execute_coding_agent(
             tool_gateway=tool_gateway,
             registry=registry,
             approved_plan=approved_plan,
+            # The repair turn is the ASI08 cascade risk: it re-enters the same loop with the
+            # same tools. It carries the same halt check so an operator can stop the pair.
+            halt_check=lambda: is_halted(org_id),
         )
         # Re-read files from sandbox
         generated_files.clear()

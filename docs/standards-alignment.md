@@ -102,9 +102,9 @@ responses"* as attack surface.
 | **ASI05** Unexpected Code Exec. | 🟢 Strong | **Better than this repo previously documented.** `sandbox.py:65-66` — *"no process, filesystem or network isolation. It therefore **refuses `run()`**"*. Refusing the capability beats faking the control. `assert_path_contained` resolves symlinks then checks `is_relative_to`. `subprocess.run(argv, …)` with no `shell=True` and a `--` separator (`reader.py:234-240`) |
 | **ASI06** Memory & Context Poisoning | 🟡 Partial | Run records are written by the harness, not the model, so there is no model-writable memory. **But** knowledge ingestion has no provenance verification (G3), and ASI01 applies to repository reads |
 | **ASI07** Inter-Agent Comm. | ⚪ N/A | One agent per run, no mesh. Correct to have nothing |
-| **ASI08** Cascading Failures | 🔴 **Gap** | **Zero matches for `circuit_break` or `kill_switch`.** A manual `/runs/{run_id}/cancel` exists but nothing triggers it on deviation. The Replit incident shape |
+| **ASI08** Cascading Failures | 🟡 **Partial — closed 2026-10-11** | `harness/halt.py::CircuitBreaker` stops a run after `AGENT_CIRCUIT_BREAKER_THRESHOLD` (default 5) **consecutive** tool failures, classified `TERMINAL`. Checked per tool call in `execute_tool`. A denial does not count — the gateway working correctly is not the agent failing. Still no cross-run blast-radius isolation |
 | **ASI09** Human-Agent Trust | 🟢 Strong | `ApprovedPlan` + **PR-only delivery** — code reaches production as a reviewable diff, never a direct push. OWASP asks to *"show raw actions at confirmation time"*; the PR **is** the raw action. **Caveat — see G7:** `approved_by=user_id or org_id` can record an organisation, not a person |
-| **ASI10** Rogue Agents | 🔴 **Gap** | No kill switch, no behavioural baseline, no per-agent owner or expiry, and `AgentRun.attempt` exists but **nothing increments it**. Detection after the fact is possible; *stopping* is not |
+| **ASI10** Rogue Agents | 🟡 **Partial — closed 2026-10-11** | Operator kill switch (`services/killswitch.py`), global or per-organization, checked before every tool call; a halted run is classified `RETRYABLE` so releasing the switch and re-queuing works. Wired into both `run_agent` call sites in `coder.py`, including the repair loop. Still no behavioural baseline or per-agent owner/expiry |
 
 ### 5.2 ASI01 in detail — the inversion
 
@@ -208,16 +208,17 @@ MCP (cross-org coordination vs. internal tool access), so it would not be a subs
 | Protocol posture (MCP / A2A) | 🟢 Deliberate and defensible |
 | Engineering harness & skills | 🟢 **Mature — strongest area** |
 | **Assurance — evals** | 🔴 **Weak; absent for the write-capable agent** |
-| **Observability & stopping — ASI08/ASI10** | 🔴 **Weak; no kill switch or circuit breaker** |
+| **Stopping a run — ASI08/ASI10** | 🟡 **Kill switch + circuit breaker shipped**; no behavioural baseline |
 | **Untrusted-content fencing — ASI01** | 🔴 **Weak on the engineering plane specifically** |
 
 **Summary: strong on controls, weak on assurance.** The architecture is sound. The deficit is
 the ability to *prove* it keeps working, and to *stop* it when it does not.
 
 The three red rows share a shape. ASI02/03/05/09 constrain what an agent **can do** — those
-are strong. ASI08/10 require detecting deviation and halting — there is nothing. ASI01 is
-missing on precisely the plane that reads untrusted third-party content. **The engineering
-plane is well-constrained but not observable and not stoppable.**
+are strong. ASI08/10 required detecting deviation and halting; **the stopping half now exists
+(G10)** but the detecting half does not. ASI01 is missing on precisely the plane that reads
+untrusted third-party content. **The engineering plane is well-constrained and now stoppable;
+it is not yet observable.**
 
 ---
 
@@ -304,6 +305,38 @@ not exercised by any test. That is precisely where a wiring mistake would ship u
 
 **Remedy:** cover the pipeline assembly with `ENABLE_CODING_AGENT=True` in tests, using a
 stubbed runner. The fallback path deserves a test on its own — it is the resilience story.
+
+### G9 — No behavioural baseline or per-agent lifecycle · 🟠 Medium · *new*
+
+The kill switch (G10) and circuit breaker let an operator stop a run. Neither can *detect*
+one going wrong on its own: there is no alert on deviation from normal, no per-agent owner,
+and no expiry. ASI10's remaining scope after G10.
+
+`AgentRegistry` holds static singletons with no owner field and no expiry, and `AgentRun`
+gives perfect after-the-fact forensics — so the gap is alerting, not evidence.
+
+**Remedy:** alert on circuit-breaker trips and kill-switch engagements (both already log at
+`WARNING`); give each `AgentDefinition` an owner and a review cadence.
+
+### G10 — Kill switch and circuit breaker · ✅ **Closed 2026-10-11**
+
+`app/harness/halt.py` (pure, no I/O) plus `app/services/killswitch.py` (Redis-backed).
+Checked **before every tool call**, not once per run, so an operator does not wait out the
+current step. Wired into both `run_agent` call sites in `coder.py`, including the repair
+loop — the ASI08 cascade shape.
+
+Two design decisions worth preserving:
+
+- **Fail-open on reads, fail-closed on writes.** If Redis is unreachable, `is_halted` logs and
+  returns `None` (runs proceed) but `halt_global` raises `KillswitchUnavailable`. A kill switch
+  that silently no-ops is worse than one that is visibly broken.
+- **Halting is `RETRYABLE`, tripping the breaker is `TERMINAL`.** Releasing the switch and
+  re-queuing is the intended operator response; re-running a breaker trip immediately would
+  just repeat the loop.
+
+Redis was chosen over a table because ARQ already requires it, so no new infrastructure is
+introduced. The tradeoff — a Redis restart clears the switches — is the correct failure
+direction: a resolved incident should not leave a tenant permanently unable to run agents.
 
 ---
 

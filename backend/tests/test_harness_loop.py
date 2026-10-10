@@ -18,6 +18,7 @@ from app.core.config import settings
 from app.core.database import get_session_factory
 from app.harness.budget import RunBudgetExceeded
 from app.harness.context import ExecutionContext
+from app.harness.halt import CircuitBreakerOpen, RunHaltedError
 from app.harness.loop import run_agent
 from app.harness.runner import (
     AgentBudgetExceededError,
@@ -429,3 +430,154 @@ async def test_a_failed_run_keeps_its_usage_on_the_record(client: AsyncClient) -
     assert run.status == AgentRunStatus.FAILED
     assert run.tokens_used == 150
     assert run.cost_usd > 0
+
+
+# ============================================================
+# 6. Kill switch and circuit breaker (OWASP ASI08, ASI10)
+# ============================================================
+
+
+@pytest.mark.asyncio
+async def test_an_operator_halt_stops_the_run_and_is_retryable(
+    client: AsyncClient,
+) -> None:
+    """An operator halt must be RETRYABLE: releasing the switch and re-queuing is the
+    intended response, so TERMINAL would silently discard the work."""
+    org_id, proj_id = await _setup(client, "c6_halted@example.com", "C6Halted")
+    tool_gateway, registry, gateway = _deps()
+    runner = FakeRunner(calls=[("read_tree", {"path": "."})])
+
+    async def halted() -> str:
+        return "Operator halted agent execution."
+
+    session_factory = get_session_factory()
+    async with session_factory() as db:
+        with pytest.raises(RunHaltedError):
+            await run_agent(
+                db,
+                context=_context(org_id, proj_id),
+                definition=_definition(),
+                prompt="go",
+                runner=runner,
+                gateway=gateway,
+                tool_gateway=tool_gateway,
+                registry=registry,
+                halt_check=halted,
+            )
+        await db.commit()
+        run = (await db.execute(select(AgentRun))).scalar_one()
+
+    assert run.status == AgentRunStatus.FAILED
+    assert run.failure_class == FailureClass.RETRYABLE
+
+
+@pytest.mark.asyncio
+async def test_the_halt_check_is_consulted_before_every_tool_call(
+    client: AsyncClient,
+) -> None:
+    """A run can last minutes. An operator engaging the switch must not wait for the current
+    step, so the check runs per tool call rather than once per run."""
+    org_id, proj_id = await _setup(client, "c6_haltmid@example.com", "C6HaltMid")
+    tool_gateway, registry, gateway = _deps()
+    runner = FakeRunner(calls=[("read_tree", {"path": "."}), ("read_tree", {"path": "."})])
+
+    checks = 0
+
+    async def engage_on_second_call() -> str | None:
+        nonlocal checks
+        checks += 1
+        return "halted" if checks >= 2 else None
+
+    session_factory = get_session_factory()
+    async with session_factory() as db:
+        with pytest.raises(RunHaltedError):
+            await run_agent(
+                db,
+                context=_context(org_id, proj_id),
+                definition=_definition(),
+                prompt="go",
+                runner=runner,
+                gateway=gateway,
+                tool_gateway=tool_gateway,
+                registry=registry,
+                halt_check=engage_on_second_call,
+            )
+        await db.commit()
+
+    assert checks >= 2
+
+
+@pytest.mark.asyncio
+async def test_repeated_tool_failures_open_the_circuit_breaker(
+    client: AsyncClient,
+) -> None:
+    """ASI08: a run failing on every turn is a cascade in progress. Terminal, because
+    re-queuing immediately would repeat the same loop."""
+    org_id, proj_id = await _setup(client, "c6_breaker@example.com", "C6Breaker")
+    _, _, gateway = _deps()
+
+    class FailingTool(Tool):
+        name = "read_tree"
+        description = "always fails"
+        kind = ToolKind.READ
+        required_capability = READ_CAP
+        input_schema = Args
+
+        async def execute(
+            self, context: ExecutionContext, arguments: BaseModel
+        ) -> ToolResult:
+            return ToolResult(output="", error="disk unavailable")
+
+    breaker_registry = ToolRegistry()
+    breaker_registry.register(FailingTool())
+    runner = FakeRunner(calls=[("read_tree", {"path": "."})] * 8)
+
+    session_factory = get_session_factory()
+    async with session_factory() as db:
+        with pytest.raises(CircuitBreakerOpen):
+            await run_agent(
+                db,
+                context=_context(org_id, proj_id),
+                definition=_definition(),
+                prompt="go",
+                runner=runner,
+                gateway=gateway,
+                tool_gateway=ToolGateway(breaker_registry),
+                registry=breaker_registry,
+                circuit_breaker_threshold=3,
+            )
+        await db.commit()
+        run = (await db.execute(select(AgentRun))).scalar_one()
+
+    assert run.failure_class == FailureClass.TERMINAL
+
+
+@pytest.mark.asyncio
+async def test_a_policy_denial_does_not_count_toward_the_breaker(
+    client: AsyncClient,
+) -> None:
+    """A denial is the gateway working correctly, not the agent failing. If it counted, a
+    correctly-refused agent would trip the breaker and be reported as broken."""
+    org_id, proj_id = await _setup(client, "c6_denial@example.com", "C6Denial")
+    tool_gateway, registry, gateway = _deps()
+    runner = FakeRunner(calls=[("read_tree", {})] * 4)
+
+    session_factory = get_session_factory()
+    async with session_factory() as db:
+        # Every call is denied, so this raises on the first one regardless of the breaker.
+        with pytest.raises(ToolDeniedError):
+            await run_agent(
+                db,
+                context=_context(org_id, proj_id, granted=frozenset()),
+                definition=_definition(),
+                prompt="go",
+                runner=runner,
+                gateway=gateway,
+                tool_gateway=tool_gateway,
+                registry=registry,
+                circuit_breaker_threshold=2,
+            )
+        await db.commit()
+        run = (await db.execute(select(AgentRun))).scalar_one()
+
+    assert run.failure_class == FailureClass.REFUSED

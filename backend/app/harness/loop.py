@@ -18,6 +18,7 @@ from app.agents.base import AgentDefinition
 from app.core.config import settings
 from app.harness.budget import BudgetTracker, RunBudgetExceeded
 from app.harness.context import ExecutionContext
+from app.harness.halt import CircuitBreaker, CircuitBreakerOpen, RunHaltedError
 from app.harness.run import finish_agent_run, record_run_metadata, start_agent_run
 from app.harness.runner import (
     AgentBudgetExceededError,
@@ -51,6 +52,8 @@ async def run_agent(
     approved_plan: ApprovedPlan | None = None,
     on_result: Callable[[AgentRunResult], Awaitable[None]] | None = None,
     skill_versions: dict[str, str] | None = None,
+    halt_check: Callable[[], Awaitable[str | None]] | None = None,
+    circuit_breaker_threshold: int | None = None,
 ) -> AgentRun:
     run = await start_agent_run(db, context, definition)
     # Bind the run id onto the context so tool calls and the gateway can prove they belong to it.
@@ -69,15 +72,32 @@ async def run_agent(
         # Refuse before the call if the organization is already over its spend budget (FR-074).
         await gateway.ensure_budget(db, context.organization_id)
         specs = _tool_specs(definition, registry)
+        breaker = CircuitBreaker(
+            circuit_breaker_threshold
+            if circuit_breaker_threshold is not None
+            else settings.AGENT_CIRCUIT_BREAKER_THRESHOLD
+        )
 
         async def execute_tool(name: str, arguments: dict) -> str:
+            # Checked before every tool call, not once per run: a run can last minutes, and an
+            # operator engaging the switch must not have to wait for the current step to finish.
+            if halt_check is not None:
+                reason = await halt_check()
+                if reason is not None:
+                    raise RunHaltedError(reason)
             budget.check_wall_clock()
             budget.record_tool_call()
             result = await tool_gateway.execute(
                 db, run, context, name, arguments, approved_plan=approved_plan
             )
             if result.denied:
+                # A policy denial is the gateway working correctly, not the agent failing, so
+                # it must not count toward the breaker.
                 raise ToolDeniedError(result.error or f"Tool {name!r} was denied.")
+            if result.is_error:
+                breaker.record_failure()
+            else:
+                breaker.record_success()
             return _observation(result)
 
         async def record_usage(result: AgentRunResult) -> None:
@@ -119,6 +139,16 @@ async def run_agent(
         raise
     except ToolDeniedError as exc:
         await _fail(db, run, FailureClass.REFUSED, str(exc), budget)
+        raise
+    except RunHaltedError as exc:
+        # An operator stopped this deliberately. RETRYABLE because re-queueing once the switch
+        # is released is exactly the right response; TERMINAL would silently discard the work.
+        await _fail(db, run, FailureClass.RETRYABLE, str(exc), budget)
+        raise
+    except CircuitBreakerOpen as exc:
+        # The agent is stuck, not throttled. Retrying the same run immediately would repeat
+        # the loop, so this is terminal.
+        await _fail(db, run, FailureClass.TERMINAL, str(exc), budget)
         raise
     except TimeoutError as exc:
         await _fail(db, run, FailureClass.TERMINAL, "Run exceeded its wall-clock budget.", budget)

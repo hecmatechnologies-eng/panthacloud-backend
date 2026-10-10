@@ -118,6 +118,12 @@ class Settings(BaseSettings):
     MODEL_BUDGET_THROTTLE_FRACTION: float = 0.95
     MODEL_BUDGET_THROTTLED_MAX_OUTPUT_TOKENS: int = 256
 
+    # Agent loop guardrails (OWASP ASI08/ASI10). Consecutive *failed* tool calls that stop a
+    # run outright; a run that succeeds in between is making progress and is never counted out.
+    # Kept low because a healthy agent rarely fails twice in a row, while a confused one fails
+    # on every turn and burns budget until the wall-clock limit catches it.
+    AGENT_CIRCUIT_BREAKER_THRESHOLD: int = 5
+
     # Embedding plane (step B6). "gemini" uses the real semantic embeddings; "deterministic" is the
     # lexical test/dev double. The dimension is stored on each KnowledgeBase, so a change here
     # affects only newly created bases.
