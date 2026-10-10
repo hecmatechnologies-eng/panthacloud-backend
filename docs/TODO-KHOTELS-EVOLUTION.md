@@ -6,8 +6,10 @@
 > no new tool protocol, no import of `app/agents/` into `app/runtime/`. Every item below is
 > additive and sits on an existing seam.
 >
-> Companions: `TODO-DEMO-READINESS.md` (embeddings, agent API, frontend slices) and
-> `TODO-INTEGRATION.md` (the L0–L6 build plan — see §4 for what this document removes).
+> Companions: `TODO-DEMO-READINESS.md` (embeddings, agent API, frontend slices),
+> `TODO-INTEGRATION.md` (the L0–L6 build plan — see §4 for what this document removes),
+> and `standards-alignment.md` (position against OWASP LLM/Agentic Top 10 and NIST; gap G3
+> there — knowledge ingestion integrity — applies directly to this work).
 
 ---
 
@@ -132,11 +134,17 @@ detail modal.
 The standalone HTML prototype at `frontend/khotels-prototype/khotels-guest-desk.html` is the
 reference for layout and behaviour.
 
-### K7 — Runtime evals · ~1 day
+### K7 — Runtime evals · ~1 day · 🔴 **raised to G1 by the standards assessment**
 
-Closes gap #5 from the architecture assessment: `app/evals/` covers **only** `website_analyst`
-today. Add a case type for the runtime assistant — grounding and citation accuracy, refusal
-when retrieval is weak, and adherence to per-tenant `system_instructions`.
+Closes the only 🔴 **assurance** gap in `standards-alignment.md`. `app/evals/` covers **only**
+`website_analyst` today, and the 9 existing cases are **not referenced in
+`.github/workflows/ci.yml`** — so they are not a gate.
+
+NIST's March 2026 automated-benchmark work is expected to define how agent assurance is
+measured. K3–K7 are all guest-facing behaviour with no regression detection behind them.
+
+Add a runtime case type: grounding and citation accuracy, refusal when retrieval is weak,
+and adherence to per-tenant `system_instructions`. **Wire evals into CI as a gate.**
 
 ---
 
@@ -177,6 +185,11 @@ Recorded so these do not creep back in:
   action? Answer determines whether K1 alone suffices or K5 grows a read-only tool.
 - Should the 15-minute threshold be **per-org configurable**? The prototype hard-codes 15.
   If yes, it is a field on the existing per-tenant assistant/policy surface — not a new model.
+- **Knowledge ingestion integrity** (`standards-alignment.md` G3): nothing verifies document
+  provenance. This got *worse* when Item 1 landed — under hash embeddings a poisoned document
+  was only retrievable by keyword match; under real semantic embeddings it is retrievable by
+  *meaning*. Every guest answer for K Hotels comes from that corpus. Worth deciding whether a
+  document should require tenant confirmation before it becomes `READY`.
 - Multi-tenant test coverage: K3–K5 all touch tenancy. Confirm the isolation tests cover the
   new surfaces before shipping.
 
