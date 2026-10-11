@@ -375,7 +375,9 @@ async def test_rbac_permissions(client: AsyncClient) -> None:
         json={"email": member_email, "role": "MEMBER"},
     )
 
-    # MEMBER CAN read, update, and reset
+    # MEMBER can read. Assistant configuration carries the tenant's grounding contract —
+    # it decides what every guest is told — so it is owner/admin only
+    # (standards-alignment.md G3 remediation).
     resp = await client.get(
         f"/api/v1/organizations/{org_id}/projects/{project_id}/assistant",
         headers={"Authorization": f"Bearer {member_token}"},
@@ -387,13 +389,13 @@ async def test_rbac_permissions(client: AsyncClient) -> None:
         headers={"Authorization": f"Bearer {member_token}"},
         json={"name": "Member Updated Bot"},
     )
-    assert resp.status_code == 200
+    assert resp.status_code == 403
 
     resp = await client.delete(
         f"/api/v1/organizations/{org_id}/projects/{project_id}/assistant",
         headers={"Authorization": f"Bearer {member_token}"},
     )
-    assert resp.status_code == 200
+    assert resp.status_code == 403
 
     # Register and invite ADMIN
     admin_resp = await client.post(

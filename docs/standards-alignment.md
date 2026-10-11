@@ -297,12 +297,27 @@ from, and nobody reviewing that corpus could tell who added what.
 set at creation from the acting user and exposed on `KnowledgeDocumentRead`. Attribution is the
 precondition for any review process; it does not impose one.
 
-**Still open, and deliberately not decided here:** whether `KNOWLEDGE_CREATE` should remain
-with `MEMBER`, and whether ingestion should require confirmation before `READY`. Both are
-product decisions that change who can do their day job, so they belong to the team rather than
-to a security fix. The tests in `test_corpus_attribution.py` assert the premises — that MEMBER
-holds the permission, that no review state exists, that retrieval reads chunks — so if either
-decision is taken the reasoning here fails loudly instead of going stale.
+**Policy decided by the team, and now enforced:** knowledge upload and assistant
+configuration are owner/admin only. The org account creator is the owner; they invite members,
+who get views according to role.
+
+`ROLE_PERMISSIONS[RoleEnum.MEMBER]` previously granted `KNOWLEDGE_CREATE`, `KNOWLEDGE_DELETE`,
+`ASSISTANT_CREATE`, `ASSISTANT_UPDATE` and `ASSISTANT_DELETE` — so the code permitted much more
+than the stated workflow. A member could rewrite the grounding contract that every guest is
+answered through, and could delete documents from the corpus.
+
+All five are removed from `MEMBER`. `KNOWLEDGE_VIEW` and `ASSISTANT_VIEW` stay, so a member is
+not quietly demoted to a viewer; the developing permissions members actually need (project,
+integration, repository) are untouched.
+
+`KNOWLEDGE_DELETE` was removed alongside `KNOWLEDGE_CREATE` rather than left alone: a member
+who cannot add a document but could remove one would have strictly more destructive reach than
+one who could do both, which is not a coherent role. That was the one inference drawn here, and
+it is a one-line revert if the team wants members to keep delete.
+
+`tests/test_corpus_permissions.py` pins the whole matrix, and
+`tests/test_corpus_attribution.py` pins the remaining premise: that no review state exists, so
+an upload goes live immediately.
 
 ### G4 — Human-factor monitoring · 🟠 Medium
 

@@ -78,14 +78,48 @@ class TestIngestionRecordsTheUploader:
         assert "else None" in source
 
 
-class TestThePolicyFactsThisRestsOn:
-    """These are the premises of G3. If one changes, the gap and this reasoning change with it."""
+class TestThePolicyThisRestsOn:
+    """These are the premises of G3's remediation. They are now a decision rather than an
+    observation, so they are asserted to stop drifting in either direction."""
 
-    def test_the_lowest_role_can_create_knowledge(self) -> None:
+    def test_the_owner_and_admin_manage_the_corpus(self) -> None:
         from app.core.permissions import ROLE_PERMISSIONS, Permission
         from app.models.membership import RoleEnum
 
-        assert Permission.KNOWLEDGE_CREATE in ROLE_PERMISSIONS[RoleEnum.MEMBER]
+        for role in (RoleEnum.OWNER, RoleEnum.ADMIN):
+            perms = ROLE_PERMISSIONS[role]
+            assert Permission.KNOWLEDGE_CREATE in perms, f"{role.name} must be able to upload"
+            assert Permission.ASSISTANT_UPDATE in perms, f"{role.name} configures the assistant"
+
+    def test_a_member_may_not_extend_the_corpus_guests_are_answered_from(self) -> None:
+        """The remediation: knowledge upload and assistant setup are owner/admin only, because a
+        READY document is immediately retrievable and semantically reachable."""
+        from app.core.permissions import ROLE_PERMISSIONS, Permission
+        from app.models.membership import RoleEnum
+
+        perms = ROLE_PERMISSIONS[RoleEnum.MEMBER]
+        assert Permission.KNOWLEDGE_CREATE not in perms
+        assert Permission.KNOWLEDGE_DELETE not in perms
+        assert Permission.ASSISTANT_CREATE not in perms
+        assert Permission.ASSISTANT_UPDATE not in perms
+        assert Permission.ASSISTANT_DELETE not in perms
+
+    def test_a_member_still_gets_the_read_only_views(self) -> None:
+        """Restricting mutation must not silently turn a member into a viewer."""
+        from app.core.permissions import ROLE_PERMISSIONS, Permission
+        from app.models.membership import RoleEnum
+
+        perms = ROLE_PERMISSIONS[RoleEnum.MEMBER]
+        assert Permission.KNOWLEDGE_VIEW in perms
+        assert Permission.ASSISTANT_VIEW in perms
+
+    def test_a_viewer_can_still_see_the_corpus(self) -> None:
+        from app.core.permissions import ROLE_PERMISSIONS, Permission
+        from app.models.membership import RoleEnum
+
+        perms = ROLE_PERMISSIONS[RoleEnum.VIEWER]
+        assert Permission.KNOWLEDGE_VIEW in perms
+        assert Permission.KNOWLEDGE_CREATE not in perms
 
     def test_uploading_makes_a_document_retrievable_without_review(self) -> None:
         """The document goes straight to READY. A review gate would change this, so this test

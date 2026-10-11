@@ -126,13 +126,17 @@ ROLE_PERMISSIONS: dict[RoleEnum, set[Permission]] = {
         Permission.REPOSITORY_INSPECT,
         Permission.REPOSITORY_DISCOVERY_VIEW,
         Permission.REPOSITORY_DISCOVERY_CREATE,
+        # Knowledge and assistant configuration are OWNER/ADMIN only. A document goes straight
+        # to READY and is then retrievable, and under semantic embeddings a poisoned one is
+        # reachable by meaning rather than keyword — so a member who could upload could change
+        # what the tenant's guests are told. A member keeps read access; mutating the corpus
+        # the assistant answers from is an owner/admin decision.
+        #
+        # DELETE is removed alongside CREATE deliberately: a member who cannot add a document
+        # but could remove one would have strictly more destructive reach than one who could do
+        # both, which is not a coherent role.
         Permission.KNOWLEDGE_VIEW,
-        Permission.KNOWLEDGE_CREATE,
-        Permission.KNOWLEDGE_DELETE,
         Permission.ASSISTANT_VIEW,
-        Permission.ASSISTANT_CREATE,
-        Permission.ASSISTANT_UPDATE,
-        Permission.ASSISTANT_DELETE,
     },
     RoleEnum.VIEWER: {
         Permission.ORG_VIEW,
