@@ -616,11 +616,15 @@ async def test_answer_is_grounded_in_the_tenants_document(client: AsyncClient) -
     assert data["citations"][0]["filename"] == "faq.txt"
 
     # FR-098: the retrieved chunk is fenced as data in a user turn, never in the instruction region.
+    # The fence is app.core.prompting.fence_untrusted, shared with the engineering plane.
     prompt = _FAKE["provider"].calls[-1].messages
     assert prompt[0].role == "system"
     assert "30 days" not in prompt[0].content
     assert prompt[-1].role == "user"
-    assert "CONTEXT" in prompt[-1].content
+    assert "<<<BEGIN UNTRUSTED CONTENT>>>" in prompt[-1].content
+    assert prompt[-1].content.index("<<<BEGIN UNTRUSTED CONTENT>>>") < prompt[-1].content.index(
+        "30 days"
+    )
     assert "30 days" in prompt[-1].content
     assert "QUESTION: What is the refund policy?" in prompt[-1].content
 
