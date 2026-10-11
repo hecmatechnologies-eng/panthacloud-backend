@@ -553,6 +553,50 @@ async def test_repeated_tool_failures_open_the_circuit_breaker(
 
 
 @pytest.mark.asyncio
+async def test_benign_misses_do_not_open_the_circuit_breaker(
+    client: AsyncClient,
+) -> None:
+    """The false-halt case. An agent that explores before it reads hits many missing paths
+    legitimately; counting those would stop a healthy run."""
+    org_id, proj_id = await _setup(client, "c6_benign@example.com", "C6Benign")
+    _, _, gateway = _deps()
+
+    class MissingFileTool(Tool):
+        name = "read_tree"
+        description = "reports a missing path"
+        kind = ToolKind.READ
+        required_capability = READ_CAP
+        input_schema = Args
+
+        async def execute(
+            self, context: ExecutionContext, arguments: BaseModel
+        ) -> ToolResult:
+            return ToolResult(output="", error="File not found: app/layout.tsx.", benign=True)
+
+    miss_registry = ToolRegistry()
+    miss_registry.register(MissingFileTool())
+    runner = FakeRunner(calls=[("read_tree", {"path": "."})] * 10)
+
+    session_factory = get_session_factory()
+    async with session_factory() as db:
+        await run_agent(
+            db,
+            context=_context(org_id, proj_id),
+            definition=_definition(),
+            prompt="go",
+            runner=runner,
+            gateway=gateway,
+            tool_gateway=ToolGateway(miss_registry),
+            registry=miss_registry,
+            circuit_breaker_threshold=3,
+        )
+        await db.commit()
+        run = (await db.execute(select(AgentRun))).scalar_one()
+
+    assert run.status == AgentRunStatus.COMPLETED, "benign misses must not trip the breaker"
+
+
+@pytest.mark.asyncio
 async def test_a_policy_denial_does_not_count_toward_the_breaker(
     client: AsyncClient,
 ) -> None:

@@ -204,7 +204,7 @@ class IntegrationPipeline:
                     from app.harness.context import ExecutionContext
                     from app.harness.runner import PydanticAIRunner
                     from app.services.integration.coder import execute_coding_agent
-                    from app.tools.gateway import ApprovedPlan, ToolGateway
+                    from app.tools.gateway import ApproverKind, ApprovedPlan, ToolGateway
                     from app.tools.registry import registry as global_registry
 
                     context = ExecutionContext(
@@ -220,7 +220,15 @@ class IntegrationPipeline:
                         workspace_reference=str(sandbox_path),
                     )
                     approved_plan = ApprovedPlan(
-                        plan_id=str(run_id), approved_by=user_id or org_id
+                        plan_id=str(run_id),
+                        approved_by=user_id or org_id,
+                        # An unattended background run has no person behind it. Recording only
+                        # the UUID made the organisation id indistinguishable from a user id in
+                        # the audit trail, which overstated who authorised a write to a
+                        # customer's repository.
+                        approver_kind=(
+                            ApproverKind.HUMAN if user_id else ApproverKind.POLICY
+                        ),
                     )
                     tool_gateway = ToolGateway(global_registry)
                     runner = PydanticAIRunner()

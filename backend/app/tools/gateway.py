@@ -7,6 +7,8 @@ are redacted before they reach the run record.
 """
 
 import asyncio
+import enum
+import json
 import logging
 import re
 import time
@@ -51,12 +53,30 @@ _TOKEN_SPLIT = re.compile(r"[^a-zA-Z0-9]+|(?<=[a-z0-9])(?=[A-Z])")
 _REDACTED = "[REDACTED]"
 
 
+class ApproverKind(str, enum.Enum):
+    """Who authorised a write. Recorded so an unattended run is visibly distinct from a
+    person's decision; a UUID alone cannot tell them apart."""
+
+    HUMAN = "human"
+    POLICY = "policy"
+
+
 @dataclass(frozen=True, slots=True)
 class ApprovedPlan:
-    """Proof that a human approved the plan a write tool acts on (FR-066)."""
+    """Proof that a write tool's plan was authorised before it acted (FR-066).
+
+    This is a *runtime gate*: without one, a write tool is denied. It is also recorded onto
+    the tool call, because ASI09 asks for an immutable record of what was authorised rather
+    than only what ran.
+    """
 
     plan_id: str
     approved_by: uuid.UUID
+    approver_kind: ApproverKind = ApproverKind.HUMAN
+
+    def __post_init__(self) -> None:
+        if self.approver_kind is ApproverKind.HUMAN and self.approved_by is None:
+            raise ValueError("a human approval must name the user who gave it")
 
 
 class ToolGateway:
@@ -103,7 +123,7 @@ class ToolGateway:
         try:
             result = await tool.execute(context, validated)
         except ToolError as exc:
-            result = ToolResult(error=str(exc))
+            result = ToolResult(error=str(exc), benign=exc.benign)
         except Exception:
             logger.exception("Tool %r raised an unexpected exception.", tool_name)
             result = ToolResult(error="The tool failed unexpectedly.")
@@ -117,6 +137,9 @@ class ToolGateway:
             outcome="error" if result.is_error else "ok",
             duration_ms=duration_ms,
             error_message=result.error,
+            # Recorded on every call, not only successful writes: a denied or failed write was
+            # still authorised by something, and that is part of the audit trail.
+            approved_plan=approved_plan,
         )
         return result
 
@@ -163,6 +186,7 @@ class ToolGateway:
         outcome: str,
         duration_ms: int,
         error_message: str | None = None,
+        approved_plan: ApprovedPlan | None = None,
     ) -> AgentToolCall:
         """Append to the run's tool-call log under the gateway's write lock (see ``__init__``)."""
         async with self._record_lock:
@@ -174,6 +198,7 @@ class ToolGateway:
                 outcome=outcome,
                 duration_ms=duration_ms,
                 error_message=error_message,
+                approved_plan=approved_plan,
             )
 
 
@@ -186,11 +211,13 @@ async def record_tool_call(
     outcome: str,
     duration_ms: int,
     error_message: str | None = None,
+    approved_plan: ApprovedPlan | None = None,
 ) -> AgentToolCall:
     """Append one ordered entry to the run's tool-call log (FR-069, FR-090).
 
     Redaction happens here, not at the call site, so no caller can persist a secret by forgetting
-    to wrap its arguments.
+    to wrap its arguments. Approval provenance is recorded here for the same reason: it is the
+    one place every tool call passes through.
     """
     call = AgentToolCall(
         agent_run_id=run.id,
@@ -200,6 +227,11 @@ async def record_tool_call(
         outcome=outcome,
         duration_ms=duration_ms,
         error_message=error_message,
+        approved_by=approved_plan.approved_by if approved_plan is not None else None,
+        approver_kind=(
+            approved_plan.approver_kind.value if approved_plan is not None else None
+        ),
+        approved_plan_id=approved_plan.plan_id if approved_plan is not None else None,
     )
     db.add(call)
     await db.flush()
@@ -228,6 +260,10 @@ async def record_tool_call(
                 }
                 await client.publish(channel, json.dumps(payload))
         except Exception:
+            # Debug, not warning: the call is already recorded in AgentToolCall, so a failed
+            # publish degrades the live feed rather than losing the audit trail. That said, a
+            # NameError here used to be swallowed silently - every tool-call event failed to
+            # publish and the Studio simply showed no activity.
             logger.debug("Could not publish tool call event to Redis", exc_info=True)
 
     return call

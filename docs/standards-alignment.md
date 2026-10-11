@@ -314,20 +314,30 @@ the audit record a reviewer approves against, so both now carry `min_length=1` �
 output validation rejects the turn and the model retries, instead of storing an unverifiable
 claim.
 
-### G7 — `approved_by` can be an organisation · 🟠 Medium · *open*
+### G7 — Approval provenance was never recorded · ✅ **Closed 2026-10-11**
 
-```python
-# pipeline.py:222-224
-approved_plan = ApprovedPlan(plan_id=str(run_id), approved_by=user_id or org_id)
-```
+Originally recorded as a narrow issue — `approved_by=user_id or org_id` could record an
+organisation where a person was meant. Investigating it properly found the gap was larger.
 
-`ApprovedPlan` documents itself as *"proof that a human approved the plan a write tool acts
-on"*, but the fallback records `org_id` — an organisation, not a person. ASI09 asks for an
-immutable record of what was approved; this records that approval happened, but not reliably
-*by whom*.
+**`ApprovedPlan` was never persisted at all.** It gated a write tool at runtime
+(`gateway.py:131`) and existed in memory only, so a write call in the run log was
+indistinguishable from one the agent performed on its own authority. The audit trail recorded
+*what ran*, never *who authorised it*.
 
-**Remedy:** make the approver mandatory on the write path, or split the type so an automated
-approval is visibly distinct from a human one.
+**Closed by migration `0031_tool_call_approval`**, which adds `approved_by`, `approver_kind`
+and `approved_plan_id` to `agent_tool_calls`, populated in `record_tool_call` — the single
+point every tool call passes through, for the same reason redaction lives there.
+
+`ApproverKind` distinguishes `human` from `policy`. The ARQ task path genuinely runs without
+a user (`tasks.py:65`), so making the approver mandatory would have broken it; recording the
+kind instead means an unattended run is visibly distinct from a person clicking approve. A
+`HUMAN` approval must name someone — validated, not merely documented.
+
+Reads record a null approval, because reads are auto-authorised by capability and writing one
+would imply a review that never happened. Denied writes *do* record it: the attempt was still
+authorised by something, and that belongs in the trail.
+
+Verified on real Postgres: upgrade from empty, columns present, downgrade, upgrade again.
 
 ### G8 — The live coding-agent path is untested · 🟢 **Closed 2026-10-11**
 

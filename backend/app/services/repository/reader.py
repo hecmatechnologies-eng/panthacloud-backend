@@ -88,7 +88,16 @@ def _ripgrep_path() -> str | None:
 
 
 class RepositoryReaderError(Exception):
-    """A read failure whose message is safe and useful to show the model."""
+    """A read failure whose message is safe and useful to show the model.
+
+    ``benign=True`` marks "this path is not here", which is a normal answer while exploring a
+    repository rather than a malfunction. It propagates to the tool layer so the harness's
+    circuit breaker does not count ordinary misses as an agent getting stuck.
+    """
+
+    def __init__(self, message: str, *, benign: bool = False) -> None:
+        super().__init__(message)
+        self.benign = benign
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,7 +168,7 @@ class LocalWorkspaceReader:
     def _list_tree(self, path: str, offset: int, max_entries: int) -> TreeListing:
         base = self._resolve(path)
         if not base.exists() or not base.is_dir():
-            raise RepositoryReaderError(f"Not a directory: {path or '.'}.")
+            raise RepositoryReaderError(f"Not a directory: {path or '.'}.", benign=True)
 
         entries: list[TreeEntry] = []
         for current_root, dirs, files in os.walk(base):
@@ -182,7 +191,7 @@ class LocalWorkspaceReader:
     def _read_file(self, path: str, offset: int, limit: int) -> FileContent:
         target = self._resolve(path)
         if not target.exists() or not target.is_file():
-            raise RepositoryReaderError(f"File not found: {path}.")
+            raise RepositoryReaderError(f"File not found: {path}.", benign=True)
         try:
             text = target.read_text(encoding="utf-8")
         except UnicodeDecodeError as exc:

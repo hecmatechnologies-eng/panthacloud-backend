@@ -26,7 +26,17 @@ class ToolError(Exception):
 
     Raise this with a recovery hint — ``"File not found: components/App.tsx. Did you mean
     src/components/App.tsx?"`` — never a stack trace.
+
+    ``benign=True`` marks the failure as *information rather than breakage*: the tool ran
+    correctly and the answer is "no". A file that does not exist is a legitimate result of
+    exploring a repository, not a sign the agent is stuck. The harness's circuit breaker
+    excludes benign failures so a normal search cannot trip it, while a tool that is truly
+    malfunctioning still does.
     """
+
+    def __init__(self, message: str, *, benign: bool = False) -> None:
+        super().__init__(message)
+        self.benign = benign
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +47,9 @@ class ToolResult:
     error: str | None = None
     # True when the gateway refused the call on policy grounds, not because the tool failed.
     denied: bool = False
+    # True when ``error`` describes a legitimate "not found" rather than a malfunction.
+    # See ToolError for why this exists.
+    benign: bool = False
 
     @property
     def is_error(self) -> bool:

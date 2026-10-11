@@ -127,14 +127,17 @@ class ApplyPatchTool(_WorkspaceTool):
         try:
             current_content = self._provider.read_file(sandbox_path, args.path)
         except FileNotFoundError:
-            raise ToolError(f"File '{args.path}' does not exist to patch. Use write_file instead.") from None
+            raise ToolError(
+                f"File '{args.path}' does not exist to patch. Use write_file instead.", benign=True
+            ) from None
         except SandboxSecurityError as exc:
             raise ToolError(f"Security refusal: {exc}") from exc
 
         count = current_content.count(args.target)
         if count == 0:
             raise ToolError(
-                f"Target block not found in '{args.path}'. Check spacing and exact character matches."
+                f"Target block not found in '{args.path}'. Check spacing and exact character matches.",
+                benign=True,
             )
         if count > 1:
             raise ToolError(

@@ -123,5 +123,11 @@ class AgentToolCall(BaseModel):
     outcome: Mapped[str] = mapped_column(String(20), nullable=False)
     duration_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Approval provenance, recorded only for write tools. ASI09 asks for an immutable record of
+    # what was authorised, not just what ran; without these the write tool call is
+    # indistinguishable from one the agent performed on its own authority.
+    approved_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    approver_kind: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    approved_plan_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     run: Mapped["AgentRun"] = relationship("AgentRun", back_populates="tool_calls")

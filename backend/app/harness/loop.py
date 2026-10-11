@@ -95,9 +95,12 @@ async def run_agent(
                 # A policy denial is the gateway working correctly, not the agent failing, so
                 # it must not count toward the breaker.
                 raise ToolDeniedError(result.error or f"Tool {name!r} was denied.")
-            if result.is_error:
+            if result.is_error and not result.benign:
                 breaker.record_failure()
             else:
+                # A benign failure ("no such file") is the tool working correctly: the agent
+                # explored, got a real answer, and may continue on the information. Counting it
+                # would halt any agent that searches before it reads.
                 breaker.record_success()
             return _observation(result)
 
@@ -148,7 +151,14 @@ async def run_agent(
         raise
     except CircuitBreakerOpen as exc:
         # The agent is stuck, not throttled. Retrying the same run immediately would repeat
-        # the loop, so this is terminal.
+        # the loop, so this is terminal. Logged so a halt is visible rather than only inferable
+        # from a failed run.
+        logger.warning(
+            "Circuit breaker tripped for agent %s run %s: %s",
+            definition.name,
+            run.id,
+            exc,
+        )
         await _fail(db, run, FailureClass.TERMINAL, str(exc), budget)
         raise
     except TimeoutError as exc:

@@ -1,6 +1,6 @@
-"""Read-only repository tools (FR-064, FR-067, FR-070; AGENT-ARCHITECTURE §3.1).
+﻿"""Read-only repository tools (FR-064, FR-067, FR-070; AGENT-ARCHITECTURE Â§3.1).
 
-`read_tree`, `read_file` and `search_code` — the analyst's entire view of a customer repository.
+`read_tree`, `read_file` and `search_code` â€” the analyst's entire view of a customer repository.
 Each resolves its reader from the trusted ``ExecutionContext``; none accepts a repository or path
 scope from the model. Outputs are bounded and signal truncation so the model can page.
 """
@@ -48,7 +48,7 @@ class _RepositoryTool(Tool):
         try:
             return self._resolve_reader(context)
         except RepositoryReaderError as exc:
-            raise ToolError(str(exc)) from exc
+            raise ToolError(str(exc), benign=exc.benign) from exc
 
 
 class ReadTreeTool(_RepositoryTool):
@@ -66,7 +66,7 @@ class ReadTreeTool(_RepositoryTool):
                 path=args.path, offset=args.offset, max_entries=args.max_entries
             )
         except RepositoryReaderError as exc:
-            raise ToolError(str(exc)) from exc
+            raise ToolError(str(exc), benign=exc.benign) from exc
         return ToolResult(
             output={
                 "entries": [
@@ -95,7 +95,7 @@ class ReadFileTool(_RepositoryTool):
                 path=args.path, offset=args.offset, limit=args.limit
             )
         except RepositoryReaderError as exc:
-            raise ToolError(str(exc)) from exc
+            raise ToolError(str(exc), benign=exc.benign) from exc
         return ToolResult(
             output={
                 "path": content.path,
@@ -122,7 +122,7 @@ class SearchCodeTool(_RepositoryTool):
                 query=args.query, offset=args.offset, max_results=args.max_results
             )
         except RepositoryReaderError as exc:
-            raise ToolError(str(exc)) from exc
+            raise ToolError(str(exc), benign=exc.benign) from exc
         return ToolResult(
             output={
                 "hits": [
