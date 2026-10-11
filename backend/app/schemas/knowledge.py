@@ -33,6 +33,10 @@ class KnowledgeDocumentRead(BaseModel):
     storage_url: str | None = None
     file_hash: str | None = None
     download_url: str | None = None
+    # Who added this to the corpus. Surfaced so a tenant can see the origin of anything their
+    # guests are answered from; null means seeded or imported, and is shown as unknown rather
+    # than omitted.
+    uploaded_by: uuid.UUID | None = None
     created_at: datetime
     updated_at: datetime
     chunks: list[KnowledgeChunkRead] = []

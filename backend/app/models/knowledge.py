@@ -127,6 +127,17 @@ class KnowledgeDocument(BaseModel):
         nullable=True,
         index=True,
     )
+    # Who added this to the corpus. A READY document is retrievable and, under semantic
+    # embeddings, reachable by meaning rather than keyword, so the guests of a tenant can be
+    # answered from it. KNOWLEDGE_CREATE is held by the lowest org role, which makes attribution
+    # a precondition for reviewing the corpus at all. Nullable: seeded or imported documents may
+    # have no acting user, and "unknown origin" should be visible rather than absent.
+    uploaded_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     metadata_: Mapped[dict[str, Any]] = mapped_column(
         "metadata",
         JSONType,

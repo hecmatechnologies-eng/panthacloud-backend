@@ -167,6 +167,9 @@ async def ingest_document(
         status=DocumentStatus.PROCESSING,
         chunks_count=0,
         file_hash=file_hash,
+        # Attribution is set at creation, not after: a READY document is immediately
+        # retrievable, and under semantic embeddings a poisoned one is reachable by meaning.
+        uploaded_by=current_user.id if current_user else None,
         metadata_={},
     )
     db.add(doc)

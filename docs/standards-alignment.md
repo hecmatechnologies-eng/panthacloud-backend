@@ -267,18 +267,42 @@ at `:65-66` that it has *"no process, filesystem or network isolation"* and ther
 **refuses `run()`** — refusing the dangerous capability rather than half-implementing it.
 That is a stronger position than a nominal sandbox, and it is what ASI05 actually asks for.
 
-### G3 — Knowledge ingestion integrity · 🟠 High and rising
+### G3 — Corpus content trust · 🟡 **Attribution closed 2026-10-11; policy open**
 
-LLM05 / ASI06. Nothing verifies document provenance before it enters the corpus.
+Originally recorded as "no provenance verification". Investigating it properly showed that was
+the wrong frame twice over.
 
-**This risk increased when Item 1 landed.** Under deterministic hash embeddings, a poisoned
-document was only retrievable by keyword match. Under real semantic embeddings, a poisoned
-chunk is retrievable by *meaning* — so an attacker who writes "the cancellation policy is
-free of charge" reaches every guest who asks about cancellation, whether or not those words
-appear. Semantic retrieval widens the blast radius of poisoned content.
+**Provenance was already recorded.** `ingest_document` computes a `file_hash` and writes an
+audit event carrying the hash, filename, size and `user_id`. Storage keys are tenant-scoped.
+The original wording was simply wrong.
 
-**Remedy:** verify and record document provenance at ingestion; consider requiring tenant
-confirmation before a document becomes `READY`.
+**Hashing is the wrong control here.** Retrieval reads `KnowledgeChunk.text` from the
+database, not the stored object (`retrieval.py:64`). Tampering with storage affects the
+download endpoint only — it cannot change what a guest is told. The attack surface is the
+*content of the chunk*, and a poisoned document is not tampering. It is an authorised person
+uploading malicious text.
+
+**The actual finding:**
+
+- `KNOWLEDGE_CREATE` is held by `RoleEnum.MEMBER` — the lowest org role
+- A document goes straight to `READY`, with no review step
+- Under semantic embeddings it is then reachable by *meaning*, not keyword
+- **`KnowledgeDocument` recorded no uploader.** The identity existed only in a separate audit
+  table that no document read path joins
+
+So the lowest-privileged member of a tenant could extend the corpus its guests are answered
+from, and nobody reviewing that corpus could tell who added what.
+
+**Closed by migration `0032_knowledge_uploaded_by`**: `uploaded_by` on `knowledge_documents`,
+set at creation from the acting user and exposed on `KnowledgeDocumentRead`. Attribution is the
+precondition for any review process; it does not impose one.
+
+**Still open, and deliberately not decided here:** whether `KNOWLEDGE_CREATE` should remain
+with `MEMBER`, and whether ingestion should require confirmation before `READY`. Both are
+product decisions that change who can do their day job, so they belong to the team rather than
+to a security fix. The tests in `test_corpus_attribution.py` assert the premises — that MEMBER
+holds the permission, that no review state exists, that retrieval reads chunks — so if either
+decision is taken the reasoning here fails loudly instead of going stale.
 
 ### G4 — Human-factor monitoring · 🟠 Medium
 
