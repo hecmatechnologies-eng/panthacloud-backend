@@ -34,6 +34,11 @@ os.environ["SECRET_ENCRYPTION_KEY"] = Fernet.generate_key().decode("ascii")
 os.environ["EMBEDDING_PROVIDER"] = "deterministic"
 os.environ["EMBEDDING_DIMENSION"] = "384"
 
+# The autonomous coding agent is off by default in the suite. It was previously disabled by an
+# `APP_ENV != "test"` check buried in the pipeline, which also meant the wiring around it was
+# never executed. Tests that need it force it on explicitly with a stubbed runner.
+os.environ["ENABLE_CODING_AGENT"] = "false"
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.models

@@ -236,13 +236,28 @@ The engineering plane is now **constrained, fenced, and stoppable**; it is not y
 
 ## 9. Gaps, ranked
 
-### G1 — Evals · 🔴 High
+### G1 — Evals · ✅ **Mechanism corrected, scope narrowed 2026-10-11**
 
-9 cases, engineering plane only, **not referenced in `.github/workflows/ci.yml`**. NIST's March
-2026 work on automated benchmark evaluation is expected to define how agent assurance is
-measured. The K Hotels work items K3–K7 are all runtime behaviour with no regression net.
+**Correction.** This was recorded as "evals are not wired into CI", and that was wrong.
+`pytest tests` already runs `tests/test_evals.py::test_eval_runs_green_over_the_corpus`, so
+the corpus *was* gating every build.
 
-**Remedy:** `TODO-KHOTELS-EVOLUTION.md` K7, moved ahead of K3.
+The accurate finding is narrower and sharper:
+
+```python
+report = await run_corpus(deterministic_analyze)   # model-free
+assert report.total_cost_usd == Decimal(0)          # no LLM calls
+```
+
+The corpus gates the **deterministic** analyzer only. `harness_analyzer` - the path that
+actually runs in production, through the model and the tool gateway - has **no CI coverage**.
+That is the real gap, and it is the one ADR-003 depends on.
+
+CI now also runs `test_evals.py` as a named step, so a corpus regression is reported as an
+eval failure rather than buried in pytest output.
+
+**Still open:** harness-path coverage. It needs a model key, so it belongs in a scheduled or
+manually-triggered job rather than a pull-request gate.
 
 ### G2 — Sandbox · ✅ **Closed since first assessment**
 
@@ -274,21 +289,32 @@ See §6. The conversion outcome model is the missing instrument.
 LLM10. The shadow-DOM widget is a real mitigation, but no test asserts that untrusted output
 cannot break out of it.
 
-### G6 — No evals for `coding_agent` · 🔴 High · *new*
+### G6 — No evals for `coding_agent` · 🟢 **Closed 2026-10-11**
 
 `app/evals/` covers `website_analyst` only. `coding_agent` — which carries `workspace.write`
-and whose output becomes a pull request into a customer's repository — has **no eval case
-type at all**. Assurance currently sits on the agent that cannot cause damage and not on the
-one that can.
+and whose output becomes a pull request into a customer's repository — had no eval case type.
+Assurance sat on the agent that cannot cause damage and not on the one that can.
 
-This is distinct from G1. G1 is *the gate does not run*; G6 is *the most dangerous agent has
-no cases to run*. Both are prerequisites for ADR-003.
+**Closed by `tests/test_coding_agent_evals.py`** (22 cases), asserting two families:
 
-**Remedy:** eval cases asserting the coder writes only to approved paths, respects the
-`ApprovedPlan`, reports every modified file in `CodingAgentOutput`, and leaves the repo
-parseable — plus the repair loop terminating rather than oscillating.
+- **Deterministic-generator invariants** — model-free, so they gate CI. Path containment
+  (no absolute paths, no traversal), idempotence (patching twice equals patching once, one
+  marker block), marker correctness, preservation of the customer's own code, no
+  credential-shaped strings, and that a file with no injection point is *refused* rather
+  than mangled.
+- **The agent's report against reality** — `CodingAgentOutput.files` must match what was
+  actually written. Under-reporting is the dangerous direction: a human approves a diff, so
+  the agent claiming one file while changing three defeats the approval.
 
-### G7 — `approved_by` can be an organisation · 🟠 Medium · *new*
+Deliberately **no golden-output snapshot**: it would fail on every acceptable rewrite while
+passing on one that corrupts the target, which is the opposite of useful.
+
+**Also found and fixed:** `GeneratedFileRecord` accepted empty `path` and `summary`. That is
+the audit record a reviewer approves against, so both now carry `min_length=1` — structured
+output validation rejects the turn and the model retries, instead of storing an unverifiable
+claim.
+
+### G7 — `approved_by` can be an organisation · 🟠 Medium · *open*
 
 ```python
 # pipeline.py:222-224
@@ -303,20 +329,24 @@ immutable record of what was approved; this records that approval happened, but 
 **Remedy:** make the approver mandatory on the write path, or split the type so an automated
 approval is visibly distinct from a human one.
 
-### G8 — The live coding-agent path is untested · 🟠 Medium · *new*
+### G8 — The live coding-agent path is untested · 🟢 **Closed 2026-10-11**
 
 ```python
-# pipeline.py:202
-if gateway is not None and getattr(settings, "ENABLE_CODING_AGENT", True) and settings.APP_ENV != "test":
+# was: pipeline.py:202
+if ... getattr(settings, "ENABLE_CODING_AGENT", True) and settings.APP_ENV != "test":
 ```
 
-The agent is **disabled whenever `APP_ENV == "test"`**. `execute_coding_agent` is covered in
-isolation, but the surrounding wiring — `ExecutionContext` construction, `ApprovedPlan`
-creation, gateway and registry assembly, and the deterministic fallback at `:245-250` — is
-not exercised by any test. That is precisely where a wiring mistake would ship unnoticed.
+**`ENABLE_CODING_AGENT` was never declared as a Settings field**, so `getattr(..., True)`
+always returned `True` and the switch was dead. The only thing disabling the agent was the
+`APP_ENV != "test"` clause — a blunt guard that also meant the entire surrounding wiring
+(context construction, `ApprovedPlan`, gateway assembly, the deterministic fallback) was
+never executed by any test.
 
-**Remedy:** cover the pipeline assembly with `ENABLE_CODING_AGENT=True` in tests, using a
-stubbed runner. The fallback path deserves a test on its own — it is the resilience story.
+**Closed by** declaring the setting, removing the `APP_ENV` guard, defaulting it off in
+`conftest.py`, and covering the path: the switch is a real field; the pipeline no longer
+disables the agent by `APP_ENV`; and **the repair loop is bounded** — a run that cannot
+converge raises rather than oscillating, taking exactly one repair turn. That is the ASI08
+cascade shape, now asserted rather than assumed.
 
 ### G9 — No behavioural baseline or per-agent lifecycle · 🟠 Medium · *new*
 

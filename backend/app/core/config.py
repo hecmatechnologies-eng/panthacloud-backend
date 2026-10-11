@@ -124,6 +124,12 @@ class Settings(BaseSettings):
     # on every turn and burns budget until the wall-clock limit catches it.
     AGENT_CIRCUIT_BREAKER_THRESHOLD: int = 5
 
+    # Whether the pipeline may invoke the autonomous coding agent. Previously read with
+    # getattr(settings, "...", True) but never declared as a field, so the switch was dead and
+    # the agent was actually disabled only by an APP_ENV != "test" check inside the pipeline.
+    # Tests set this false; the agent's wiring is covered by forcing it true explicitly.
+    ENABLE_CODING_AGENT: bool = True
+
     # Embedding plane (step B6). "gemini" uses the real semantic embeddings; "deterministic" is the
     # lexical test/dev double. The dimension is stored on each KnowledgeBase, so a change here
     # affects only newly created bases.

@@ -18,9 +18,13 @@ CODING_AGENT_VERSION = "1.0.0"
 
 
 class GeneratedFileRecord(BaseModel):
-    path: str = Field(..., description="Repository-relative path of created or modified file.")
-    action: str = Field(..., description="'create' or 'modify'")
-    summary: str = Field(..., description="Short explanation of what was done to this file.")
+    # min_length on both: this is the audit record a human approves a diff against, so an empty
+    # path or an empty explanation is not a cosmetic problem - it is an unverifiable claim.
+    # Enforcing it here means structured-output validation rejects the turn and the model
+    # retries, rather than the run record storing something no reviewer can check.
+    path: str = Field(..., min_length=1, description="Repository-relative path of created or modified file.")
+    action: str = Field(..., min_length=1, description="'create' or 'modify'")
+    summary: str = Field(..., min_length=1, description="Short explanation of what was done to this file.")
 
 
 class CodingAgentOutput(BaseModel):

@@ -199,7 +199,7 @@ class IntegrationPipeline:
             generated_files = None
             used_coding_agent = False
 
-            if gateway is not None and getattr(settings, "ENABLE_CODING_AGENT", True) and settings.APP_ENV != "test":
+            if gateway is not None and settings.ENABLE_CODING_AGENT:
                 try:
                     from app.harness.context import ExecutionContext
                     from app.harness.runner import PydanticAIRunner
