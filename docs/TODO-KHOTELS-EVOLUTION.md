@@ -120,8 +120,17 @@ at 15 min idle classify. **Done when:** the migration applies and a session can 
 
 ### K4 — 15-minute idle analyser · ~1 day
 
-`app/jobs/tasks.py` + a delayed/cron job on the existing ARQ worker (there is **no** scheduler
-configured today — this is the new part). Deterministic, no LLM.
+`app/jobs/tasks.py` + a cron job on the existing ARQ worker. Deterministic, no LLM.
+
+> ✅ **The scheduler now exists.** `app/jobs/scheduler.py` plus `cron_jobs` on `WorkerSettings`
+> (registered 2026-10-11, verified live: the worker logs `Starting worker for 3 functions`).
+> The first cron is the knowledge reaper; K4 adds a second alongside it. `unique=True` on each,
+> so several workers never run the same maintenance job concurrently.
+>
+> Note: **arq 0.28.0 has a bug** — `CronJob` is a dataclass with no field defaults, so all
+> fourteen arguments must be passed explicitly. `worker.py` does that with a comment; a canary
+> test in `tests/test_knowledge_reaper.py` will fail when arq fixes it, at which point the
+> workaround can be collapsed.
 
 Emits the prototype's outcome model: `+ Converted` ⇒ **Success**; `− Not converted` ⇒
 **Follow-up sent**. Feeds the Follow-up list badge (grey when no new, amber when new).

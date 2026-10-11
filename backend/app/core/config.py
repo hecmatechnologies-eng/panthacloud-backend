@@ -130,6 +130,15 @@ class Settings(BaseSettings):
     # Tests set this false; the agent's wiring is covered by forcing it true explicitly.
     ENABLE_CODING_AGENT: bool = True
 
+    # Knowledge ingestion reaper. A document stranded in PROCESSING by a hard process death is
+    # invisible to answers and looks live to an admin; nothing else reclaims it. Generous,
+    # because a large PDF with many chunks can legitimately take a long time to embed, and a
+    # false positive would fail a document that was merely slow.
+    KNOWLEDGE_REAPER_TIMEOUT_MINUTES: int = 60
+    # How often the reaper runs. Cheap - one query against a small table - so frequent is fine;
+    # the timeout above is what decides how long anything can look stuck.
+    KNOWLEDGE_REAPER_INTERVAL_SECONDS: int = 900
+
     # Embedding plane (step B6). "gemini" uses the real semantic embeddings; "deterministic" is the
     # lexical test/dev double. The dimension is stored on each KnowledgeBase, so a change here
     # affects only newly created bases.
