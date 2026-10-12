@@ -7,7 +7,7 @@ Management only: nothing checks a request's ``Origin`` against these until the t
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +17,7 @@ from app.api.deps import (
     get_current_website_integration,
     require_permission,
 )
+from app.api.v1.endpoints._location import CREATED_RESPONSE, created
 from app.core.database import get_db
 from app.core.permissions import Permission
 from app.models.allowed_origin import AllowedOrigin
@@ -60,6 +61,7 @@ async def list_allowed_origins(
     "",
     response_model=AllowedOriginRead,
     status_code=status.HTTP_201_CREATED,
+    responses=CREATED_RESPONSE,
     summary="Register an origin allowed to use this integration's public key",
 )
 async def add_allowed_origin(
@@ -71,6 +73,7 @@ async def add_allowed_origin(
     ],
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    response: Response,
 ) -> AllowedOriginRead:
     # payload.origin is already canonical: AllowedOriginCreate normalises it.
     existing_stmt = select(AllowedOrigin.origin).where(
@@ -112,6 +115,19 @@ async def add_allowed_origin(
         "integration.origin.added",
         integration.id,
         {"origin": allowed.origin},
+    )
+    created(
+        response,
+        "organizations",
+        # WebsiteIntegration carries only project_id, so the organization comes from the
+        # tenant the request was already authorised against.
+        str(tenant[0].id),
+        "projects",
+        str(integration.project_id),
+        "website-integrations",
+        str(integration.id),
+        "origins",
+        str(allowed.id),
     )
     return AllowedOriginRead.model_validate(allowed)
 

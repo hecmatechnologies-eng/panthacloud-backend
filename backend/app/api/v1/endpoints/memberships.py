@@ -1,12 +1,13 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import require_permission
+from app.api.v1.endpoints._location import CREATED_RESPONSE, created
 from app.core.database import get_db
 from app.core.permissions import Permission
 from app.models.membership import Membership, RoleEnum
@@ -49,6 +50,7 @@ async def list_members(
     "",
     response_model=MembershipRead,
     status_code=status.HTTP_201_CREATED,
+    responses=CREATED_RESPONSE,
     summary="Add a member directly to the organization (MVP simplification)",
 )
 async def add_member(
@@ -58,6 +60,7 @@ async def add_member(
         Depends(require_permission(Permission.MEMBERS_INVITE)),
     ],
     db: Annotated[AsyncSession, Depends(get_db)],
+    response: Response,
 ) -> MembershipRead:
     """
     MVP Simplification Note:
@@ -114,6 +117,7 @@ async def add_member(
     result_load = await db.execute(stmt_load)
     saved_membership = result_load.scalar_one()
 
+    created(response, "organizations", str(org.id), "members", str(saved_membership.id))
     return MembershipRead.model_validate(saved_membership)
 
 

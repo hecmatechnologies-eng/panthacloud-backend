@@ -1,12 +1,13 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_project, require_permission
+from app.api.v1.endpoints._location import CREATED_RESPONSE, created
 from app.core.database import get_db
 from app.core.permissions import Permission
 from app.core.slugs import slugify
@@ -22,6 +23,7 @@ router = APIRouter(prefix="/organizations/{org_id}/projects", tags=["Projects"])
     "",
     response_model=ProjectRead,
     status_code=status.HTTP_201_CREATED,
+    responses=CREATED_RESPONSE,
     summary="Create a new project inside the organization",
 )
 async def create_project(
@@ -31,6 +33,7 @@ async def create_project(
         Depends(require_permission(Permission.PROJECT_CREATE)),
     ],
     db: Annotated[AsyncSession, Depends(get_db)],
+    response: Response,
 ) -> ProjectRead:
     org, _ = tenant
     slug = payload.slug or f"{slugify(payload.name, 'project')}-{uuid.uuid4().hex[:6]}"
@@ -54,6 +57,7 @@ async def create_project(
         ) from None
     await db.refresh(project)
 
+    created(response, "organizations", str(org.id), "projects", str(project.id))
     return ProjectRead.model_validate(project)
 
 

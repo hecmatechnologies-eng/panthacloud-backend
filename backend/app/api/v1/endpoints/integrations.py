@@ -1,10 +1,11 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_integration, get_current_project, require_permission
+from app.api.v1.endpoints._location import CREATED_RESPONSE, created
 from app.core.database import get_db
 from app.core.permissions import Permission
 from app.core.secrets import secret_store
@@ -72,6 +73,7 @@ def to_integration_read(integration: Integration) -> IntegrationRead:
     "",
     response_model=IntegrationRead,
     status_code=status.HTTP_201_CREATED,
+    responses=CREATED_RESPONSE,
     summary="Create a new integration for the project",
 )
 async def create_integration(
@@ -82,6 +84,7 @@ async def create_integration(
         Depends(require_permission(Permission.INTEGRATION_CREATE)),
     ],
     db: Annotated[AsyncSession, Depends(get_db)],
+    response: Response,
 ) -> IntegrationRead:
     # Invariant: Integration name must be unique inside the project
     stmt = select(Integration).where(
@@ -115,6 +118,15 @@ async def create_integration(
     await db.commit()
     await db.refresh(integration)
 
+    created(
+        response,
+        "organizations",
+        str(project.organization_id),
+        "projects",
+        str(project.id),
+        "integrations",
+        str(integration.id),
+    )
     return to_integration_read(integration)
 
 

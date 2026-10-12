@@ -14,6 +14,7 @@ from app.api.deps import (
     get_current_website_integration,
     require_permission,
 )
+from app.api.v1.endpoints._location import CREATED_RESPONSE, created
 from app.core.database import get_db
 from app.core.permissions import Permission
 from app.core.secrets import secret_store
@@ -111,6 +112,7 @@ async def get_website_integration(
     "",
     response_model=WebsiteIntegrationRead,
     status_code=status.HTTP_201_CREATED,
+    responses=CREATED_RESPONSE,
     summary="Create or configure website integration",
 )
 async def create_website_integration(
@@ -122,6 +124,7 @@ async def create_website_integration(
     ],
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    response: Response,
 ) -> WebsiteIntegrationRead:
     # Check if integration already exists for this project
     stmt = select(WebsiteIntegration).where(WebsiteIntegration.project_id == project.id)
@@ -183,6 +186,15 @@ async def create_website_integration(
         },
     )
 
+    created(
+        response,
+        "organizations",
+        str(project.organization_id),
+        "projects",
+        str(project.id),
+        "website-integrations",
+        str(integration.id),
+    )
     return to_website_integration_read(integration)
 
 
@@ -452,6 +464,7 @@ async def get_integration_plan(
     "/runs",
     response_model=IntegrationRunRead,
     status_code=status.HTTP_201_CREATED,
+    responses=CREATED_RESPONSE,
     summary="Start an integration pipeline run",
 )
 async def start_integration_run(
@@ -463,6 +476,7 @@ async def start_integration_run(
     ],
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    response: Response,
 ) -> IntegrationRunRead:
     # Prevent concurrent runs on the same integration
     stmt_active = select(IntegrationRun).where(
@@ -487,6 +501,17 @@ async def start_integration_run(
             project=project,
             integration=integration,
             user_id=user.id,
+        )
+        created(
+            response,
+            "organizations",
+            str(project.organization_id),
+            "projects",
+            str(project.id),
+            "website-integrations",
+            str(integration.id),
+            "runs",
+            str(run.id),
         )
         return IntegrationRunRead.model_validate(run)
     except (IntegrationRefusedError, StaticValidationError) as exc:

@@ -12,6 +12,7 @@ from app.api.deps import (
     get_or_create_knowledge_base,
     require_permission,
 )
+from app.api.v1.endpoints._location import CREATED_RESPONSE, created
 from app.core.database import get_db
 from app.core.permissions import Permission
 from app.models.knowledge import KnowledgeBase, KnowledgeDocument
@@ -79,6 +80,7 @@ def _to_doc_read(
     "/documents",
     response_model=KnowledgeDocumentRead,
     status_code=status.HTTP_201_CREATED,
+    responses=CREATED_RESPONSE,
     summary="Upload and ingest a knowledge document",
 )
 async def upload_document(
@@ -92,6 +94,7 @@ async def upload_document(
     kb: Annotated[KnowledgeBase, Depends(get_or_create_knowledge_base)],
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    response: Response,
 ) -> KnowledgeDocumentRead:
     """
     Upload and ingest a supported business document (PDF, Markdown, Plain Text).
@@ -113,6 +116,16 @@ async def upload_document(
     )
     res = await db.execute(stmt)
     refreshed_doc = res.scalar_one()
+    created(
+        response,
+        "organizations",
+        str(org_id),
+        "projects",
+        str(project_id),
+        "knowledge",
+        "documents",
+        str(refreshed_doc.id),
+    )
     return _to_doc_read(refreshed_doc, org_id, project_id)
 
 

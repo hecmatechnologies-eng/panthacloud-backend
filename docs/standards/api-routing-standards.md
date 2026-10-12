@@ -189,6 +189,11 @@ Recorded rather than fixed, each with a reason. New deviations get added here.
 | 3 | `/api/v1/public/widget.js` is a static asset served by the API | Deliberate. One file reaches every customer, so a fix is a deploy rather than a pull request per repository. See `app/api/v1/endpoints/public_widget.py`. |
 | 4 | Response cache TTL is 300s | Chosen so a widget fix reaches customers within five minutes. Revisit when the widget is served from a CDN with proper invalidation. |
 | 5 | Collections are not yet cursor-paginated | 3.5 is the rule; the existing collections use unbounded results. To be fixed before any collection grows large enough to matter. |
+| 6 | `POST /auth/register` returns 201 with no `Location` | It returns a token, not a representation of the user, and there is no addressable `/users/{id}`. RFC 9110 §15.3.2 permits omitting `Location` when the created resource is not separately addressable. Pointing it at `/auth/me` would name *the current user's* resource rather than the one created, which is worse than omitting it. |
+
+Every other 201 now carries a `Location`, declared in the OpenAPI schema (`CREATED_RESPONSE`)
+and set at runtime (`created()` in `endpoints/_location.py`). The two halves do different jobs:
+the schema is what a client reads, the runtime call is what goes over the wire.
 
 ### 6.1 Duplicate root mounts — found and fixed
 

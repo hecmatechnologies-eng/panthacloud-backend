@@ -140,7 +140,11 @@ def test_debt_is_reported_but_does_not_fail() -> None:
     ceiling = {
         "collections_without_pagination": 11,
         "action_verbs_in_path": 8,
-        "created_without_location": 12,
+        # POST /auth/register returns a token, not the user, and there is no addressable
+        # /users/{id}. RFC 9110 15.3.2 permits omitting Location when the response is not a
+        # representation of the created resource, so this one is a deliberate exception rather
+        # than a gap. See api-routing-standards.md section 6.
+        "created_without_location": 1,
     }
     for kind, cap in ceiling.items():
         assert len(debt[kind]) <= cap, (

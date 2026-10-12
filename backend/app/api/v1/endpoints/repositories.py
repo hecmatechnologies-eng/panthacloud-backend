@@ -1,10 +1,11 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_project, get_current_repository, require_permission
+from app.api.v1.endpoints._location import CREATED_RESPONSE, created
 from app.core.database import get_db
 from app.core.permissions import Permission
 from app.models.integration import Integration
@@ -71,6 +72,7 @@ def to_repository_read(repo: Repository) -> RepositoryRead:
     "",
     response_model=RepositoryRead,
     status_code=status.HTTP_201_CREATED,
+    responses=CREATED_RESPONSE,
     summary="Register a new external repository for the project",
 )
 async def create_repository(
@@ -81,6 +83,7 @@ async def create_repository(
         Depends(require_permission(Permission.REPOSITORY_CREATE)),
     ],
     db: Annotated[AsyncSession, Depends(get_db)],
+    response: Response,
 ) -> RepositoryRead:
     # 1. Resolve integration and verify it belongs to the active project
     stmt = select(Integration).where(Integration.id == payload.integration_id)
@@ -131,6 +134,15 @@ async def create_repository(
     await db.commit()
     await db.refresh(repo)
 
+    created(
+        response,
+        "organizations",
+        str(project.organization_id),
+        "projects",
+        str(project.id),
+        "repositories",
+        str(repo.id),
+    )
     return to_repository_read(repo)
 
 

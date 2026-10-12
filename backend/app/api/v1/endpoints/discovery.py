@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,6 +12,7 @@ from app.api.deps import (
     get_current_user,
     require_permission,
 )
+from app.api.v1.endpoints._location import CREATED_RESPONSE, created
 from app.core.database import get_db
 from app.core.permissions import Permission
 from app.models.discovery import DiscoveryRun
@@ -49,6 +50,7 @@ def to_discovery_read(run: DiscoveryRun) -> DiscoveryRead:
     "",
     response_model=DiscoveryRead,
     status_code=status.HTTP_201_CREATED,
+    responses=CREATED_RESPONSE,
     summary="Trigger deterministic contract & architecture discovery on a snapshot",
 )
 async def create_discovery(
@@ -61,6 +63,7 @@ async def create_discovery(
     ],
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    response: Response,
 ) -> DiscoveryRead:
     org, _ = tenant
 
@@ -85,6 +88,19 @@ async def create_discovery(
             detail=str(exc),
         )
 
+    created(
+        response,
+        "organizations",
+        str(org.id),
+        "projects",
+        str(project.id),
+        "repositories",
+        str(repository.id),
+        "snapshots",
+        str(snapshot.id),
+        "discoveries",
+        str(run.id),
+    )
     return to_discovery_read(run)
 
 
