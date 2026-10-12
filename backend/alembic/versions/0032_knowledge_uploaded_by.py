@@ -40,19 +40,23 @@ def upgrade() -> None:
         "knowledge_documents",
         ["uploaded_by"],
     )
-    op.create_foreign_key(
-        "fk_knowledge_documents_uploaded_by",
-        "knowledge_documents",
-        "users",
-        ["uploaded_by"],
-        ["id"],
-        ondelete="SET NULL",
-    )
+    # SQLite cannot ALTER a table to add a foreign key - it has to be rebuilt by copy-and-move.
+    # Without batch_alter_table this whole migration aborts on a SQLite development database,
+    # leaving it stuck one revision behind and every read of knowledge_documents failing with
+    # "no such column: uploaded_by". PostgreSQL needs none of this, so the migration looked fine
+    # to whoever wrote it and only broke the local stack.
+    with op.batch_alter_table("knowledge_documents") as batch_op:
+        batch_op.create_foreign_key(
+            "fk_knowledge_documents_uploaded_by",
+            "users",
+            ["uploaded_by"],
+            ["id"],
+            ondelete="SET NULL",
+        )
 
 
 def downgrade() -> None:
-    op.drop_constraint(
-        "fk_knowledge_documents_uploaded_by", "knowledge_documents", type_="foreignkey"
-    )
+    with op.batch_alter_table("knowledge_documents") as batch_op:
+        batch_op.drop_constraint("fk_knowledge_documents_uploaded_by", type_="foreignkey")
     op.drop_index("ix_knowledge_documents_uploaded_by", table_name="knowledge_documents")
     op.drop_column("knowledge_documents", "uploaded_by")
