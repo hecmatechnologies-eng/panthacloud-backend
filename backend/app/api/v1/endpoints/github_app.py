@@ -54,6 +54,16 @@ from app.services.integration.github_app import (
 
 router = APIRouter(tags=["GitHub App"])
 
+# Split out so only the two callbacks can be mounted at the application root.
+#
+# GitHub redirects to whatever URL is configured in the GitHub App's settings, so those paths
+# are fixed by an external system and cannot live under a version prefix. That is a real
+# requirement, but mounting the whole router at the root to achieve it also exposed
+# /organizations/{org_id}/github/* at two URLs, since the same router is also included by
+# api_v1_router under /api/v1. Mounting this instead gives the callbacks the root path they
+# require and leaves the org-scoped routes at exactly one address.
+callback_router = APIRouter(tags=["GitHub App callbacks"])
+
 logger = logging.getLogger("fussion.github")
 
 _Tenant = Annotated[
@@ -138,7 +148,7 @@ async def github_install_url(
         ) from None
 
 
-@router.get("/github/callback", include_in_schema=False)
+@callback_router.get("/github/callback", include_in_schema=False)
 async def github_install_callback(
     state: Annotated[str, Query()],
     installation_id: Annotated[int, Query()],
@@ -168,7 +178,7 @@ async def github_install_callback(
         ) from None
 
 
-@router.get("/github/oauth/callback", include_in_schema=False)
+@callback_router.get("/github/oauth/callback", include_in_schema=False)
 async def github_oauth_callback(
     code: Annotated[str, Query()],
     state: Annotated[str, Query()],

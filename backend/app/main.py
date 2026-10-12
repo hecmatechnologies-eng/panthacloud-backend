@@ -177,9 +177,15 @@ def create_application() -> FastAPI:
     # Root health endpoint (required by Phase 01: GET /health)
     app.include_router(health_router, tags=["health"])
 
-    # Root GitHub App callbacks (/github/callback and /github/oauth/callback)
+    # Root GitHub App callbacks (/github/callback and /github/oauth/callback).
+    #
+    # GitHub redirects to the URL configured in the GitHub App's settings, so these paths are
+    # fixed externally and cannot sit under /api/v1. Only the callbacks are mounted here: the
+    # previous version included the whole github_app router, which also published the
+    # org-scoped /organizations/{org_id}/github/* routes at a second, unversioned address.
     from app.api.v1.endpoints import github_app
-    app.include_router(github_app.router)
+
+    app.include_router(github_app.callback_router)
 
     # Versioned API router (/api/v1)
     app.include_router(api_v1_router, prefix="/api/v1")

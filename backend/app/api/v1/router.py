@@ -40,6 +40,12 @@ api_v1_router.include_router(discovery.router)
 api_v1_router.include_router(knowledge.router)
 api_v1_router.include_router(assistant.router)
 api_v1_router.include_router(github_app.router)
+# The two callbacks live here as well as at the application root. GitHub's redirect URI is
+# fixed by the GitHub App's settings and cannot be version-prefixed, so main.py mounts them
+# bare; including them here too keeps /api/v1/github/callback working for clients and tests
+# that address the versioned API like everything else. Two addresses is correct for these two
+# routes and only these two.
+api_v1_router.include_router(github_app.callback_router)
 api_v1_router.include_router(agent_runs.router)
 api_v1_router.include_router(agent_runs.usage_router)
 api_v1_router.include_router(agent_runs.budget_router)

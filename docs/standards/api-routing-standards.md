@@ -190,29 +190,32 @@ Recorded rather than fixed, each with a reason. New deviations get added here.
 | 4 | Response cache TTL is 300s | Chosen so a widget fix reaches customers within five minutes. Revisit when the widget is served from a CDN with proper invalidation. |
 | 5 | Collections are not yet cursor-paginated | 3.5 is the rule; the existing collections use unbounded results. To be fixed before any collection grows large enough to matter. |
 
-### 6.1 Defects found during this audit
+### 6.1 Duplicate root mounts — found and fixed
 
-`app/main.py` mounts two routers **twice** — once bare, once inside `api_v1_router` with the
-`/api/v1` prefix:
+`app/main.py` mounted `github_app.router` bare **and** included it inside `api_v1_router`
+under `/api/v1`, which published three org-scoped routes at two addresses each.
+
+The bare mount is not pointless — GitHub redirects to whatever URL is configured in the GitHub
+App's settings, so `/github/callback` and `/github/oauth/callback` must stay at fixed,
+unversioned root paths. The bug was mounting the *whole* router to achieve that.
+
+**The fix:** `github_app` now exposes a `callback_router` holding only those two routes.
+`main.py` mounts that bare; `api_v1_router` includes it too, so `/api/v1/github/callback`
+keeps working for clients that address the versioned API like everything else.
+
+Two addresses for the callbacks is correct and externally mandated. Two addresses for
+`/organizations/{org_id}/github/*` was not, and is gone.
 
 ```
-main.py:178  app.include_router(health_router, ...)   -> /health
-main.py:182  app.include_router(github_app.router)    -> /organizations/{org_id}/github/*
-main.py:185  app.include_router(api_v1_router, prefix="/api/v1")
+GET /organizations/{org_id}/github/install-url    -> /api/v1/... only
+GET /organizations/{org_id}/github/installations -> /api/v1/... only
+GET /organizations/{org_id}/github/repositories  -> /api/v1/... only
+GET /github/callback                              -> root AND /api/v1 (GitHub's config)
+GET /health                                      -> root, deliberate
 ```
 
-That yields four endpoints outside the prefix, but they are **not all defects**:
+Operation count 89 -> 86. Suite: 862 passed, 2 pre-existing failures unrelated to this.
 
-| Path | Status |
-|---|---|
-| `GET /health` | **Deliberate.** `main.py:177` records it as required by Phase 01, and root-level health is the near-universal convention for container and load-balancer probes. Keep it, and keep the comment, so nobody "fixes" it and takes the probes down. |
-| `GET /organizations/{org_id}/github/install-url` | **Duplicate.** Also correctly served at `/api/v1/organizations/{org_id}/github/install-url`. No justification for the bare mount. |
-| `GET /organizations/{org_id}/github/installations` | **Duplicate.** As above. |
-| `GET /organizations/{org_id}/github/repositories` | **Duplicate.** As above. |
-
-The three GitHub routes are the defect: the same handler is reachable at two URLs, which means
-two cache entries, two entries in any client documentation, and two places to get
-authorisation wrong. `main.py:182` should go.
-
-Until it does, the practical rule for new code: **mount only through `api_v1_router`.** A bare
-`app.include_router(...)` is how these happened.
+**Rule for new code:** mount only through `api_v1_router`. A bare `app.include_router(...)` is
+how this happened. The only legitimate exceptions are registered in `main.py` with a comment
+saying what external system fixes the path.
