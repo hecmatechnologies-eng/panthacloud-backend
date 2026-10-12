@@ -22,7 +22,15 @@ RepositoryReaderResolver = Callable[[ExecutionContext], RepositoryReader]
 class ReadTreeArgs(BaseModel):
     path: str = Field("", description="Subdirectory to list; empty lists the repository root.")
     offset: int = Field(0, ge=0, description="Number of entries to skip, for paging.")
-    max_entries: int = Field(500, ge=1, le=5000)
+    max_entries: int = Field(
+        500,
+        ge=1,
+        le=5000,
+        description=(
+            "Maximum number of paths to return, for paging. Defaults to 500; "
+            "raise it to see more of a large directory."
+        ),
+    )
 
 
 class ReadFileArgs(BaseModel):
@@ -34,7 +42,15 @@ class ReadFileArgs(BaseModel):
 class SearchCodeArgs(BaseModel):
     query: str = Field(..., min_length=1, max_length=200, description="Case-insensitive substring.")
     offset: int = Field(0, ge=0, description="Number of matches to skip, for paging.")
-    max_results: int = Field(50, ge=1, le=500)
+    max_results: int = Field(
+        50,
+        ge=1,
+        le=500,
+        description=(
+            "Maximum number of matches to return, for paging. Defaults to 50; "
+            "narrow the query rather than raising this past a few hundred."
+        ),
+    )
 
 
 class _RepositoryTool(Tool):
