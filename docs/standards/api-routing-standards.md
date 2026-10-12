@@ -150,9 +150,21 @@ A `Link` header is sent only when another page genuinely exists. It is computed 
 `limit + 1` rows and treating the extra one as the signal, because on a large table a `COUNT`
 costs more than the page it is counting.
 
+**The ordering key must be a total order.** `created_at` is not unique — a batch upload stamps
+several rows with the same instant — so the cursor is compared as a `(created_at, id)` tuple,
+not on `created_at` alone. Compared alone, tied rows fall on the same side of the comparison
+and some are never served at all: a walk over six tied rows with `limit=2` returns two and
+loses four, with no error anywhere. `/knowledge/documents` has a test that forces the tie and
+asserts the count, and that test fails if the comparison is weakened.
+
 Rejected input is a **400**, not a 422: the request was well-formed, the cursor simply was not
 one we issued. The message tells the client to restart without a cursor rather than leaving it
 to guess whether to retry.
+
+**Note the size of what is being paged.** `/knowledge/documents` serialises each document's
+chunks inline, so its body is the sum of every chunk's text rather than one row per document.
+A page limit there bounds text, not rows. Check what a collection actually serialises before
+choosing a page size for it.
 
 ### 3.6 Idempotency
 
@@ -213,7 +225,7 @@ Recorded rather than fixed, each with a reason. New deviations get added here.
 | 2 | Nine endpoints use a verb in the path | `knowledge/query`, `assistant/reset`, `snapshots/{id}/inspect`, `website-integrations/{analyze,validate}`, `origins/{id}/confirm`, `runs/{id}/cancel`, `auth/oauth/exchange`. Each is a genuine action rather than a state transition, which is what 3.2 permits. `query` and `search` are conventionally POST even on otherwise-REST APIs. |
 | 3 | `/api/v1/public/widget.js` is a static asset served by the API | Deliberate. One file reaches every customer, so a fix is a deploy rather than a pull request per repository. See `app/api/v1/endpoints/public_widget.py`. |
 | 4 | Response cache TTL is 300s | Chosen so a widget fix reaches customers within five minutes. Revisit when the widget is served from a CDN with proper invalidation. |
-| 5 | 10 collections are not yet cursor-paginated | §3.5 is the rule. `/projects` is done end to end and is the worked example — copy it. The rest stay unpaginated because none has yet grown large enough for unbounded reads to hurt; they should be migrated as each is next touched, not in one sweep, so each is verified against its own consumers. |
+| 5 | 9 collections are not yet cursor-paginated | §3.5 is the rule. `/projects` and `/knowledge/documents` are done end to end; the second is the worked example, because it is the one where the payload is chunk text rather than rows. Copy it, including the total-order requirement. The rest should be migrated as each is next touched, not in one sweep, so each is verified against its own consumers. |
 | 6 | `POST /auth/register` returns 201 with no `Location` | It returns a token, not a representation of the user, and there is no addressable `/users/{id}`. RFC 9110 §15.3.2 permits omitting `Location` when the created resource is not separately addressable. Pointing it at `/auth/me` would name *the current user's* resource rather than the one created, which is worse than omitting it. |
 
 Every other 201 now carries a `Location`, declared in the OpenAPI schema (`CREATED_RESPONSE`)

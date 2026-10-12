@@ -1,8 +1,18 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
-from sqlalchemy import select
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
+from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -13,6 +23,14 @@ from app.api.deps import (
     require_permission,
 )
 from app.api.v1.endpoints._location import CREATED_RESPONSE, created
+from app.api.v1.endpoints._pagination import (
+    InvalidCursor,
+    cursor_http_error,
+    decode_cursor,
+    encode_cursor,
+    next_link,
+    parse_timestamp,
+)
 from app.core.database import get_db
 from app.core.permissions import Permission
 from app.models.knowledge import KnowledgeBase, KnowledgeDocument
@@ -135,6 +153,7 @@ async def upload_document(
     summary="List knowledge documents for the project",
 )
 async def list_documents(
+    request: Request,
     org_id: uuid.UUID,
     project_id: uuid.UUID,
     tenant: Annotated[
@@ -143,18 +162,57 @@ async def list_documents(
     ],
     kb: Annotated[KnowledgeBase, Depends(get_or_create_knowledge_base)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    response: Response,
+    limit: Annotated[int | None, Query(ge=1, le=100)] = None,
+    cursor: Annotated[str | None, Query(max_length=512)] = None,
 ) -> list[KnowledgeDocumentRead]:
     """
-    Lists all documents in the project's knowledge base.
+    Lists documents in the project's knowledge base, newest first.
+
+    Each document carries its chunks inline, so the payload is the sum of every chunk's text
+    rather than one row per document. A knowledge base of any size therefore returns an
+    unbounded body, which is why `?limit` exists here more urgently than on other
+    collections. Omitting `limit` still returns everything, as before.
     """
     stmt = (
         select(KnowledgeDocument)
         .where(KnowledgeDocument.knowledge_base_id == kb.id)
         .options(selectinload(KnowledgeDocument.chunks))
-        .order_by(KnowledgeDocument.created_at.desc())
     )
-    result = await db.execute(stmt)
-    docs = result.scalars().all()
+
+    if cursor:
+        try:
+            state = decode_cursor(cursor)
+            stmt = stmt.where(
+                tuple_(KnowledgeDocument.created_at, KnowledgeDocument.id)
+                < tuple_(parse_timestamp(state["created_at"]), uuid.UUID(state["id"]))
+            )
+        except (InvalidCursor, KeyError, ValueError):
+            raise cursor_http_error() from None
+
+    # created_at alone is not a total order: a batch upload can stamp several documents with
+    # the same instant, and a keyset over a non-unique key silently skips rows at a page
+    # boundary. The id tiebreaker makes the ordering total.
+    order = (KnowledgeDocument.created_at.desc(), KnowledgeDocument.id.desc())
+
+    if limit is None:
+        result = await db.execute(stmt.order_by(*order))
+        return [_to_doc_read(d, org_id, project_id) for d in result.scalars().all()]
+
+    result = await db.execute(stmt.order_by(*order).limit(limit + 1))
+    docs = list(result.scalars().all())
+    has_more = len(docs) > limit
+    docs = docs[:limit]
+
+    if has_more:
+        last = docs[-1]
+        response.headers["Link"] = next_link(
+            request_path=request.url.path,
+            params={},
+            limit=limit,
+            cursor=encode_cursor({"created_at": last.created_at, "id": str(last.id)}),
+        )
+
     return [_to_doc_read(d, org_id, project_id) for d in docs]
 
 

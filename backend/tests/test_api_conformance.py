@@ -138,10 +138,10 @@ def test_debt_is_reported_but_does_not_fail() -> None:
             print(f"      - {item}")
     # The gate is on regression, not on the backlog: these counts must not grow.
     ceiling = {
-        # 11 at the start of this programme. /projects is done end to end - backend keyset
-        # cursor, Link header, BFF proxy forwarding it, and the Studio hook consuming it -
-        # so the ceiling drops to 10. It must not rise again.
-        "collections_without_pagination": 10,
+        # 11 at the start of this programme. /projects then /knowledge/documents, both done end
+        # to end - backend keyset cursor, Link header, BFF proxy forwarding it, and the Studio
+        # hook consuming it - so the ceiling drops to 9. It must not rise again.
+        "collections_without_pagination": 9,
         "action_verbs_in_path": 8,
         # POST /auth/register returns a token, not the user, and there is no addressable
         # /users/{id}. RFC 9110 15.3.2 permits omitting Location when the response is not a
