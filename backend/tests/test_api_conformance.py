@@ -22,9 +22,34 @@ ACTION = re.compile(
 )
 COLLECTION = re.compile(
     r"/(organizations|projects|documents|members|repositories|snapshots|"
-    r"discoveries|integrations|origins|installations)$"
+    r"discoveries|integrations|origins|installations|runs)$"
 )
 KNOWN_BARE = {"/health"}  # documented in main.py: required by Phase 01, probe convention
+
+
+def _returns_array(spec: dict, op: dict) -> bool:
+    """True when a 200 response is a JSON array, following a $ref one hop.
+
+    This exists because the name regex above cannot see a collection that was never
+    anticipated. `/website-integrations/runs` returned a bare array, was genuinely
+    unpaginated, and was absent from this gate's report for the whole of its life - the
+    regex simply had no `runs` in it. A hand-maintained list of resource names is a list
+    that goes stale silently, and a debt list that under-reports is worse than no debt list,
+    because it reads as though the work is nearly done.
+
+    Schema-based detection cannot go stale that way: a new collection shows up the moment it
+    returns an array. The name regex is kept and unioned in, because one real endpoint returns
+    an envelope rather than an array and would otherwise drop out of the report.
+    """
+    response = (op.get("responses") or {}).get("200") or {}
+    schema = ((response.get("content") or {}).get("application/json") or {}).get("schema") or {}
+    resolved = schema
+    if "$ref" in schema:
+        resolved = ((spec.get("components") or {}).get("schemas") or {}).get(
+            schema["$ref"].rsplit("/", 1)[-1], {}
+        )
+    return resolved.get("type") == "array" or "items" in resolved
+
 
 
 def _operations() -> list[tuple[str, str, dict]]:
@@ -111,12 +136,21 @@ def _debt() -> dict[str, list[str]]:
     unpaginated = []
     verbs = []
     no_location = []
+    spec = app.openapi()
     for verb, path, op in OPS:
         if ACTION.search(path):
             verbs.append(f"{verb} {path}")
-        if verb == "GET" and COLLECTION.search(path):
+        # A collection is anything that returns a list, unioned with the named resources. See
+        # _returns_array for why the name list alone is not trustworthy.
+        if verb == "GET" and (COLLECTION.search(path) or _returns_array(spec, op)):
             names = [q.get("name") for q in (op.get("parameters") or []) if q.get("in") == "query"]
-            if not ("limit" in names and ("cursor" in names or "offset" in names)):
+            cursor_style = "limit" in names and ("cursor" in names or "offset" in names)
+            # page/per_page is offset pagination under other names. It is accepted here because
+            # /github/repositories proxies an upstream whose contract is GitHub's own, and
+            # renaming its parameters would break anyone calling it as documented. Recorded as
+            # a deviation in api-routing-standards.md section 6.
+            proxy_style = "page" in names and "per_page" in names
+            if not (cursor_style or proxy_style):
                 unpaginated.append(f"{verb} {path}")
         if "201" in (op.get("responses") or {}) and not (
             (op["responses"]["201"].get("headers") or {}).get("Location")
@@ -138,9 +172,13 @@ def test_debt_is_reported_but_does_not_fail() -> None:
             print(f"      - {item}")
     # The gate is on regression, not on the backlog: these counts must not grow.
     ceiling = {
-        # 11 at the start of this programme. /projects then /knowledge/documents, both done end
-        # to end - backend keyset cursor, Link header, BFF proxy forwarding it, and the Studio
-        # hook consuming it - so the ceiling drops to 9. It must not rise again.
+        # The ceiling was 9 and the true count is also 9, but the two lists were not the same
+        # nine. The report included /github/repositories, which is already paginated, and
+        # omitted /website-integrations/runs, which never was. A total that is right by
+        # coincidence while the contents are wrong reads as progress being made when none is.
+        # Both are now detected from the response schema rather than from a name list.
+        # /projects and /knowledge/documents are done end to end: backend keyset cursor, Link
+        # header, BFF proxy forwarding it, and the Studio hook consuming it.
         "collections_without_pagination": 9,
         "action_verbs_in_path": 8,
         # POST /auth/register returns a token, not the user, and there is no addressable
