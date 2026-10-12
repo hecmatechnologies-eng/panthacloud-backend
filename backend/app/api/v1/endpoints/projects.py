@@ -1,13 +1,21 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from sqlalchemy import select, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_project, require_permission
 from app.api.v1.endpoints._location import CREATED_RESPONSE, created
+from app.api.v1.endpoints._pagination import (
+    InvalidCursor,
+    cursor_http_error,
+    decode_cursor,
+    encode_cursor,
+    next_link,
+    parse_timestamp,
+)
 from app.core.database import get_db
 from app.core.permissions import Permission
 from app.core.slugs import slugify
@@ -67,21 +75,54 @@ async def create_project(
     summary="List all projects in the organization",
 )
 async def list_projects(
+    request: Request,
     tenant: Annotated[
         tuple[Organization, Membership],
         Depends(require_permission(Permission.PROJECT_VIEW)),
     ],
     db: Annotated[AsyncSession, Depends(get_db)],
+    # Declared before the defaulted query params below: `response` has no default of its own,
+    # and Python will not accept a non-defaulted parameter after one that has a default.
+    response: Response,
+    limit: Annotated[int | None, Query(ge=1, le=100)] = None,
+    cursor: Annotated[str | None, Query(max_length=512)] = None,
 ) -> list[ProjectRead]:
     org, _ = tenant
-    stmt = (
-        select(Project)
-        .where(Project.organization_id == org.id)
-        .order_by(Project.created_at.desc(), Project.id.desc())
-    )
-    result = await db.execute(stmt)
-    projects = result.scalars().all()
-    return [ProjectRead.model_validate(p) for p in projects]
+    stmt = select(Project).where(Project.organization_id == org.id)
+
+    if cursor:
+        # Keyset on the same (created_at, id) DESC ordering used below, so a project created
+        # mid-pagination does not shift the window and cause a row to be served twice or missed.
+        try:
+            state = decode_cursor(cursor)
+            stmt = stmt.where(
+                tuple_(Project.created_at, Project.id)
+                < tuple_(parse_timestamp(state["created_at"]), uuid.UUID(state["id"]))
+            )
+        except (InvalidCursor, KeyError, ValueError):
+            raise cursor_http_error() from None
+
+    order = (Project.created_at.desc(), Project.id.desc())
+    if limit is None:
+        result = await db.execute(stmt.order_by(*order))
+        return [ProjectRead.model_validate(p) for p in result.scalars().all()]
+
+    # limit + 1: the extra row is how we know another page exists without a COUNT.
+    result = await db.execute(stmt.order_by(*order).limit(limit + 1))
+    rows = list(result.scalars().all())
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+
+    if has_more:
+        last = rows[-1]
+        response.headers["Link"] = next_link(
+            request_path=request.url.path,
+            params={},
+            limit=limit,
+            cursor=encode_cursor({"created_at": last.created_at, "id": str(last.id)}),
+        )
+
+    return [ProjectRead.model_validate(p) for p in rows]
 
 
 @router.get(

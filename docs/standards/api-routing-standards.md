@@ -126,8 +126,33 @@ this product has.
 
 ```
 GET /projects?limit=50&cursor=<opaque>
-→ { "items": [...], "next_cursor": "..." | null }
+→ [ ... ]                                    # still a bare array
+   Link: </projects?limit=50&cursor=eyJ...>; rel="next"
 ```
+
+The next page is advertised in an RFC 8288 `Link` header, not wrapped in an envelope. The
+`{ "items": [...], "next_cursor": ... }` shape is the better design and remains the right target
+for a future API version, but it is not what shipped, for one reason: **these collections are
+already live.** Every one returns a bare JSON array to the Studio's `resources.ts` and to
+deployed integrations. Changing the body to an envelope would break eleven endpoints to satisfy
+a document written a week later. `Link` is what GitHub does for the same reason.
+
+Three properties make this non-breaking, and each is asserted in `test_pagination.py`:
+
+- **`limit` has no default.** A default would silently truncate every existing caller. Omitting
+  it returns everything, as before.
+- **The body does not move.** A paginated response is the same array a client already parses.
+- **Opaqueness is enforced by construction.** The client is given a `cursor` value, never a URL
+  to follow, so the encoding stays an implementation detail we may change without a contract
+  change. See `nextCursorFromLink` in the Studio, which extracts the parameter for this reason.
+
+A `Link` header is sent only when another page genuinely exists. It is computed by fetching
+`limit + 1` rows and treating the extra one as the signal, because on a large table a `COUNT`
+costs more than the page it is counting.
+
+Rejected input is a **400**, not a 422: the request was well-formed, the cursor simply was not
+one we issued. The message tells the client to restart without a cursor rather than leaving it
+to guess whether to retry.
 
 ### 3.6 Idempotency
 
@@ -188,7 +213,7 @@ Recorded rather than fixed, each with a reason. New deviations get added here.
 | 2 | Nine endpoints use a verb in the path | `knowledge/query`, `assistant/reset`, `snapshots/{id}/inspect`, `website-integrations/{analyze,validate}`, `origins/{id}/confirm`, `runs/{id}/cancel`, `auth/oauth/exchange`. Each is a genuine action rather than a state transition, which is what 3.2 permits. `query` and `search` are conventionally POST even on otherwise-REST APIs. |
 | 3 | `/api/v1/public/widget.js` is a static asset served by the API | Deliberate. One file reaches every customer, so a fix is a deploy rather than a pull request per repository. See `app/api/v1/endpoints/public_widget.py`. |
 | 4 | Response cache TTL is 300s | Chosen so a widget fix reaches customers within five minutes. Revisit when the widget is served from a CDN with proper invalidation. |
-| 5 | Collections are not yet cursor-paginated | 3.5 is the rule; the existing collections use unbounded results. To be fixed before any collection grows large enough to matter. |
+| 5 | 10 collections are not yet cursor-paginated | §3.5 is the rule. `/projects` is done end to end and is the worked example — copy it. The rest stay unpaginated because none has yet grown large enough for unbounded reads to hurt; they should be migrated as each is next touched, not in one sweep, so each is verified against its own consumers. |
 | 6 | `POST /auth/register` returns 201 with no `Location` | It returns a token, not a representation of the user, and there is no addressable `/users/{id}`. RFC 9110 §15.3.2 permits omitting `Location` when the created resource is not separately addressable. Pointing it at `/auth/me` would name *the current user's* resource rather than the one created, which is worse than omitting it. |
 
 Every other 201 now carries a `Location`, declared in the OpenAPI schema (`CREATED_RESPONSE`)
