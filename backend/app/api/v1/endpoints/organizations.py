@@ -2,11 +2,12 @@ import logging
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_organization, get_current_user, require_permission
+from app.api.v1.endpoints._location import CREATED_RESPONSE, created
 from app.core.database import get_db
 from app.core.permissions import Permission
 from app.core.slugs import slugify
@@ -24,12 +25,14 @@ router = APIRouter(prefix="/organizations", tags=["Organizations"])
     "",
     response_model=OrganizationRead,
     status_code=status.HTTP_201_CREATED,
+    responses=CREATED_RESPONSE,
     summary="Create an organization and establish OWNER membership",
 )
 async def create_organization(
     payload: OrganizationCreate,
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    response: Response,
 ) -> OrganizationRead:
     slug = payload.slug or f"{slugify(payload.name, 'org')}-{uuid.uuid4().hex[:6]}"
 
@@ -55,6 +58,7 @@ async def create_organization(
     await db.commit()
     await db.refresh(org)
 
+    created(response, "organizations", str(org.id))
     return OrganizationRead.model_validate(org)
 
 
