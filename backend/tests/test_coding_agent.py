@@ -1,6 +1,7 @@
-"""Tests for the autonomous CodingAgent (Step D) and minified widget bundle delivery."""
+"""Tests for the autonomous CodingAgent (Step D) and public widget delivery."""
 
 import uuid
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -273,7 +274,7 @@ async def test_the_repair_loop_is_bounded_and_reports_its_failure(db_session, tm
 
 
 @pytest.mark.asyncio
-async def test_public_widget_serves_minified_script(client):
+async def test_public_widget_serves_script(client):
     resp = await client.get("/api/v1/public/widget.js")
     assert resp.status_code == 200
     assert "application/javascript" in resp.headers["content-type"]
@@ -282,3 +283,46 @@ async def test_public_widget_serves_minified_script(client):
     content = resp.text
     assert "use strict" in content
     assert "data-fussion-key" in content
+
+
+@pytest.mark.asyncio
+async def test_public_widget_is_responsive(client):
+    """The launcher must not be a wide, fixed-size pill at every viewport.
+
+    The widget rendered a labelled pill sized by its own content, so on a phone it covered
+    whatever sat bottom-right. This asserts the rules that fix it, because the failure mode is
+    invisible in a desktop screenshot and nobody would otherwise notice a regression.
+    """
+    content = (await client.get("/api/v1/public/widget.js")).text
+
+    # Below 560px the label is dropped, leaving the icon as the tap target.
+    assert "@media (max-width: 560px)" in content
+    assert ".launcher .label { display: none; }" in content
+
+    # The label is bounded even when it is shown, so a long tenant name cannot push the
+    # launcher off-screen.
+    assert "text-overflow: ellipsis" in content
+    assert "max-width: min(240px, calc(100vw - 48px))" in content
+
+    # Notched devices: a flat 24px inset lands under the home indicator.
+    assert "env(safe-area-inset-bottom)" in content
+    assert "env(safe-area-inset-right)" in content
+
+    # Short viewports (landscape phones) still show the conversation.
+    assert "@media (max-height: 520px)" in content
+
+
+@pytest.mark.asyncio
+async def test_public_widget_served_body_is_the_source_of_truth(client):
+    """A stale pre-built bundle must never shadow the source again.
+
+    The endpoint used to prefer a checked-in `.min.js` that nothing in the repo could
+    regenerate, so fixes to the widget source were written and then silently not delivered.
+    """
+    widget_dir = Path(__file__).resolve().parents[1] / "app" / "runtime" / "widget"
+    assert not (widget_dir / "fussion-widget.min.js").exists(), (
+        "a pre-minified bundle is present again; it will shadow the source and go stale"
+    )
+    served = (await client.get("/api/v1/public/widget.js")).text
+    on_disk = (widget_dir / "fussion-widget.js").read_text(encoding="utf-8")
+    assert served == on_disk, "served widget does not match fussion-widget.js"

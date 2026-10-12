@@ -110,6 +110,43 @@
     "  background: var(--fussion-brand); color: var(--fussion-text);",
     "  font: 600 14px/1 system-ui, sans-serif; }",
     ".form button[disabled] { opacity: .5; cursor: default; }",
+
+    /* ------------------------------------------------------------------ *
+     * Responsive behaviour.
+     *
+     * There were no media queries in here at all. The panel happened to be
+     * safe because it was already expressed as min(360px, 100vw - 32px), but
+     * the launcher was not: it is a flex pill whose width is driven entirely
+     * by the configured name, so "Panthacloud Assistant" rendered as a wide
+     * label at every width and covered whatever sat bottom-right on a phone.
+     *
+     * Three fixes, in order of how often they matter:
+     *   1. cap the launcher so a long tenant name cannot push it offscreen
+     *   2. drop the label below 560px, leaving the icon as a 44px tap target
+     *   3. inset by the safe-area on notched devices, where 24px lands under
+     *      the home indicator and the widget becomes unreachable
+     * ------------------------------------------------------------------ */
+    ".launcher { max-width: min(240px, calc(100vw - 48px)); }",
+    ".launcher .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }",
+    ".launcher[data-side='right'], .panel[data-side='right'] {",
+    "  right: max(16px, env(safe-area-inset-right)); }",
+    ".launcher[data-side='left'], .panel[data-side='left'] {",
+    "  left: max(16px, env(safe-area-inset-left)); }",
+    ".launcher, .panel { bottom: max(24px, env(safe-area-inset-bottom)); }",
+    "@media (max-width: 560px) {",
+    "  .launcher .label { display: none; }",
+    "  .launcher { padding: 14px; gap: 0; max-width: none; }",
+    "  .panel { bottom: 80px; }",
+    "}",
+    /* Landscape phones have almost no vertical room; the panel would otherwise
+       leave only a sliver of the log visible. */
+    "@media (max-height: 520px) {",
+    "  .panel { height: calc(100vh - 104px); bottom: 80px; }",
+    "}",
+    "/* Short viewports (or a zoomed-in reader) must not trap the launcher. */",
+    "@media (prefers-reduced-motion: no-preference) {",
+    "  .panel { transition: opacity .18s ease, transform .18s ease; }",
+    "}",
   ].join("\n");
 
   var MARKUP = [

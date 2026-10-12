@@ -16,7 +16,6 @@ from fastapi import APIRouter, Request, Response, status
 router = APIRouter(tags=["Public Widget"])
 
 _WIDGET_PATH = Path(__file__).resolve().parents[3] / "runtime" / "widget" / "fussion-widget.js"
-_MIN_WIDGET_PATH = Path(__file__).resolve().parents[3] / "runtime" / "widget" / "fussion-widget.min.js"
 
 # Read once: the file cannot change while the process runs, and a widget request must not touch disk.
 _source: str | None = None
@@ -26,8 +25,14 @@ _etag: str | None = None
 def _load() -> tuple[str, str]:
     global _source, _etag
     if _source is None:
-        target_path = _MIN_WIDGET_PATH if _MIN_WIDGET_PATH.exists() else _WIDGET_PATH
-        _source = target_path.read_text(encoding="utf-8")
+        # Served straight from source, uncompressed on disk and gzipped in transit.
+        #
+        # This used to prefer a checked-in `fussion-widget.min.js` when present. Nothing in the
+        # repository could produce that file, so it was a hand-maintained copy that had already
+        # drifted from the source: every widget fix was being written and then silently not
+        # shipped, because the stale bundle won the lookup. A build artifact nobody can
+        # regenerate is a worse trade than ~4KB of gzip.
+        _source = _WIDGET_PATH.read_text(encoding="utf-8")
         digest = hashlib.sha256(_source.encode("utf-8")).hexdigest()[:32]
         _etag = f'"{digest}"'
     return _source, _etag
