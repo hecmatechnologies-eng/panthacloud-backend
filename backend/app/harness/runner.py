@@ -7,7 +7,7 @@ agent framework or a provider SDK. Swapping frameworks is one adapter file, not 
 
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
@@ -70,6 +70,11 @@ ToolExecutor = Callable[[str, dict[str, Any]], Awaitable[str]]
 UsageRecorder = Callable[[AgentRunResult], Awaitable[None]]
 
 
+# runtime_checkable so conformance is assertable in a test. It only checks the method exists, which
+# is precisely the check that catches wiring the wrong class in: the adapter below was constructed
+# from a misspelled name for as long as the codebase stood, because nothing could ask "is what you
+# built actually a runner?".
+@runtime_checkable
 class AgentRunner(Protocol):
     async def run(
         self,

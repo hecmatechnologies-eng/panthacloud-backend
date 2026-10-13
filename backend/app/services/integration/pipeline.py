@@ -10,8 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.protected_paths import protected_reason
 from app.core.tasks import create_cancellation_event, register_task
+from app.harness.runner import AgentRunner
 from app.models.assistant import Assistant
-from app.models.audit_event import AuditEvent
 from app.models.knowledge import KnowledgeBase
 from app.models.project import Project
 from app.models.website_integration import (
@@ -31,6 +31,23 @@ from app.services.integration.sandbox import LocalWorkspaceProvider
 from app.services.integration.validation import StaticValidationError, StaticValidator
 
 logger = logging.getLogger("fussion.integration.pipeline")
+
+
+def _build_agent_runner() -> AgentRunner:
+    """Construct the agent-framework adapter that satisfies the harness ``AgentRunner`` Protocol.
+
+    A named factory rather than a construction buried inside the run, because that inline
+    construction is precisely why a wrong import here went unnoticed: ``PydanticAIRunner`` was
+    imported from ``app.harness.runner``, where it does not exist, the ``ImportError`` was
+    swallowed by the blanket ``except Exception`` in the caller, and the pipeline quietly produced
+    deterministic artifacts forever while reporting itself as an autonomous-agent run. Nothing
+    could observe that branch, because observing it required a real model.
+
+    As a factory, a test can substitute a runner and assert the agent path is genuinely taken.
+    """
+    from app.llm.adapters.pydantic_ai_runner import PydanticAIAgentRunner
+
+    return PydanticAIAgentRunner()
 
 
 class IntegrationRefusedError(Exception):
@@ -202,9 +219,8 @@ class IntegrationPipeline:
             if gateway is not None and settings.ENABLE_CODING_AGENT:
                 try:
                     from app.harness.context import ExecutionContext
-                    from app.harness.runner import PydanticAIRunner
                     from app.services.integration.coder import execute_coding_agent
-                    from app.tools.gateway import ApproverKind, ApprovedPlan, ToolGateway
+                    from app.tools.gateway import ApprovedPlan, ApproverKind, ToolGateway
                     from app.tools.registry import registry as global_registry
 
                     context = ExecutionContext(
@@ -231,7 +247,7 @@ class IntegrationPipeline:
                         ),
                     )
                     tool_gateway = ToolGateway(global_registry)
-                    runner = PydanticAIRunner()
+                    runner = _build_agent_runner()
 
                     _, generated_files = await execute_coding_agent(
                         db,
@@ -250,6 +266,18 @@ class IntegrationPipeline:
                     )
                     if generated_files:
                         used_coding_agent = True
+                except ImportError as exc:
+                    # A missing module or name is a defect in *this* code, not a model outage, and
+                    # must not be reported as one. Previously every ImportError here became an
+                    # indistinguishable "agent failed, used the generator" log line — which is
+                    # exactly how a misspelled import stayed invisible while the pipeline reported
+                    # itself as an autonomous-agent run. Failing loudly is the whole point: the
+                    # deterministic fallback is for a model that could not cope, not for code that
+                    # cannot be found.
+                    raise RuntimeError(
+                        f"The coding-agent path is misconfigured: {exc}. This is a defect, not a "
+                        f"model failure, so it is not absorbed by the deterministic fallback."
+                    ) from exc
                 except Exception as exc:  # noqa: BLE001 - Resilient fallback to deterministic generator
                     logger.warning(
                         "Autonomous CodingAgent failed (%s), falling back to deterministic artifact generator",
