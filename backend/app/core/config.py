@@ -101,6 +101,21 @@ class Settings(BaseSettings):
     MODEL_ID: str = "gemini-2.5-flash"
     # Keep in step with app/llm/pricing.py: an allowed model with no price records zero cost.
     MODEL_ALLOWED_IDS: list[str] = ["gemini-2.5-flash"]
+    # Secondary provider, consulted only when the primary is *transiently* unavailable — a quota
+    # that ran out, a 429, a 5xx. Setting the key is what enables it; without one the gateway
+    # behaves exactly as before and never reaches for a fallback.
+    #
+    # Its model id is translated into the caller's request, so the logical model a caller asked
+    # for is never sent to the fallback vendor, which would not recognise it. Consequence worth
+    # stating plainly: an organization that selected "gemini-2.5-flash" and is served by the
+    # fallback has *not* received that model. The usage ledger records which provider and model
+    # actually answered, so this is visible after the fact rather than silent.
+    MODEL_FALLBACK_PROVIDER: str | None = None
+    MODEL_FALLBACK_API_KEY: str | None = None
+    # Optional: factory.py already has a default base URL per OpenAI-compatible vendor.
+    MODEL_FALLBACK_BASE_URL: str | None = None
+    MODEL_FALLBACK_ID: str = "openrouter/free"
+    MODEL_FALLBACK_ALLOWED_IDS: list[str] = ["openrouter/free"]
     # Gemini 2.5 "thinking" tokens are billed as output but are not reported in
     # candidates_token_count, so they silently inflate cost and can consume the output budget.
     # 0 disables thinking — the runtime is grounded Q&A, not reasoning.

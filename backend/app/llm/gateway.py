@@ -67,6 +67,15 @@ class BudgetExceededError(ModelGatewayError):
         self.reason = reason
 
 
+class _TransientExhausted(Exception):
+    """A provider failed transiently on every attempt.
+
+    Internal signal, distinct from ``ModelCallError``: it says *this* provider is out, not that the
+    request is unservable, which is what licenses trying the next one. It is raised only when
+    nothing has reached the caller yet, so replaying the request elsewhere cannot duplicate output.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class UsageContext:
     organization_id: uuid.UUID
@@ -76,8 +85,15 @@ class UsageContext:
 
 
 class ModelGateway:
-    def __init__(self, provider: ModelProvider) -> None:
+    def __init__(
+        self,
+        provider: ModelProvider,
+        fallback: ModelProvider | None = None,
+        fallback_model: str | None = None,
+    ) -> None:
         self._provider = provider
+        self._fallback = fallback
+        self._fallback_model = fallback_model
 
     async def complete(
         self, db: AsyncSession, request: ModelRequest, context: UsageContext
@@ -113,31 +129,29 @@ class ModelGateway:
         that needs no database (allowlist, context cap) is enforced here.
 
         Retries are bounded to *before the first token*: once a delta has been handed to a caller,
-        replaying the stream would duplicate text the visitor has already seen.
+        replaying the stream would duplicate text the visitor has already seen. The same bound is
+        what makes a stream failover safe — ``_TransientExhausted`` is raised only while nothing
+        has been emitted, so the fallback cannot rewind what the visitor already has.
         """
         self._check_allowed(request.model)
         self._check_context(request)
 
-        attempts = settings.MODEL_MAX_RETRIES + 1
-        for attempt in range(attempts):
-            emitted = False
+        chain = self._provider_chain(request)
+        last_exc: _TransientExhausted | None = None
+        for index, (provider, provider_request) in enumerate(chain):
             try:
-                async for event in _with_idle_timeout(
-                    self._provider.stream(request), settings.MODEL_TIMEOUT_SECONDS
-                ):
-                    if isinstance(event, ModelDelta):
-                        emitted = True
+                async for event in self._attempt_stream(provider, provider_request):
                     yield event
                 return
-            except ProviderTransientError as exc:
-                if emitted or attempt + 1 >= attempts:
-                    raise ModelCallError("The model provider is unavailable.") from exc
-                await asyncio.sleep(_backoff_seconds(attempt))
-            except TimeoutError as exc:
-                # Ambiguous whether the provider billed, so a retry risks a second charge.
-                raise ModelCallError("The model provider timed out.") from exc
-            except ProviderPermanentError as exc:
-                raise ModelCallError("The model provider rejected the request.") from exc
+            except _TransientExhausted as exc:
+                last_exc = exc
+                if index + 1 < len(chain):
+                    logger.warning(
+                        "Streaming model provider %s is unavailable; falling back to %s.",
+                        provider.name,
+                        chain[index + 1][0].name,
+                    )
+        raise ModelCallError("The model provider is unavailable.") from last_exc
 
     async def ensure_budget(
         self, db: AsyncSession, organization_id: uuid.UUID, estimated_cost: Decimal = Decimal(0)
@@ -243,17 +257,55 @@ class ModelGateway:
 
     # --- transport ----------------------------------------------------------------------------
 
+    def _provider_chain(
+        self, request: ModelRequest
+    ) -> list[tuple[ModelProvider, ModelRequest]]:
+        """The providers to try, in order, each with the request rewritten for its own vendor.
+
+        The model id is a *logical* name: the caller's chosen model, checked against the allowlist
+        once in ``_check_allowed``. A fallback vendor would not recognise it, so the fallback's own
+        id replaces it. Without this the fallback would be sent "gemini-2.5-flash" and fail with a
+        model-not-found — a failover that cannot succeed at the moment it is needed.
+        """
+        chain = [(self._provider, request)]
+        if self._fallback is not None:
+            chain.append(
+                (
+                    self._fallback,
+                    replace(request, model=self._fallback_model or request.model),
+                )
+            )
+        return chain
+
     async def _call_with_retries(self, request: ModelRequest) -> ModelResponse:
+        chain = self._provider_chain(request)
+        last_exc: _TransientExhausted | None = None
+        for index, (provider, provider_request) in enumerate(chain):
+            try:
+                return await self._attempt_provider(provider, provider_request)
+            except _TransientExhausted as exc:
+                last_exc = exc
+                if index + 1 < len(chain):
+                    logger.warning(
+                        "Model provider %s is unavailable; falling back to %s.",
+                        provider.name,
+                        chain[index + 1][0].name,
+                    )
+        raise ModelCallError("The model provider is unavailable.") from last_exc
+
+    async def _attempt_provider(
+        self, provider: ModelProvider, request: ModelRequest
+    ) -> ModelResponse:
         attempts = settings.MODEL_MAX_RETRIES + 1
         for attempt in range(attempts):
             try:
                 return await asyncio.wait_for(
-                    self._provider.complete(request),
+                    provider.complete(request),
                     timeout=settings.MODEL_TIMEOUT_SECONDS,
                 )
             except ProviderTransientError as exc:
                 if attempt + 1 >= attempts:
-                    raise ModelCallError("The model provider is unavailable.") from exc
+                    raise _TransientExhausted from exc
                 await asyncio.sleep(_backoff_seconds(attempt))
             except TimeoutError as exc:
                 # A timeout is ambiguous: the provider may have completed and billed. Retrying
@@ -261,7 +313,39 @@ class ModelGateway:
                 # the budget is a soft cap until a reservation lands.
                 raise ModelCallError("The model provider timed out.") from exc
             except ProviderPermanentError as exc:
-                # Retrying a rejected request only wastes budget.
+                # Retrying a rejected request only wastes budget. Deliberately *not* a failover
+                # trigger: a request the primary refused is malformed or unauthorised, and the
+                # next vendor will refuse it identically — just later, and with the real cause
+                # buried. The retry block above is the only place a transient failure can
+                # escalate to another provider.
+                raise ModelCallError("The model provider rejected the request.") from exc
+        raise ModelCallError("The model provider is unavailable.")  # pragma: no cover
+
+    async def _attempt_stream(
+        self, provider: ModelProvider, request: ModelRequest
+    ) -> AsyncIterator[ModelStreamEvent]:
+        attempts = settings.MODEL_MAX_RETRIES + 1
+        for attempt in range(attempts):
+            emitted = False
+            try:
+                async for event in _with_idle_timeout(
+                    provider.stream(request), settings.MODEL_TIMEOUT_SECONDS
+                ):
+                    if isinstance(event, ModelDelta):
+                        emitted = True
+                    yield event
+                return
+            except ProviderTransientError as exc:
+                if emitted:
+                    # Replaying on another provider would duplicate text the visitor has already
+                    # been shown, so a stream that has started can only fail.
+                    raise ModelCallError("The model provider is unavailable.") from exc
+                if attempt + 1 >= attempts:
+                    raise _TransientExhausted from exc
+                await asyncio.sleep(_backoff_seconds(attempt))
+            except TimeoutError as exc:
+                raise ModelCallError("The model provider timed out.") from exc
+            except ProviderPermanentError as exc:
                 raise ModelCallError("The model provider rejected the request.") from exc
         raise ModelCallError("The model provider is unavailable.")  # pragma: no cover
 

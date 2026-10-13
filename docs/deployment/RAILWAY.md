@@ -81,6 +81,12 @@ MODEL_ID=gemini-2.5-flash
 MODEL_ALLOWED_IDS=["gemini-2.5-flash"]
 MODEL_API_KEY=<your-gemini-api-key>
 
+# Optional: failover provider. Omit MODEL_FALLBACK_API_KEY to disable it entirely.
+MODEL_FALLBACK_PROVIDER=openrouter
+MODEL_FALLBACK_API_KEY=<your-openrouter-api-key>
+MODEL_FALLBACK_ID=openrouter/free
+MODEL_FALLBACK_ALLOWED_IDS=["openrouter/free"]
+
 # Embeddings:
 EMBEDDING_PROVIDER=gemini
 EMBEDDING_MODEL=gemini-embedding-001
@@ -90,6 +96,11 @@ EMBEDDING_API_KEY=<your-gemini-api-key>
 
 > [!TIP]
 > The backend automatically converts Railway's `postgresql://` connection URL to `postgresql+psycopg://` at runtime, and automatically falls back to `RAILWAY_PUBLIC_DOMAIN` for the widget script URL if `PUBLIC_API_URL` is omitted.
+
+> [!NOTE]
+> **Failover behaviour.** Setting `MODEL_FALLBACK_API_KEY` is the single switch that enables it; without it the gateway behaves exactly as before. The fallback is reached **only** when the primary fails transiently — a spent quota, a 429, a 5xx — after the primary has used its retry budget. A request the primary *rejects* (bad request, bad key) is not replayed elsewhere, because it would be rejected identically by the next vendor and the real cause would be buried.
+>
+> The fallback's model id replaces the caller's for that one call, since `gemini-2.5-flash` means nothing to a different vendor. So an organization that selected a specific model and was served by the fallback **did not receive that model**. This is recorded: the usage row carries the provider and model that actually answered, so `ModelUsage` answers "what served this?" after the fact. `MODEL_FALLBACK_ALLOWED_IDS` is the guard for that substitution and is validated at startup.
 
 ### 5. Verify the Deployment
 1. **Migrations**: Check the **Deploy Logs**. You should see the pre-deploy release command succeed:
