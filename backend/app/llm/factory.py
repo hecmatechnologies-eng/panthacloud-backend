@@ -27,6 +27,14 @@ DEFAULT_BASE_URLS = {
     "deepseek": "https://api.deepseek.com/v1",
 }
 
+# Model ids that select a different underlying model per request rather than naming one model.
+#
+# Only these get an empty completion treated as retryable: an empty answer is then a property of the
+# model that happened to be picked, and the next attempt lands on another one. An *explicit* list,
+# because the alternative is guessing from the id — and a wrong guess either retries a genuinely
+# hopeless request or gives up on one that would have answered.
+_ROUTER_MODEL_IDS = frozenset({"openrouter/free"})
+
 
 @dataclass(frozen=True, slots=True)
 class ProviderConfig:
@@ -159,5 +167,8 @@ def _build_provider(provider: ProviderConfig, *, name: str) -> ModelProvider:
     from app.llm.providers.openai_compatible import OpenAICompatibleProvider
 
     return OpenAICompatibleProvider(
-        provider.api_key, provider.base_url or "", name=name
+        provider.api_key,
+        provider.base_url or "",
+        name=name,
+        retry_on_empty=provider.model_id in _ROUTER_MODEL_IDS,
     )
