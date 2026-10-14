@@ -248,6 +248,24 @@ Recorded so these do not creep back in:
 
 ---
 
+- **Per-branch tenancy and project-scoped membership.** Recorded 2026-10-15 as a deliberate
+  decision **not** to build, after it was raised and considered. The model a hotel chain implies is
+  one project per property, a channel account per property, and staff who see only their own site.
+  That last one cannot be expressed today: `Membership` is `(user_id, organization_id, role)` with a
+  unique constraint on the pair, and `get_current_organization` resolves the role org-wide — so
+  "admin at one property, viewer at another" has no representation. A user is either a member of the
+  whole organisation and sees everything, or a member of none.
+  
+  Channels are therefore **organisation-level**, and membership stays org-wide. Adding `project_id`
+  to `Membership` (nullable, org-wide when null) is the change that unlocks branch isolation whenever
+  it is wanted, and it is additive — but it is not built now, because a pilot does not need it and
+  building it before a second property exists is speculation.
+
+  **Revisit when:** a single organisation has more than one property that staff must be able to see
+  independently, or a customer asks for per-property spend visibility. Both are ordinary requests
+  once chains grow, and the trigger is a customer need rather than a hunch — which is why this is
+  written down instead of forgotten.
+
 ## 6. Open questions
 
 - **What gets retained from a guest conversation.** Recorded 2026-10-14, deliberately not yet
