@@ -19,6 +19,7 @@ from app.core.config import settings
 from app.core.database import get_session_factory
 from app.core.prompting import fence_untrusted
 from app.guardrails import redact_outbound
+from app.guardrails.stream import guard_stream
 from app.llm.base import (
     ModelDelta,
     ModelMessage,
@@ -192,7 +193,11 @@ async def _stream_events(
 
     parts: list[str] = []
     done: StreamDone | None = None
-    async for event in gateway.stream(prepared.request):
+    # The outbound guardrail, lagged: a streamed delta cannot be retracted, so the risky window is
+    # held back rather than checked after sending. `allowed` is the composed turn, so a value the
+    # guest supplied and the assistant is quoting back is not mangled.
+    allowed = prepared.request.messages[-1].content if prepared.request.messages else ""
+    async for event in guard_stream(gateway.stream(prepared.request), allowed=allowed):
         if isinstance(event, StreamDone):
             done = event
         elif isinstance(event, ModelDelta):
