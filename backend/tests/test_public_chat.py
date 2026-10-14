@@ -26,6 +26,7 @@ from app.models.assistant import Assistant
 from app.models.conversation import Conversation, Message, MessageRole, VisitorSession
 from app.models.knowledge import KnowledgeBase
 from app.models.model_usage import ModelUsage
+from app.models.website_integration import WebsiteIntegration
 from app.runtime.chat import ChatStreamEnd, ChatStreamStart, start_chat_stream
 from app.runtime.rate_limit import rate_limiter
 
@@ -146,7 +147,17 @@ async def seed_session(
 ) -> uuid.UUID:
     session_factory = get_session_factory()
     async with session_factory() as db:
+        # project_id is the session's tenancy anchor; derived here so callers keep describing
+        # "a session on this integration" rather than restating the shape.
+        project_id = (
+            await db.execute(
+                select(WebsiteIntegration.project_id).where(
+                    WebsiteIntegration.id == uuid.UUID(integration_id)
+                )
+            )
+        ).scalar_one()
         session = VisitorSession(
+            project_id=project_id,
             integration_id=uuid.UUID(integration_id),
             origin=origin,
             expires_at=datetime.now(UTC) + expires_in,

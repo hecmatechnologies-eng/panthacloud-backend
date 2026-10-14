@@ -161,7 +161,9 @@ async def _ensure_knowledge_base(db_session, project_id: str) -> None:
     await db_session.commit()
 
 
-async def _seed_history(db_session, integration_id: str, history: tuple[tuple[str, str], ...]):
+async def _seed_history(
+    db_session, integration_id: str, history: tuple[tuple[str, str], ...], project_id: str
+):
     """Prior turns in a real session and conversation, so follow-up cases are genuine follow-ups.
 
     ``Conversation`` hangs off ``VisitorSession`` by id alone — it carries no organization or project
@@ -175,6 +177,10 @@ async def _seed_history(db_session, integration_id: str, history: tuple[tuple[st
     from datetime import UTC, datetime, timedelta
 
     session_row = VisitorSession(
+        # Coerced: project_id arrives as the string the JSON response carried, and the column is a
+        # native UUID type, so passing it through fails inside SQLAlchemy's bind processor with an
+        # AttributeError about `hex` - a long way from the cause.
+        project_id=uuid.UUID(project_id),
         integration_id=uuid.UUID(integration_id),
         origin=ORIGIN,
         expires_at=datetime.now(UTC) + timedelta(hours=1),
@@ -220,7 +226,7 @@ async def _send(client: AsyncClient, db_session, case: RuntimeCase) -> TurnObser
     monkeypatch.setattr("app.runtime.chat.query_knowledge_base", stub_retrieval(case))
     try:
         session_id = await _seed_history(
-            db_session, tenant["integration"]["id"], case.history
+            db_session, tenant["integration"]["id"], case.history, tenant["proj_id"]
         )
         if case.chunks and _all_weak(case):
             # A weak-only case is asserted to retrieve nothing, which the threshold is what

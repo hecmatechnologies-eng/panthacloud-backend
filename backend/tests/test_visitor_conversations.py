@@ -63,6 +63,23 @@ async def create_integration(
     return resp.json()
 
 
+async def _project_of(integration_id: str) -> uuid.UUID:
+    """The project a session is now scoped by, derived from its integration.
+
+    Deriving rather than threading a new argument through every call site, so the tests keep
+    describing "a session on this integration" and do not have to restate the tenancy shape.
+    """
+    session_factory = get_session_factory()
+    async with session_factory() as db:
+        return (
+            await db.execute(
+                select(WebsiteIntegration.project_id).where(
+                    WebsiteIntegration.id == uuid.UUID(integration_id)
+                )
+            )
+        ).scalar_one()
+
+
 async def seed_session(
     integration_id: str,
     origin: str = "https://shop.example.com",
@@ -71,6 +88,7 @@ async def seed_session(
     session_factory = get_session_factory()
     async with session_factory() as db:
         session = VisitorSession(
+            project_id=await _project_of(integration_id),
             integration_id=uuid.UUID(integration_id),
             origin=origin,
             expires_at=datetime.now(UTC) + session_ttl,
@@ -246,9 +264,12 @@ async def test_session_expiry_is_required(client: AsyncClient) -> None:
     async with session_factory() as db:
         db.add(
             VisitorSession(
+                project_id=await _project_of(integration["id"]),
                 integration_id=uuid.UUID(integration["id"]),
                 origin="https://shop.example.com",
                 # expires_at deliberately omitted: the retention field must not be optional.
+                # project_id is set, so the failure below is caused by expires_at alone - omit it
+                # and this test would still pass, for the wrong reason.
             )
         )
         with pytest.raises(IntegrityError):

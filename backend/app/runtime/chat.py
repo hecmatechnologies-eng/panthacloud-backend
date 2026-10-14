@@ -15,6 +15,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.channels.base import Channel
 from app.core.config import settings
 from app.core.database import get_session_factory
 from app.core.prompting import fence_untrusted
@@ -342,26 +343,33 @@ def _instructions_hash(instructions: str) -> str:
 async def _resolve_or_create_session(
     db: AsyncSession, ctx: TenantContext, session_id: uuid.UUID | None
 ) -> tuple[VisitorSession, Conversation]:
-    """Reuse a live session that belongs to this integration and this origin, else start a new one.
+    """Reuse a live session that belongs to this project, else start a new one.
 
-    A session id that is unknown, expired, belongs to another integration, or was begun on a
-    different registered origin is not an error: the caller gets a fresh session. Tenancy was
-    already decided by the resolver, so this can never cross tenants — it only declines to trust a
-    client-supplied id.
+    A session id that is unknown, expired, or belongs to another project is not an error: the caller
+    gets a fresh session. Tenancy was already decided by the resolver, so this can never cross
+    tenants — it only declines to trust a client-supplied id.
+
+    Scoped by ``project_id`` rather than ``integration_id``. Both were once the same test and the
+    widget's origin was the third condition; scoping by project keeps the tenant boundary while
+    letting a session exist without a widget, which is what every non-web channel needs.
+
+    The origin check stays, and is now widget-only by construction: a session with no integration
+    has no origin to compare, so it is exempt. That is the intended behaviour, not a loophole —
+    an origin only ever identified a browser, and a phone number has none.
     """
     if session_id is not None:
         session = (
             await db.execute(
                 select(VisitorSession).where(
                     VisitorSession.id == session_id,
-                    VisitorSession.integration_id == ctx.integration_id,
+                    VisitorSession.project_id == ctx.project_id,
                 )
             )
         ).scalar_one_or_none()
         if (
             session is not None
-            and session.origin == ctx.origin
             and not _is_expired(session.expires_at)
+            and (session.origin is None or session.origin == ctx.origin)
         ):
             conversation = await _latest_conversation(db, session.id)
             if conversation is None:
@@ -371,7 +379,9 @@ async def _resolve_or_create_session(
             return session, conversation
 
     session = VisitorSession(
+        project_id=ctx.project_id,
         integration_id=ctx.integration_id,
+        channel=Channel.WEB,
         origin=ctx.origin,
         expires_at=utc_now() + timedelta(hours=settings.PUBLIC_SESSION_TTL_HOURS),
     )

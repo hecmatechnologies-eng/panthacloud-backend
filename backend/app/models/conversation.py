@@ -23,11 +23,12 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, String, Text, text
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import UUID
 
+from app.channels.base import Channel
 from app.core.origins import MAX_ORIGIN_LENGTH
 from app.models.base import BaseModel
 from app.models.knowledge import JSONType
@@ -42,25 +43,57 @@ class MessageRole(str, enum.Enum):
 
 
 class VisitorSession(BaseModel):
-    """One visitor's browser session on a website integration (FR-108, FR-113).
+    """One visitor's conversation on one channel (FR-108, FR-113).
 
-    Created only after the tenant resolver has bound a request to an integration. The session is
-    the scope for conversation memory and rate limiting; ``expires_at`` is its TTL.
+    Scoped by ``project_id``, not by ``integration_id``. That inverts the original design on
+    purpose: a session used to require a website integration because the widget was the only
+    channel, and ``integration_id`` doubled as the tenancy anchor. It is now provenance only - "this
+    conversation started on that widget" - and nullable, because a WhatsApp or email conversation
+    has no widget behind it and the alternative is a column that forbids every channel we are
+    building.
+
+    ``project_id`` is the anchor because every turn needs one: ``KnowledgeBase`` and ``Assistant``
+    are project-scoped, and ``Project.organization_id`` already carries the organisation, so adding
+    an ``organization_id`` here would only denormalise it.
+
+    ``channel``/``external_id``/``thread_id`` are the normalised conversation key for non-widget
+    channels (ADR-004). ``external_id`` is opaque and never parsed - a Telegram chat id is not a
+    phone number. It is NULL on widget rows, which is what keeps them out of the channel index.
     """
 
     __tablename__ = "visitor_sessions"
 
-    integration_id: Mapped[uuid.UUID] = mapped_column(
+    project_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("website_integrations.id", ondelete="CASCADE"),
+        ForeignKey("projects.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
-    # The canonical origin the session was created from, as returned by the resolver. Stored so a
-    # later turn can be bound to the origin it began under.
-    origin: Mapped[str] = mapped_column(
-        String(MAX_ORIGIN_LENGTH),
+    integration_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("website_integrations.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    # Which channel this conversation arrived on. The enum values are stored, so renaming one is
+    # a migration; the set is expected to grow with channels.
+    channel: Mapped[Channel] = mapped_column(
+        SQLEnum(Channel, name="session_channel", values_callable=lambda e: [m.value for m in e]),
         nullable=False,
+        default=Channel.WEB,
+    )
+    # The provider's own identifier for the person or conversation. Opaque: never parsed, never
+    # normalised beyond whitespace, because a provider's format is theirs to change.
+    external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Separates distinct conversations with the same person. Some providers supply it, some must
+    # derive it.
+    thread_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # The canonical origin the session was created from, as returned by the resolver. Stored so a
+    # later turn can be bound to the origin it began under. Widget-only: a phone number has no
+    # origin header.
+    origin: Mapped[str | None] = mapped_column(
+        String(MAX_ORIGIN_LENGTH),
+        nullable=True,
     )
     # Session validity TTL. A retention field: enforced by the runtime, not the database.
     expires_at: Mapped[datetime] = mapped_column(
@@ -69,7 +102,7 @@ class VisitorSession(BaseModel):
         index=True,
     )
 
-    integration: Mapped["WebsiteIntegration"] = relationship(
+    integration: Mapped["WebsiteIntegration | None"] = relationship(
         "WebsiteIntegration",
         back_populates="visitor_sessions",
     )
@@ -78,6 +111,30 @@ class VisitorSession(BaseModel):
         back_populates="session",
         cascade="all, delete-orphan",
         order_by="Conversation.created_at",
+    )
+
+    __table_args__ = (
+        # One live conversation per person per channel per project.
+        #
+        # Partial, on `external_id IS NOT NULL`, because that is what excludes widget rows. A plain
+        # unique index would rely on NULLs being distinct, which is the default in Postgres and
+        # SQLite but is configurable (`NULLS NOT DISTINCT`) and therefore an assumption rather than
+        # a guarantee. The partial predicate states the intent instead: a widget session has no
+        # external id and does not participate in this constraint at all.
+        #
+        # Widget rows therefore keep no uniqueness guarantee of their own - deliberately the status
+        # quo, where they are found by a client-supplied id rather than looked up by identity.
+        # Enforcing it per origin would break a visitor who clears browser storage mid-visit.
+        Index(
+            "uq_visitor_session_channel_identity",
+            "project_id",
+            "channel",
+            "external_id",
+            "thread_id",
+            unique=True,
+            sqlite_where=text("external_id IS NOT NULL"),
+            postgresql_where=text("external_id IS NOT NULL"),
+        ),
     )
 
 
