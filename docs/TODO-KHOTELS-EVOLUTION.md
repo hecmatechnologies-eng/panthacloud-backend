@@ -250,6 +250,25 @@ Recorded so these do not creep back in:
 
 ## 6. Open questions
 
+- **What gets retained from a guest conversation.** Recorded 2026-10-14, deliberately not yet
+  decided. A guest's message is persisted verbatim in `Message.content`, so anything they type into
+  the widget — an email, a phone number, a card number — is stored in the clear. The **outbound**
+  guardrail (§ guardrails, `app/guardrails/pii.py`) stops a model-invented value reaching a guest or
+  the database, and it covers every channel per ADR-004. It does not touch what the guest typed, and
+  it should not: redacting inbound before the model sees it stops the assistant confirming an address
+  back, which is the job.
+  
+  So the open question is not a guardrail question, it is a **data-retention policy**: store the raw
+  message, or store a redacted copy with the raw held for a bounded window for support purposes?
+  Whatever is chosen needs a written retention window and an erasure path, because a hotel handling
+  guest contact details is exactly the case where "we'll decide later" turns into an incident. Worth
+  settling before a real guest types a card number, not after.
+
+- **A channel adapter bypassing the turn path.** ADR-004 records the rule that channel adapters must
+  reach the model through `app.runtime.chat.handle_chat`, so they inherit the outbound guard and the
+  budget. That rule is currently only a docstring. It needs a test: an adapter holding its own
+  `ModelGateway` must not be able to send unredacted.
+
 - Does K Hotels need the assistant to **read live availability**, or is that always a staff
   action? Answer determines whether K1 alone suffices or K5 grows a read-only tool.
 - Should the 15-minute threshold be **per-org configurable**? The prototype hard-codes 15.
