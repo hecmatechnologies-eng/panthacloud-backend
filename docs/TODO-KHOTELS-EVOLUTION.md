@@ -104,7 +104,12 @@ The startup line `No model provider configured; public chat will return 503` is 
 
 **Minor tuning note:** refusals still return low-scoring citations (0.42–0.47) even though
 the model correctly ignores them. The runtime's internal retrieval threshold could be raised
-so citations are suppressed on refusal. Cosmetic; the behaviour is already correct.
+so citations are suppressed on refusal.
+
+> **Update 2026-10-14:** the behaviour is now pinned as a contract by K7's
+> `weak_retrieval_is_excluded_by_the_threshold` case, which fails if a sub-threshold chunk is
+> quoted or cited. Raising the deployment default `RETRIEVAL_SCORE_THRESHOLD` from `0.0` is still
+> open, and remains a product decision rather than an evaluation one.
 
 ### K2 — Write ADR-002 · ✅ **DONE 2026-10-11**
 
@@ -155,17 +160,57 @@ detail modal.
 The standalone HTML prototype at `frontend/khotels-prototype/khotels-guest-desk.html` is the
 reference for layout and behaviour.
 
-### K7 — Runtime evals · ~1 day · 🔴 **raised to G1 by the standards assessment**
+### K7 — Runtime evals · ✅ **DONE 2026-10-14**
 
-Closes the only 🔴 **assurance** gap in `standards-alignment.md`. `app/evals/` covers **only**
-`website_analyst` today, and the 9 existing cases are **not referenced in
-`.github/workflows/ci.yml`** — so they are not a gate.
+> **Correction to the premise this item was written under.** It previously read: *"`app/evals/`
+> covers only `website_analyst` today, and the 9 existing cases are **not referenced in
+> `.github/workflows/ci.yml`** — so they are not a gate."* That was wrong on both counts.
+> `ci.yml` had a "Run Evals" step on `tests/test_evals.py`, and those 9 cases are model-free
+> (`deterministic_analyze`), so they were already gating. The real gap was never CI wiring — it was
+> that **nothing evaluated the guest-facing runtime at all**.
 
-NIST's March 2026 automated-benchmark work is expected to define how agent assurance is
-measured. K3–K7 are all guest-facing behaviour with no regression detection behind them.
+**What landed.** `app/evals/runtime_corpus.py` + `runtime_runner.py`, gated by
+`tests/test_runtime_evals.py` and its own CI step. Ten cases driving real
+`POST /api/v1/public/chat` turns through the ASGI app, with the model faked and retrieval stubbed
+per case. Each case drives a full turn rather than one function, because the properties span HTTP
+tenant resolution, rate limiting, prompt assembly, the gateway and persistence.
 
-Add a runtime case type: grounding and citation accuracy, refusal when retrieval is weak,
-and adherence to per-tenant `system_instructions`. **Wire evals into CI as a gate.**
+| Case | Property |
+|---|---|
+| `grounded_answer_cites_the_document_it_used` | a grounded answer carries the citation for the chunk it was given, fenced in the user turn |
+| `no_knowledge_base_says_so_rather_than_inventing` | nothing retrieved ⇒ the prompt states it, no fence, no citations |
+| `poisoned_document_cannot_forge_the_fence` | a document carrying the closing delimiter cannot escape the data region |
+| `unconfigured_tenant_still_gets_the_platform_contract` | absence of configuration is never the absence of the contract |
+| `tenant_instructions_are_appended_below_the_contract` | tenant rules extend, never replace, the platform layer |
+| `hostile_tenant_instructions_cannot_widen_the_contract` | tenant text requesting elevated capability does not grant it |
+| `weak_retrieval_is_excluded_by_the_threshold` | an irrelevant chunk below the threshold is neither quoted nor cited |
+| `citation_markers_are_rank_not_chunk_index` | `[n]` is retrieval rank; `chunk_index` is a separate numbering space |
+| `history_is_carried_oldest_first_with_the_question_last` | follow-ups see prior turns; the current question is never replayed as history |
+| `every_reply_carries_its_provenance` | `assistant_version` + `prompt_hash` recorded per reply |
+
+**`weak_retrieval` closes the K1 tuning note** (§ below, "Minor tuning note"). It is treated as a
+contract rather than cosmetics: those 0.42–0.47 citations are what a visitor is told the answer
+came from, and they are the signal ADR-003's router decides on. The corpus pins the *handling*; the
+deployment default `RETRIEVAL_SCORE_THRESHOLD` is still `0.0` and remains a product decision.
+
+**What this corpus cannot decide, stated plainly.** It never calls a model, so it cannot verify
+that the model *refuses* a weakly-grounded question — that judgement happens inside the model. What
+it verifies is what the runtime owns: the prompt it assembled, the citations it claimed, and its
+behaviour when retrieval returns nothing or something irrelevant. Judging model grounding needs a
+live model and belongs in an out-of-band run, not a PR gate.
+
+**Verified by mutation, not by passing.** Six runtime guarantees were disabled in turn and the
+corpus required to catch each. One did not fire, and it was the corpus that was wrong:
+
+> The injection case asserted `"UNTRUSTED CONTENT" is present` as proof the fence survived. It
+> could never fail — the fence's own closing delimiter contains that phrase, and so does the
+> attacker's payload. **The case passed with `fence_untrusted` deleted from the runtime.** A green
+> case guarding nothing. Replaced with exact sentinel counting (one opening, one closing, payload
+> defanged), which fails when the fence is removed *or* forgeable.
+
+That is the fourth time this session a passing test turned out to prove nothing. Two of my own
+corpus cases also shipped an unconditional assertion that fired on success —
+`f"status {o.status_code}, expected 200"` reported failure for a correct 200, in all ten cases.
 
 ---
 

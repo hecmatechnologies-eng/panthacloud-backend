@@ -75,6 +75,15 @@ jobs:
           APP_ENV: test
           FALLBACK_SQLITE_URL: "sqlite+aiosqlite:///:memory:"
 
+      - name: Run Runtime Evals
+        # The guest-facing corpus, and the prerequisite ADR-003 names for skills. Its own step
+        # because these failures are contract regressions in what a visitor is told and what they
+        # are shown as evidence - not "a test broke", which is how they would otherwise read.
+        run: .venv/bin/pytest tests/test_runtime_evals.py -v
+        env:
+          APP_ENV: test
+          FALLBACK_SQLITE_URL: "sqlite+aiosqlite:///:memory:"
+
       - name: Run Pytest Test Suite
         run: .venv/bin/pytest tests
         env:
