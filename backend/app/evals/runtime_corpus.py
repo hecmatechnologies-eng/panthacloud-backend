@@ -55,6 +55,9 @@ class RuntimeCase:
     tenant_instructions: str | None = None
     # Prior visitor/assistant turns seeded before the question, oldest-first.
     history: tuple[tuple[str, str], ...] = ()
+    # The reply the fake model should give, when the case is about what comes *back* rather than
+    # what goes out. None keeps the suite-wide default.
+    model_reply: str | None = None
     _document_ids: dict[str, uuid.UUID] = field(default_factory=dict)
 
     def document_id(self, filename: str) -> uuid.UUID:
@@ -364,6 +367,38 @@ def _provenance() -> RuntimeCase:
     )
 
 
+def _outbound_pii() -> RuntimeCase:
+    """The output-side guardrail, as a guest experiences it.
+
+    The model volunteers a card number it was never shown. It must not reach the visitor. This case
+    needed its own ``model_reply``: with the suite-wide default the reply contained no PII, the
+    guard was a no-op, and the observation was byte-identical whether the guard ran or not - a case
+    that looked like coverage and detected the guard being deleted. Verified by mutating
+    ``_guard_reply`` to return the reply untouched; the corpus stayed green until the fake was
+    given something to leak.
+    """
+    return RuntimeCase(
+        name="a_number_the_model_invented_does_not_reach_the_guest",
+        question="what is my booking reference?",
+        property="outbound PII the model invented is redacted before the visitor sees it",
+        chunks=(("faq.txt", 0, "Your booking reference is on your confirmation email.", 0.75),),
+        model_reply="I have noted card 4242 4242 4242 4242 against your booking.",
+        expect=lambda o: [
+            f"status {o.status_code}, expected 200" if o.status_code != 200 else "",
+            "a reply must still be produced" if not o.reply.strip() else "",
+            "the invented card number reached the guest"
+            if "4242" in o.reply
+            else "",
+            "redaction must be visible so the guest is not left with a silently mangled answer"
+            if "[redacted]" not in o.reply
+            else "",
+            "expected the citation to survive the guard"
+            if len(o.citations) != 1
+            else "",
+        ],
+    )
+
+
 RUNTIME_CORPUS: tuple[RuntimeCase, ...] = (
     _grounded(),
     _no_knowledge_base(),
@@ -375,4 +410,5 @@ RUNTIME_CORPUS: tuple[RuntimeCase, ...] = (
     _multi_chunk_numbering(),
     _multi_turn(),
     _provenance(),
+    _outbound_pii(),
 )

@@ -234,6 +234,11 @@ async def _send(client: AsyncClient, db_session, case: RuntimeCase) -> TurnObser
         }
         if session_id is not None:
             body["session_id"] = str(session_id)
+        provider = _FAKE["provider"]
+        # A case about what comes *back* dictates its own reply; otherwise the suite default stands.
+        # Set before the request, and the recorded call is read after it.
+        provider.reply = case.model_reply if case.model_reply is not None else MODEL_REPLY
+        provider.calls.clear()
         resp = await client.post(
             "/api/v1/public/chat",
             json=body,
@@ -241,7 +246,6 @@ async def _send(client: AsyncClient, db_session, case: RuntimeCase) -> TurnObser
         )
         payload = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
 
-        provider = _FAKE["provider"]
         request = provider.calls[-1] if provider.calls else None
         system = ""
         user_turn = ""

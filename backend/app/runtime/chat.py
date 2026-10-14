@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.config import settings
 from app.core.database import get_session_factory
 from app.core.prompting import fence_untrusted
+from app.guardrails import redact_outbound
 from app.llm.base import (
     ModelDelta,
     ModelMessage,
@@ -127,13 +128,14 @@ async def handle_chat(
             conversation_id=prepared.conversation_id,
         ),
     )
-    _persist_reply(db, prepared, response.text)
+    reply = _guard_reply(response.text, prepared)
+    _persist_reply(db, prepared, reply)
     await db.flush()
 
     return ChatReply(
         session_id=prepared.session_id,
         conversation_id=prepared.conversation_id,
-        reply=response.text,
+        reply=reply,
         citations=prepared.citations,
     )
 
@@ -287,6 +289,26 @@ async def _prepare_turn(
         assistant_version=assistant.version,
         prompt_hash=_instructions_hash(assistant.instructions),
     )
+
+
+def _guard_reply(reply: str, prepared: PreparedTurn) -> str:
+    """The outbound guardrail, applied to a completed turn.
+
+    Redacts PII the model produced that it could only have *invented*: the context it was shown is
+    the allow-list, so a value the guest supplied and the assistant is quoting back survives,
+    because redacting that would break the answer and read to the guest as a fault. This is the
+    first output-side check the runtime has — the input side has been fenced since the beginning,
+    but nothing inspected what came back.
+
+    **Known gap: streaming is not guarded here.** `_stream_events` yields deltas as the provider
+    produces them, and a redacted string cannot un-send one. The streamed copy is therefore
+    unredacted even though the persisted copy is not. Redacting mid-stream needs the match buffered
+    until the span closes, which trades the first-token latency advantage for correctness; that is a
+    deliberate change to make when streaming is the dominant path rather than here, where it would
+    be an unflagged half-measure.
+    """
+    allowed = prepared.request.messages[-1].content if prepared.request.messages else ""
+    return redact_outbound(reply, allowed=allowed)
 
 
 def _persist_reply(db: AsyncSession, prepared: PreparedTurn, reply: str) -> None:
