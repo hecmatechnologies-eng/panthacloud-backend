@@ -31,7 +31,9 @@ from app.llm.providers.fake import FakeModelProvider
 from app.models.conversation import (
     Conversation,
     Message,
+    MessageDirection,
     MessageRole,
+    MessageStatus,
     VisitorSession,
 )
 from app.runtime.rate_limit import rate_limiter
@@ -203,6 +205,7 @@ async def _seed_history(
             Message(
                 conversation_id=conversation.id,
                 role=MessageRole.VISITOR,
+                direction=MessageDirection.INBOUND,
                 content=visitor_text,
             )
         )
@@ -210,6 +213,8 @@ async def _seed_history(
             Message(
                 conversation_id=conversation.id,
                 role=MessageRole.ASSISTANT,
+                direction=MessageDirection.OUTBOUND,
+                status=MessageStatus.SENT,
                 content=assistant_text,
             )
         )

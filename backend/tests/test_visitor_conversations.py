@@ -15,7 +15,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_session_factory
-from app.models.conversation import Conversation, Message, MessageRole, VisitorSession
+from app.models.conversation import (
+    Conversation,
+    Message,
+    MessageDirection,
+    MessageRole,
+    MessageStatus,
+    VisitorSession,
+)
 from app.models.website_integration import WebsiteIntegration
 
 # ============================================================
@@ -122,7 +129,18 @@ async def seed_message(
 ) -> uuid.UUID:
     session_factory = get_session_factory()
     async with session_factory() as db:
-        message = Message(conversation_id=conversation_id, role=role, content=content)
+        message = Message(
+        conversation_id=conversation_id,
+        role=role,
+        # Derived, not passed: direction is a fact about who wrote the turn, and the seeder already
+        # knows that from the role. Making every call site supply both would let them disagree -
+        # a VISITOR row marked outbound is a bug no type would catch.
+        direction=(
+            MessageDirection.INBOUND if role is MessageRole.VISITOR else MessageDirection.OUTBOUND
+        ),
+        status=None if role is MessageRole.VISITOR else MessageStatus.SENT,
+        content=content,
+    )
         if created_at is not None:
             message.created_at = created_at
         db.add(message)
@@ -226,7 +244,60 @@ async def test_messages_are_ordered_by_created_at(client: AsyncClient) -> None:
 
 @pytest.mark.asyncio
 async def test_message_role_enum_values() -> None:
-    assert {role.value for role in MessageRole} == {"VISITOR", "ASSISTANT"}
+    """Pinned as an exact set, because a new role is a schema migration and a stored value.
+
+    ``HUMAN_OPERATOR`` is the K5 approval state. It exists in the enum before anything can write
+    it, so this test failing on its addition is the point: the type changed, and that is a decision
+    someone has to make consciously rather than discover in a production column.
+    """
+    assert {role.value for role in MessageRole} == {
+        "VISITOR",
+        "ASSISTANT",
+        "HUMAN_OPERATOR",
+    }
+
+
+@pytest.mark.asyncio
+async def test_direction_and_status_enums_cover_the_delivery_lifecycle() -> None:
+    """Direction is binary; status is outbound-only, so it must be able to say nothing."""
+    assert {d.value for d in MessageDirection} == {"inbound", "outbound"}
+    assert {s.value for s in MessageStatus} == {
+        "drafted",
+        "awaiting_approval",
+        "sent",
+        "failed",
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_retried_provider_message_cannot_write_a_second_turn(
+    client: AsyncClient,
+) -> None:
+    """Providers retry webhooks, and two concurrent retries are the normal case on a slow response.
+
+    This is why the uniqueness is in the database rather than in an application-level "have I seen
+    this id?" check - which would lose the race between two retries arriving together. The test
+    writes the same external id twice and requires the second to be refused.
+    """
+    integration, _, _ = await tenant_fixture(client, "vc_retry@example.com", "VcRetry")
+    session_id = await seed_session(integration["id"])
+    conversation_id = await seed_conversation(session_id)
+
+    session_factory = get_session_factory()
+    async with session_factory() as db:
+        for _ in range(2):
+            db.add(
+                Message(
+                    conversation_id=conversation_id,
+                    role=MessageRole.VISITOR,
+                    direction=MessageDirection.INBOUND,
+                    external_message_id="wamid.DUPLICATE",
+                    content="Do you have a room for Friday?",
+                )
+            )
+        with pytest.raises(IntegrityError):
+            await db.commit()
+        await db.rollback()
 
 
 @pytest.mark.asyncio

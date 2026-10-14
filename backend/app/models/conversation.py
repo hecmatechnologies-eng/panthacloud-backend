@@ -40,6 +40,32 @@ if TYPE_CHECKING:
 class MessageRole(str, enum.Enum):
     VISITOR = "VISITOR"
     ASSISTANT = "ASSISTANT"
+    #: A staff member replying, rather than the assistant. Distinct from ``ASSISTANT`` because the
+    #: two have different accountability: an assistant answer is model output, a staff reply is a
+    #: person speaking for the business. K5's approval gate is what makes this reachable.
+    HUMAN_OPERATOR = "HUMAN_OPERATOR"
+
+
+class MessageDirection(str, enum.Enum):
+    #: Toward the guest. Providers retry webhooks, so an inbound turn can arrive twice and the
+    #: duplicate must be refused rather than written.
+    INBOUND = "inbound"
+    #: Away from the guest, over whatever channel the session came in on.
+    OUTBOUND = "outbound"
+
+
+class MessageStatus(str, enum.Enum):
+    """Delivery lifecycle for an outbound turn.
+
+    Null on inbound rows: a guest's message has no delivery state, and making it say
+    ``SENT`` would be a fiction that any query filtering on status has to special-case.
+    """
+
+    #: Composed but not yet sent - the K5 approval state.
+    DRAFTED = "drafted"
+    AWAITING_APPROVAL = "awaiting_approval"
+    SENT = "sent"
+    FAILED = "failed"
 
 
 class VisitorSession(BaseModel):
@@ -116,11 +142,14 @@ class VisitorSession(BaseModel):
     __table_args__ = (
         # One live conversation per person per channel per project.
         #
-        # Partial, on `external_id IS NOT NULL`, because that is what excludes widget rows. A plain
-        # unique index would rely on NULLs being distinct, which is the default in Postgres and
-        # SQLite but is configurable (`NULLS NOT DISTINCT`) and therefore an assumption rather than
-        # a guarantee. The partial predicate states the intent instead: a widget session has no
-        # external id and does not participate in this constraint at all.
+        # Partial on `external_id IS NOT NULL`, which puts widget rows - every row with no external
+        # id - outside the constraint's scope.
+        #
+        # Corrected claim, because the original comment here overstated it: under the default in
+        # both engines NULLs are distinct, so a plain index would also admit widget rows. The
+        # predicate does not prevent a present collision; it stops the behaviour depending on a
+        # default that Postgres 15+ can override per-type with NULLS NOT DISTINCT. Defensive, not
+        # load-bearing.
         #
         # Widget rows therefore keep no uniqueness guarantee of their own - deliberately the status
         # quo, where they are found by a client-supplied id rather than looked up by identity.
@@ -187,6 +216,22 @@ class Message(BaseModel):
     # relationship's (created_at, id) ordering as a covering index.
     __table_args__ = (
         Index("ix_message_conversation_created", "conversation_id", "created_at", "id"),
+        # One message per provider id per conversation. Partial so that rows with no provider id -
+        # every assistant turn - are outside the constraint's scope.
+        #
+        # Note what the partial predicate does and does not buy. Under the default in both engines,
+        # NULLs are distinct in a unique index, so a plain index would also let those rows through;
+        # making it partial does not fix a present collision. What it buys is that the behaviour no
+        # longer depends on that default, which Postgres 15+ can override per-type with
+        # NULLS NOT DISTINCT. The claim is stated at its real strength: defensive, not load-bearing.
+        Index(
+            "uq_message_external_id",
+            "conversation_id",
+            "external_message_id",
+            unique=True,
+            sqlite_where=text("external_message_id IS NOT NULL"),
+            postgresql_where=text("external_message_id IS NOT NULL"),
+        ),
     )
 
     conversation_id: Mapped[uuid.UUID] = mapped_column(
@@ -198,6 +243,21 @@ class Message(BaseModel):
         SQLEnum(MessageRole, name="message_role"),
         nullable=False,
     )
+    direction: Mapped[MessageDirection] = mapped_column(
+        SQLEnum(MessageDirection, name="message_direction"),
+        nullable=False,
+    )
+    # Outbound lifecycle only; NULL on inbound rows, where it would be a fiction.
+    status: Mapped[MessageStatus | None] = mapped_column(
+        SQLEnum(MessageStatus, name="message_status"),
+        nullable=True,
+    )
+    # The provider's own id for this message. Its purpose is idempotency: providers retry
+    # webhooks, and a retried delivery must not write a second turn. The partial unique index
+    # below enforces that in the database, because an application-level "have I seen this id?"
+    # check races two concurrent retries of the same delivery - which is the normal case, not an
+    # edge case, when a provider retries on a slow response.
+    external_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     content: Mapped[str] = mapped_column(
         Text,
         nullable=False,

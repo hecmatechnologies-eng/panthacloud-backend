@@ -31,7 +31,14 @@ from app.llm.base import (
 from app.llm.gateway import ModelGateway, UsageContext, get_model_gateway
 from app.models.assistant import Assistant
 from app.models.base import utc_now
-from app.models.conversation import Conversation, Message, MessageRole, VisitorSession
+from app.models.conversation import (
+    Conversation,
+    Message,
+    MessageDirection,
+    MessageRole,
+    MessageStatus,
+    VisitorSession,
+)
 from app.models.knowledge import KnowledgeBase
 from app.runtime.assistant import CustomerAssistant, resolve_customer_assistant
 from app.runtime.rate_limit import rate_limiter
@@ -279,7 +286,16 @@ async def _prepare_turn(
         window,
     )
 
-    db.add(Message(conversation_id=conversation.id, role=MessageRole.VISITOR, content=message))
+    db.add(
+        Message(
+            conversation_id=conversation.id,
+            role=MessageRole.VISITOR,
+            direction=MessageDirection.INBOUND,
+            # No status: a guest's message has no delivery lifecycle, and writing SENT here would be
+            # a fiction every status query would then have to special-case.
+            content=message,
+        )
+    )
     # Flush before assembling the prompt, so the history includes the visitor's current turn.
     await db.flush()
 
@@ -322,6 +338,11 @@ def _persist_reply(db: AsyncSession, prepared: PreparedTurn, reply: str) -> None
         Message(
             conversation_id=prepared.conversation_id,
             role=MessageRole.ASSISTANT,
+            direction=MessageDirection.OUTBOUND,
+            # Inserted in the same request that produced it, so it is sent by definition. DRAFTED
+            # and AWAITING_APPROVAL belong to K5's approval gate, which does not exist yet - and
+            # claiming either here would be a state this row never passed through.
+            status=MessageStatus.SENT,
             content=reply,
             citations=list(prepared.citations),
             assistant_version=prepared.assistant_version,
