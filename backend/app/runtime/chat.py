@@ -15,7 +15,8 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.channels.base import Channel
+from app.channels.base import Channel, ChannelIdentity
+from app.channels.sessions import get_or_create_session
 from app.core.config import settings
 from app.core.database import get_session_factory
 from app.core.prompting import fence_untrusted
@@ -72,7 +73,9 @@ class PreparedTurn:
     conversation_id: uuid.UUID
     organization_id: uuid.UUID
     project_id: uuid.UUID
-    integration_id: uuid.UUID
+    #: ``None`` for a channel turn, which has no widget behind it. Already optional on
+    #: ``UsageContext``, so the gateway's own usage rows were ready for this.
+    integration_id: uuid.UUID | None
     request: ModelRequest
     citations: tuple[dict[str, Any], ...]
     # Which definition produced this turn, so the answer can be attributed after the fact even if
@@ -106,6 +109,60 @@ class ChatStreamEnd:
 ChatStreamEvent = ChatStreamStart | ChatStreamDelta | ChatStreamEnd
 
 
+@dataclass(frozen=True, slots=True)
+class WidgetTurn:
+    """A turn from the embedded widget.
+
+    The session is named by a client-supplied id, which is untrusted and therefore re-checked
+    against the project and origin on every turn rather than believed.
+    """
+
+    ctx: TenantContext
+    #: ``None`` for a first-time visitor, which is not an error - it means a new session.
+    session_id: uuid.UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ChannelTurn:
+    """A turn from a messaging channel (ADR-004).
+
+    The session is found by the speaker's identity alone: there is no client-supplied id to trust,
+    and none is wanted, because the identity *is* the addressing. Resolved through
+    ``app.channels.sessions``, which is keyed on the unique index rather than on trust.
+
+    The inbound provider message id is deliberately not carried here yet. Webhook delivery is
+    retried by every provider, so the inbound row wants ``Message.external_message_id`` - and the
+    existing unique constraint on it means a retried delivery has to be caught at the point this
+    module writes the row, not in the adapter. Adding the field without that handling would turn a
+    duplicate delivery into an IntegrityError and a 500. It lands with the first adapter.
+    """
+
+    ctx: TenantContext
+    identity: ChannelIdentity
+
+
+#: Where a turn came from, which decides how it resolves to a session and what it is bounded by.
+#: A union rather than two sets of optional arguments, so a caller cannot supply half of each shape
+#: and get a turn that is neither.
+TurnSource = WidgetTurn | ChannelTurn
+
+
+async def _shed_by_ip(client_ip: str | None) -> None:
+    """The caller's address, bounded before anything else is touched.
+
+    Applied ahead of tenancy resolution on purpose: a flood from one address should cost a Redis
+    round trip, not a database lookup and not a session insert. Shared by every entry point so that
+    adding a channel cannot quietly skip the cheapest bound there is.
+    """
+    if client_ip:
+        await rate_limiter.check(
+            "ip",
+            client_ip,
+            settings.PUBLIC_CHAT_RATE_LIMIT_PER_IP,
+            settings.PUBLIC_CHAT_RATE_LIMIT_WINDOW_SECONDS,
+        )
+
+
 async def handle_chat(
     db: AsyncSession,
     *,
@@ -117,14 +174,60 @@ async def handle_chat(
 ) -> ChatReply:
     """One chat turn. Raises ``TenantResolutionError`` or ``RateLimitExceeded``; never returns a
     reply to a caller that is not entitled to one."""
-    prepared = await _prepare_turn(
+    await _shed_by_ip(client_ip)
+    ctx = await resolve_tenant(db, public_key, origin)
+    return await complete_turn(
         db,
-        public_key=public_key,
-        origin=origin,
-        session_id=session_id,
+        source=WidgetTurn(ctx=ctx, session_id=session_id),
         message=message,
-        client_ip=client_ip,
     )
+
+
+async def handle_channel_message(
+    db: AsyncSession,
+    *,
+    ctx: TenantContext,
+    identity: ChannelIdentity,
+    message: str,
+    client_ip: str | None,
+) -> ChatReply:
+    """One turn from a messaging channel.
+
+    There is no streaming variant, and that is the decision rather than the omission (ADR-004):
+    streaming is a property of the channel, not of the assistant. The widget streams to a browser
+    that renders tokens as they arrive; WhatsApp, email, Telegram and SMS each take one complete
+    message. Adding a streaming path here would mean holding a database session open for the length
+    of a generation on a transport that cannot use it, and would let a channel adapter reach the
+    token stream *around* the lagged guard in ``app.guardrails.stream`` - which exists precisely to
+    hold back a prefix so a partial stream cannot leak what a complete one would be redacted for.
+
+    ``ctx`` is taken resolved rather than resolved here because a channel has no public key and no
+    origin: the caller has already matched the speaker to a project by whatever that channel
+    addresses by. Everything after that - rate limits, session resolution, persistence, retrieval,
+    the model, and the outbound PII guard - is the same pipeline the widget runs. That is the point
+    of putting this here instead of in the adapter.
+    """
+    await _shed_by_ip(client_ip)
+    return await complete_turn(
+        db,
+        source=ChannelTurn(ctx=ctx, identity=identity),
+        message=message,
+    )
+
+
+async def complete_turn(
+    db: AsyncSession,
+    *,
+    source: TurnSource,
+    message: str,
+) -> ChatReply:
+    """Run one turn end to end against an already-resolved tenant.
+
+    The single completion path for every channel as well as the widget's JSON endpoint, so that the
+    bounds, the persistence and the outbound guard cannot drift apart per entry point. The IP shed
+    is not here because it must happen *before* tenancy is resolved; each entry point does it.
+    """
+    prepared = await _prepare_turn(db, source=source, message=message)
 
     gateway = get_model_gateway()
     response = await gateway.complete(
@@ -159,6 +262,8 @@ async def start_chat_stream(
 ) -> AsyncIterator[ChatStreamEvent]:
     """Prepare a streamed turn and return the iterator that yields its events.
 
+    Widget only. A channel takes one complete message; see :func:`handle_channel_message`.
+
     Deliberately a coroutine rather than an async generator: the preparation — tenancy, rate
     limits, persistence, budget — must run, and be able to **raise**, while the caller can still
     answer with a real HTTP status, before any part of the response has been sent.
@@ -172,13 +277,12 @@ async def start_chat_stream(
     gateway = get_model_gateway()
 
     async with session_factory() as db:
+        await _shed_by_ip(client_ip)
+        ctx = await resolve_tenant(db, public_key, origin)
         prepared = await _prepare_turn(
             db,
-            public_key=public_key,
-            origin=origin,
-            session_id=session_id,
+            source=WidgetTurn(ctx=ctx, session_id=session_id),
             message=message,
-            client_ip=client_ip,
         )
         # `complete` checks the budget itself; `stream` cannot without a session, so the caller
         # does it here — before any token is paid for.
@@ -240,31 +344,37 @@ async def _stream_events(
 async def _prepare_turn(
     db: AsyncSession,
     *,
-    public_key: str | None,
-    origin: str | None,
-    session_id: uuid.UUID | None,
+    source: TurnSource,
     message: str,
-    client_ip: str | None,
 ) -> PreparedTurn:
-    """Rate limit, resolve the tenant, persist the visitor's turn, and assemble the prompt.
+    """Rate limit, persist the visitor's turn, and assemble the prompt.
 
     Shared by the JSON and streaming paths, so both enforce the same bounds and build the same
-    context; only the model call differs.
+    context; only the model call differs. Takes tenancy already resolved, because a channel has no
+    public key to resolve it from.
     """
     window = settings.PUBLIC_CHAT_RATE_LIMIT_WINDOW_SECONDS
-    # IP first: it is the cheapest shed, and it does not require the tenant to be known yet.
-    if client_ip:
-        await rate_limiter.check("ip", client_ip, settings.PUBLIC_CHAT_RATE_LIMIT_PER_IP, window)
+    ctx = source.ctx
 
-    ctx = await resolve_tenant(db, public_key, origin)
-
-    # IP, integration and organization are all server-derived and cannot be reset by the caller.
-    await rate_limiter.check(
-        "integration",
-        str(ctx.integration_id),
-        settings.PUBLIC_CHAT_RATE_LIMIT_PER_INTEGRATION,
-        window,
-    )
+    # These scopes are server-derived and cannot be reset by the caller. The widget is bounded per
+    # integration, because that is what a public key names. A channel has no integration, so it is
+    # bounded per project - the tenancy anchor, and the same granularity (one site, or one
+    # business). Without that branch this would stringify None and put every channel tenant into a
+    # single shared bucket, which is not a limit.
+    if ctx.integration_id is not None:
+        await rate_limiter.check(
+            "integration",
+            str(ctx.integration_id),
+            settings.PUBLIC_CHAT_RATE_LIMIT_PER_INTEGRATION,
+            window,
+        )
+    else:
+        await rate_limiter.check(
+            "project",
+            str(ctx.project_id),
+            settings.PUBLIC_CHAT_RATE_LIMIT_PER_INTEGRATION,
+            window,
+        )
     await rate_limiter.check(
         "organization",
         str(ctx.organization_id),
@@ -272,13 +382,13 @@ async def _prepare_turn(
         window,
     )
 
-    session, conversation = await _resolve_or_create_session(db, ctx, session_id)
+    session, conversation = await _resolve_or_create_session(db, source)
 
     # Session scope governs how many turns one resumed session may take. It is *not* an abuse
-    # boundary: there is no server-set cookie, so a caller that omits or fabricates session_id
-    # gets a fresh session (and a fresh counter) every time. The enforceable bounds are the IP,
-    # integration and organization scopes above. A conversation scope is deferred with B5's usage
-    # accounting — one conversation per session at MVP, so it would duplicate this one.
+    # boundary: on the widget there is no server-set cookie, so a caller that omits or fabricates
+    # session_id gets a fresh session (and a fresh counter) every time. The enforceable bounds are
+    # the IP, integration/project and organization scopes above. A conversation scope is deferred
+    # with B5's usage accounting — one conversation per session at MVP, so it would duplicate this.
     await rate_limiter.check(
         "session",
         str(session.id),
@@ -362,6 +472,24 @@ def _instructions_hash(instructions: str) -> str:
 
 
 async def _resolve_or_create_session(
+    db: AsyncSession, source: TurnSource
+) -> tuple[VisitorSession, Conversation]:
+    """Find the session this turn belongs to, and its conversation.
+
+    The two sources resolve differently because what they can trust differs. A widget names its
+    session with a client-supplied id, which is checked rather than believed. A channel names its
+    session with the speaker's identity, which is addressing rather than a claim.
+    """
+    if isinstance(source, ChannelTurn):
+        found = await get_or_create_session(
+            db, project_id=source.ctx.project_id, identity=source.identity
+        )
+        return await _conversation_for(db, found.session)
+
+    return await _resolve_widget_session(db, source.ctx, source.session_id)
+
+
+async def _resolve_widget_session(
     db: AsyncSession, ctx: TenantContext, session_id: uuid.UUID | None
 ) -> tuple[VisitorSession, Conversation]:
     """Reuse a live session that belongs to this project, else start a new one.
@@ -392,12 +520,7 @@ async def _resolve_or_create_session(
             and not _is_expired(session.expires_at)
             and (session.origin is None or session.origin == ctx.origin)
         ):
-            conversation = await _latest_conversation(db, session.id)
-            if conversation is None:
-                conversation = _new_conversation(session.id)
-                db.add(conversation)
-                await db.flush()
-            return session, conversation
+            return await _conversation_for(db, session)
 
     session = VisitorSession(
         project_id=ctx.project_id,
@@ -408,9 +531,23 @@ async def _resolve_or_create_session(
     )
     db.add(session)
     await db.flush()
-    conversation = _new_conversation(session.id)
-    db.add(conversation)
-    await db.flush()
+    return await _conversation_for(db, session)
+
+
+async def _conversation_for(
+    db: AsyncSession, session: VisitorSession
+) -> tuple[VisitorSession, Conversation]:
+    """This session's current conversation, opening one if the session has none yet.
+
+    A session outlives its conversations - a guest can lapse and come back, and the session is
+    revived rather than replaced - so "latest or new" is the normal case for every turn after a
+    lapse, not an edge case.
+    """
+    conversation = await _latest_conversation(db, session.id)
+    if conversation is None:
+        conversation = _new_conversation(session.id)
+        db.add(conversation)
+        await db.flush()
     return session, conversation
 
 

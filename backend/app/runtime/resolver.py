@@ -55,14 +55,44 @@ class TenantResolutionError(Exception):
 class TenantContext:
     """Trusted tenancy for one runtime request.
 
-    Constructed only by :func:`resolve_tenant`, from server state. Frozen so no later stage —
-    model output in particular — can widen its scope.
+    Built from server state and nowhere else - by :func:`resolve_tenant` for a widget, or by
+    :func:`channel_context` for a messaging channel. Frozen so no later stage, model output in
+    particular, can widen its scope.
+
+    ``integration_id`` and ``origin`` are the *widget* identity, and are ``None`` for a channel
+    turn: a WhatsApp guest has no integration behind them and no browser origin. That absence is
+    meaningful rather than missing data - ``project_id`` is the tenancy anchor, and the other two
+    are provenance. Code that needs to bound a request by widget reads these; code that needs to
+    bound it by tenant reads ``project_id``.
     """
 
     organization_id: uuid.UUID
     project_id: uuid.UUID
-    integration_id: uuid.UUID
-    origin: str
+    integration_id: uuid.UUID | None
+    origin: str | None
+
+
+def channel_context(
+    *, organization_id: uuid.UUID, project_id: uuid.UUID
+) -> TenantContext:
+    """A context for a turn that arrived over a messaging channel.
+
+    Kept next to the dataclass so that every ``TenantContext`` in the codebase is constructed in one
+    place. The caller must have already resolved the speaker to a project - by phone number,
+    handle, or email address, depending on the channel - and tenancy for an unresolvable speaker is
+    the refusal path in ``app.channels.resolve``, not a default.
+
+    There is deliberately no way to supply an integration or an origin here. They identify a
+    browser, and a channel turn has neither; a constructor that accepted them would let an adapter
+    invent a widget identity for a phone-numbered guest and quietly put the conversation in the
+    wrong place.
+    """
+    return TenantContext(
+        organization_id=organization_id,
+        project_id=project_id,
+        integration_id=None,
+        origin=None,
+    )
 
 
 async def resolve_tenant(
