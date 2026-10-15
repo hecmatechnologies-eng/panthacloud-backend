@@ -208,12 +208,22 @@ Each answers one question: **whose turn is it?**
 
 | Status | Meaning | Reached by |
 |---|---|---|
+| `PENDING` | The latest guest message has not been answered — the reply is being produced, or the assistant decided nothing safe to send | on creation, and on every guest reply |
 | `ANSWERED` | Assistant handled it alone; nothing owed | assistant |
-| `AWAITING_APPROVAL` | Draft ready, needs a human tap | assistant |
+| `AWAITING_APPROVAL` | A draft exists and needs a human tap | assistant |
 | `ESCALATED` | Handed to a human team | assistant or staff |
 | `AWAITING_GUEST` | Reply is out; ball with the guest | staff (approved send) |
 | `BOOKED` | Desk confirmed | **staff only** |
 | `LOST` | Closed, no booking, reason recorded | **staff only** |
+
+`PENDING` is a correction made during review. The initial state was proposed as
+`AWAITING_APPROVAL`, on the reasoning that the safe state is the one that does not assume the
+assistant handled anything. That reasoning was right about `ANSWERED` and wrong about
+`AWAITING_APPROVAL`, which **over-claims in the other direction**: it asserts that a draft exists
+and a person is blocked on it. The runtime refuses to answer regularly and correctly (see the eval
+corpus), and a refusal produces no draft — so every refused conversation would have sat in the
+approval queue waiting for a human to approve nothing, rendering as work that is not work. A state
+that claims more than is true is worse than a missing one.
 
 `returned` is **not** a status: rejection leaves the conversation in `AWAITING_APPROVAL` and the
 outcome is recorded on the draft message. Whether the current draft was rejected is therefore
@@ -234,6 +244,20 @@ derivable, and storing it at conversation level too would be duplication.
    currently prose in a comment in the prototype, which is not a constraint.
 2. **`ANSWERED` is terminal only when `intent = INFORMATIONAL`.** A booking enquiry answered but
    awaiting a reply is `AWAITING_GUEST`.
+3. **Only `AWAITING_APPROVAL` may hold an unsent draft.** A conversation in any other state with a
+   message still in `DRAFTED` is an inconsistency, not a workflow.
+
+### Defaults, and why they are not the obvious ones
+
+- `status` defaults to `PENDING`, not `ANSWERED` — that would assert the assistant handled a message
+  it has not seen — and not `AWAITING_APPROVAL`, for the over-claiming reason above.
+- Migration 0037's backfill is **derived from the data, not defaulted wholesale**, because the
+  blanket default is a lie in one direction or the other. Conversations whose last message is
+  inbound become `pending`; outbound, `answered`. On the database it ran against that correctly
+  classified all 8.
+- `intent` is nullable. Defaulting it to `INFORMATIONAL` would be an eligibility decision in
+  disguise — `INFORMATIONAL` means "never follow up" — so it would silently switch off chasing every
+  guest until something classified them.
 
 ### Open question
 

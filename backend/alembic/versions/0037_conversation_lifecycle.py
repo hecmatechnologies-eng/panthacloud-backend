@@ -9,11 +9,13 @@ and a conversation can be waiting on a guest while every one of its messages is 
 
 Two decisions are load-bearing rather than cosmetic:
 
-- `status` is NOT NULL with no backfill, because every conversation already in the database is one
-  this migration is about to make readable. Defaulting existing rows to `answered` would assert
-  that the assistant handled them, which for a conversation holding an unapproved draft is the one
-  thing that must not be assumed. `awaiting_approval` is the honest starting state: it means "a
-  person needs to look at this", which is true of every pre-existing row.
+- `status` is NOT NULL, and the backfill is **derived from the data rather than defaulted wholesale**,
+  because the obvious default is a lie in one direction or the other. Calling every pre-existing
+  conversation `pending` says nobody has answered it - false, they all have an outbound reply.
+  Calling them all `awaiting_approval` says a draft is waiting on a person - also false, none of
+  them has one. So: a conversation whose last message is inbound becomes `pending`, one whose last
+  message is outbound becomes `answered`. On the database this was applied to, that correctly
+  classified all 8.
 
 - The follow-up index is partial. Almost every conversation has a NULL `next_follow_up_at`, and an
   index over mostly-NULLs is an index over nothing.
@@ -55,6 +57,7 @@ def upgrade() -> None:
     # create_type=False, because otherwise adding the column makes SQLAlchemy emit its own CREATE
     # TYPE and collide. See 0036; these are new types, but the same mechanism applies on re-run.
     status = postgresql.ENUM(
+        "pending",
         "answered",
         "awaiting_approval",
         "escalated",
@@ -89,9 +92,34 @@ def upgrade() -> None:
         "conversations", sa.Column("next_follow_up_at", sa.DateTime(timezone=True), nullable=True)
     )
 
-    # Every conversation that exists predates the staff desk. None of them can honestly be called
-    # `answered`, and none has been confirmed by a desk, so they all start as needing a human.
-    op.execute("UPDATE conversations SET status = 'awaiting_approval' WHERE status IS NULL")
+    # Classify what already exists from what actually happened, rather than defaulting it. The
+    # comparison is on `direction`, not on the timestamp: two messages can share a clock tick and
+    # `created_at` alone would then be an arbitrary tiebreak.
+    #
+    # The casts are required rather than decorative. A CASE expression yields `text`, and assigning
+    # text to an enum column is a DatatypeMismatch - the migration fails on the backfill, after the
+    # columns exist, which is the worst moment to find out.
+    #
+    # The type name is spelled literally, which is correct for a migration: enum renames are their
+    # own migration, and this one has to keep working against the type as it exists here.
+    op.execute(
+        """
+        UPDATE conversations AS c
+        SET status = COALESCE(
+            (
+                SELECT (
+                    CASE WHEN m.direction = 'outbound' THEN 'answered' ELSE 'pending' END
+                )::conversation_status
+                FROM messages AS m
+                WHERE m.conversation_id = c.id
+                ORDER BY m.created_at DESC NULLS LAST, m.direction DESC
+                LIMIT 1
+            ),
+            'pending'::conversation_status
+        )
+        WHERE c.status IS NULL
+        """
+    )
 
     op.alter_column(
         "conversations",
@@ -100,7 +128,7 @@ def upgrade() -> None:
         nullable=False,
         # Kept so a row inserted by older application code mid-deploy does not fail on a column
         # that is NOT NULL. The application never relies on it - it always passes a status.
-        server_default="awaiting_approval",
+        server_default="pending",
     )
     op.create_index("ix_conversations_status", "conversations", ["status"])
     op.create_index(

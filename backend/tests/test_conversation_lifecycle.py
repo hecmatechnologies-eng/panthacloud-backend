@@ -49,13 +49,17 @@ async def shape(db: AsyncSession) -> tuple[dict, list]:
 
 class TestVocabulary:
     def test_every_status_is_the_shape_the_staff_ui_renders(self) -> None:
-        """The prototype's six states, with `followup` and `returned` deliberately absent.
+        """The prototype's states, corrected.
 
         `followup` is an activity that can overlap any status - chasing a guest is not a phase of
         the conversation - and `returned` is a rejected draft, which the draft message already
         records. Encoding either as a status would make a conversation claim to be two things.
+
+        `pending` is the first entry because it is the state a conversation is born in: the guest
+        has written and nobody has answered yet.
         """
         assert [s.value for s in ConversationStatus] == [
+            "pending",
             "answered",
             "awaiting_approval",
             "escalated",
@@ -63,6 +67,18 @@ class TestVocabulary:
             "booked",
             "lost",
         ]
+
+    def test_no_status_claims_a_draft_exists_when_none_might(self) -> None:
+        """`PENDING` and `AWAITING_APPROVAL` must stay distinct states, not be merged.
+
+        An assistant that refuses to answer - which the runtime does, and correctly, per the eval
+        corpus - produces no draft at all. If the initial state were AWAITING_APPROVAL, such a
+        conversation would sit in the approval queue waiting for a person to approve nothing, and
+        the inbox would render it as work that is not work.
+        """
+        assert ConversationStatus.PENDING.value == "pending"
+        assert ConversationStatus.AWAITING_APPROVAL.value == "awaiting_approval"
+        assert len({s.value for s in ConversationStatus}) == len(list(ConversationStatus))
 
     def test_every_value_is_lowercase_and_stable(self) -> None:
         """These strings are written to the database and read by the frontend, so they are a
@@ -163,17 +179,31 @@ async def _conversation(db: AsyncSession, **kwargs) -> Conversation:
 
 
 class TestDefaults:
-    async def test_a_new_conversation_waits_for_a_person(self, db_session: AsyncSession) -> None:
-        """The default is `AWAITING_APPROVAL`, not `ANSWERED`.
+    async def test_a_new_conversation_is_pending(self, db_session: AsyncSession) -> None:
+        """The default is `PENDING`: the latest guest message has not been answered.
 
-        A conversation starts the moment a guest writes, and at that point the only true thing is
-        that nobody has looked at it. Defaulting to `answered` would assert the assistant handled a
-        message it has not seen - and for a conversation holding an unapproved price quote, that is
-        the exact thing that must never be assumed.
+        Not `ANSWERED`, because that asserts the assistant handled a message it has not seen. And
+        deliberately not `AWAITING_APPROVAL`, which would assert a *draft exists and a person is
+        blocked on it* - false for any conversation the assistant declines to answer, and the
+        runtime declines regularly and correctly.
         """
         conversation = await _conversation(db_session)
 
-        assert conversation.status is ConversationStatus.AWAITING_APPROVAL
+        assert conversation.status is ConversationStatus.PENDING
+
+    async def test_a_conversation_with_no_draft_is_not_in_the_approval_queue(
+        self, db_session: AsyncSession
+    ) -> None:
+        """The concrete consequence, asserted rather than left as a comment.
+
+        A brand-new conversation has no message at all, let alone a drafted reply. If it landed in
+        AWAITING_APPROVAL, the Approvals tab - whose entire job is showing drafts a person can send -
+        would list something with nothing to send.
+        """
+        conversation = await _conversation(db_session)
+
+        assert conversation.status is not ConversationStatus.AWAITING_APPROVAL
+        assert conversation.status is not ConversationStatus.ANSWERED
 
     async def test_an_unclassified_conversation_has_no_intent(
         self, db_session: AsyncSession
@@ -200,7 +230,7 @@ class TestDefaults:
             )
         ).scalar_one()
 
-        assert reloaded.status is ConversationStatus.AWAITING_APPROVAL
+        assert reloaded.status is ConversationStatus.PENDING
 
     async def test_a_scheduled_follow_up_is_stored(self, db_session: AsyncSession) -> None:
         """A follow-up is a schedule, not a status - so it is a timestamp that can be cleared."""

@@ -193,6 +193,16 @@ class ConversationStatus(str, enum.Enum):
     "quote sent" and the second is a rejected draft, both of which are derivable from elsewhere.
     """
 
+    #: The most recent guest message has not been answered yet - the reply is being produced, or the
+    #: assistant decided there was nothing safe to send. This is the state a conversation is *born*
+    #: in, and the one it returns to whenever a guest writes again.
+    #:
+    #: It is deliberately not "awaiting approval". That state claims a draft exists and a person is
+    #: blocking on it, which is false for most conversations: an assistant that has refused to
+    #: answer - which the runtime does, and correctly - produces no draft at all, so a conversation
+    #: would sit in AWAITING_APPROVAL waiting for a human to approve nothing. A state that
+    #: over-claims is worse than a missing one, because the inbox renders it as work.
+    PENDING = "pending"
     #: The assistant answered from the knowledge base and nothing is owed. Terminal - but only
     #: when the intent is INFORMATIONAL; a booking enquiry answered and awaiting a reply is
     #: AWAITING_GUEST, not this.
@@ -282,9 +292,9 @@ class Conversation(BaseModel):
             values_callable=lambda e: [m.value for m in e],
         ),
         # Every conversation is somewhere. A conversation that has not been classified yet is
-        # AWAITING_APPROVAL rather than NULL, because an unclassified guest message is the one case
-        # that must not be assumed safe to answer.
-        default=ConversationStatus.AWAITING_APPROVAL,
+        # PENDING rather than NULL, because an unanswered guest message is the one case that must
+        # not be assumed handled.
+        default=ConversationStatus.PENDING,
         nullable=False,
         index=True,
     )
