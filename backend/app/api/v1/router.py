@@ -5,6 +5,7 @@ from app.api.v1.endpoints import (
     allowed_origins,
     assistant,
     auth,
+    conversations,
     discovery,
     github_app,
     health,
@@ -39,6 +40,9 @@ api_v1_router.include_router(snapshots.router)
 api_v1_router.include_router(discovery.router)
 api_v1_router.include_router(knowledge.router)
 api_v1_router.include_router(assistant.router)
+# After assistant rather than beside knowledge: the inbox reads what the assistant wrote, and the
+# two endpoints answer questions about the same conversations from opposite ends.
+api_v1_router.include_router(conversations.router)
 api_v1_router.include_router(github_app.router)
 # The two callbacks live here as well as at the application root. GitHub's redirect URI is
 # fixed by the GitHub App's settings and cannot be version-prefixed, so main.py mounts them

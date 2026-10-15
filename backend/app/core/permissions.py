@@ -37,6 +37,14 @@ class Permission(str, enum.Enum):
     ASSISTANT_CREATE = "assistant:create"
     ASSISTANT_UPDATE = "assistant:update"
     ASSISTANT_DELETE = "assistant:delete"
+    # Reading guest conversations is its own capability, not a flavour of project:view. A
+    # conversation carries a guest's phone number or email address and the text they wrote, so
+    # "can see this project exists" and "can read what this guest said" are different questions.
+    #
+    # VIEW is deliberately all this adds. Approving a drafted reply is a write and gets its own
+    # permission when the approval endpoint lands - a read-only role must not be able to send a
+    # guest a price.
+    CONVERSATION_VIEW = "conversation:view"
 
 
 ROLE_PERMISSIONS: dict[RoleEnum, set[Permission]] = {
@@ -74,6 +82,7 @@ ROLE_PERMISSIONS: dict[RoleEnum, set[Permission]] = {
         Permission.ASSISTANT_CREATE,
         Permission.ASSISTANT_UPDATE,
         Permission.ASSISTANT_DELETE,
+        Permission.CONVERSATION_VIEW,
     },
     RoleEnum.ADMIN: {
         Permission.ORG_VIEW,
@@ -107,6 +116,7 @@ ROLE_PERMISSIONS: dict[RoleEnum, set[Permission]] = {
         Permission.ASSISTANT_CREATE,
         Permission.ASSISTANT_UPDATE,
         Permission.ASSISTANT_DELETE,
+        Permission.CONVERSATION_VIEW,
     },
     RoleEnum.MEMBER: {
         Permission.ORG_VIEW,
@@ -137,6 +147,10 @@ ROLE_PERMISSIONS: dict[RoleEnum, set[Permission]] = {
         # both, which is not a coherent role.
         Permission.KNOWLEDGE_VIEW,
         Permission.ASSISTANT_VIEW,
+        # A member runs the desk: they answer guests and approve drafted replies, so reading the
+        # conversations is exactly their job. Sending still needs the approval permission, which
+        # does not exist yet.
+        Permission.CONVERSATION_VIEW,
     },
     RoleEnum.VIEWER: {
         Permission.ORG_VIEW,
@@ -148,6 +162,9 @@ ROLE_PERMISSIONS: dict[RoleEnum, set[Permission]] = {
         Permission.REPOSITORY_DISCOVERY_VIEW,
         Permission.KNOWLEDGE_VIEW,
         Permission.ASSISTANT_VIEW,
+        # Read-only, which is what viewing a conversation is. A viewer sees a guest's messages and
+        # cannot act on them; approving a draft is a separate permission that does not exist yet.
+        Permission.CONVERSATION_VIEW,
     },
 }
 
