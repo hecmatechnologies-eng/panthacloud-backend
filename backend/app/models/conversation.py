@@ -23,7 +23,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text, text
+from sqlalchemy import DateTime, ForeignKey, Index, String, Text, func, text
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import UUID
@@ -143,13 +143,25 @@ class VisitorSession(BaseModel):
         # One live conversation per person per channel per project.
         #
         # Partial on `external_id IS NOT NULL`, which puts widget rows - every row with no external
-        # id - outside the constraint's scope.
+        # id - outside the constraint's scope. Under the default in both engines NULLs are distinct,
+        # so the predicate does not prevent a present collision; it stops the behaviour depending on
+        # a default that Postgres 15+ can override per-type with NULLS NOT DISTINCT.
         #
-        # Corrected claim, because the original comment here overstated it: under the default in
-        # both engines NULLs are distinct, so a plain index would also admit widget rows. The
-        # predicate does not prevent a present collision; it stops the behaviour depending on a
-        # default that Postgres 15+ can override per-type with NULLS NOT DISTINCT. Defensive, not
-        # load-bearing.
+        # `thread_id` is indexed as `coalesce(thread_id, '')`, and that is load-bearing rather than
+        # defensive. A top-level conversation has no thread, so `thread_id` is NULL for the most
+        # common rows there are - and NULLs are distinct *within the key*, so a plain column index
+        # admits any number of them. Verified on both engines: three rows with thread_id of NULL,
+        # '' and 'x' coexisted without complaint, which is the index not firing at all for exactly
+        # the case the guarantee exists to cover. Two deliveries of one first message would then
+        # each open a session and the guest would appear twice.
+        #
+        # Coalescing makes the key total, so no value can be written that escapes the constraint.
+        # Canonical writes (see `app.channels.sessions`, which stores '') keep the column readable,
+        # but the index does not depend on that: a writer that forgets still gets refused, rather
+        # than silently losing uniqueness.
+        #
+        # The lookup coalesces identically, which keeps the query sargable against this exact
+        # expression and matches rows written before the canonical form.
         #
         # Widget rows therefore keep no uniqueness guarantee of their own - deliberately the status
         # quo, where they are found by a client-supplied id rather than looked up by identity.
@@ -159,7 +171,7 @@ class VisitorSession(BaseModel):
             "project_id",
             "channel",
             "external_id",
-            "thread_id",
+            func.coalesce(text("thread_id"), ""),
             unique=True,
             sqlite_where=text("external_id IS NOT NULL"),
             postgresql_where=text("external_id IS NOT NULL"),
