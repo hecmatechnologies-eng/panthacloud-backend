@@ -20,6 +20,18 @@ from app.models.conversation import (
 )
 
 
+class ConversationCounts(BaseModel):
+    """How many conversations each inbox tab holds, over the whole tenant.
+
+    Real aggregates rather than a count of the rows on screen: the list is paginated, so a badge
+    derived from it would read 25 when the desk has 4,000.
+    """
+
+    logs: int
+    approvals: int
+    followups: int
+
+
 class ConversationSummary(BaseModel):
     """One row of the Guest session logs table.
 
@@ -47,6 +59,11 @@ class ConversationSummary(BaseModel):
     #: Null until the conversation has at least one message. The list sorts on ``created_at`` rather
     #: than this - see the endpoint docstring for why, and what would change it.
     last_message_at: datetime | None
+    #: The logs table's three timings, all measured from ``first_inbound_at``. See
+    #: ``_PageStats`` for why first reply and useful answer are different events.
+    first_inbound_at: datetime | None
+    first_reply_at: datetime | None
+    useful_answer_at: datetime | None
     created_at: datetime
 
 
@@ -93,4 +110,9 @@ class ConversationDetail(BaseModel):
     lost_reason: str | None
     next_follow_up_at: datetime | None
     created_at: datetime
+    #: The same three timings the list returns, from the same computation - see ``_PageStats``.
+    #: Present so the guest card cannot disagree with the row it was opened from.
+    first_inbound_at: datetime | None
+    first_reply_at: datetime | None
+    useful_answer_at: datetime | None
     messages: list[ConversationMessage]

@@ -373,16 +373,36 @@ class Message(BaseModel):
         nullable=False,
     )
     role: Mapped[MessageRole] = mapped_column(
-        SQLEnum(MessageRole, name="message_role"),
+        # `values_callable` is load-bearing on all three of these, and its absence is invisible
+        # until Postgres says so. Without it SQLAlchemy persists the enum member *name* -
+        # "INBOUND", "SENT" - while the migration created the type with the enum *values* -
+        # "inbound", "sent". SQLite does not enforce enum labels, so the whole suite passed and the
+        # column was unusable on the engine that matters: every turn 500'd with
+        # `invalid input value for enum message_direction: "INBOUND"`.
+        #
+        # `role` happens to work without it only because MessageRole's values are spelled in upper
+        # case, so name == value. That is luck, not a property, and it would break the day someone
+        # lowercased a label.
+        SQLEnum(
+            MessageRole, name="message_role", values_callable=lambda e: [m.value for m in e]
+        ),
         nullable=False,
     )
     direction: Mapped[MessageDirection] = mapped_column(
-        SQLEnum(MessageDirection, name="message_direction"),
+        SQLEnum(
+            MessageDirection,
+            name="message_direction",
+            values_callable=lambda e: [m.value for m in e],
+        ),
         nullable=False,
     )
     # Outbound lifecycle only; NULL on inbound rows, where it would be a fiction.
     status: Mapped[MessageStatus | None] = mapped_column(
-        SQLEnum(MessageStatus, name="message_status"),
+        SQLEnum(
+            MessageStatus,
+            name="message_status",
+            values_callable=lambda e: [m.value for m in e],
+        ),
         nullable=True,
     )
     # The provider's own id for this message. Its purpose is idempotency: providers retry

@@ -24,6 +24,7 @@ from httpx import AsyncClient, Response
 from app.channels.base import Channel
 from app.llm.gateway import ModelGateway, set_model_gateway
 from app.llm.providers.fake import FakeModelProvider
+from app.runtime.rate_limit import rate_limiter
 
 CHAT_URL = "/api/v1/public/chat"
 ORIGIN = "https://hotel.example"
@@ -33,6 +34,19 @@ async def say(client: AsyncClient, public_key: str, message: str, origin: str = 
     return await client.post(
         CHAT_URL, json={"public_key": public_key, "message": message}, headers={"Origin": origin}
     )
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter():
+    """Rate-limit state is process-global, so it leaks between tests in this file.
+
+    Not optional housekeeping: the counts cases drive several turns each, and without this the
+    cumulative total trips the per-IP limit and the failure looks like a 429 from the conversations
+    endpoint rather than from a limit these tests never meant to exercise.
+    """
+    rate_limiter.reset()
+    yield
+    rate_limiter.reset()
 
 
 @pytest.fixture(autouse=True)
@@ -114,6 +128,78 @@ async def transcript(client: AsyncClient, tenant: Tenant, conversation_id: str) 
         f"/api/v1/organizations/{tenant[1]}/conversations/{conversation_id}",
         headers={"Authorization": f"Bearer {tenant[0]}"},
     )
+
+
+async def mark_reply_as_draft(project_id: str) -> None:
+    """Turn the newest outbound message into an unsent draft.
+
+    Stands in for the approval endpoint: a price quote held for a human. Constructed directly
+    because nothing in the runtime produces a DRAFTED message yet.
+    """
+    from sqlalchemy import select
+
+    from app.core.database import get_session_factory
+    from app.models.conversation import (
+        Conversation,
+        Message,
+        MessageDirection,
+        MessageStatus,
+        VisitorSession,
+    )
+
+    async with get_session_factory()() as db:
+        conversation = (
+            await db.execute(
+                select(Conversation)
+                .join(VisitorSession, VisitorSession.id == Conversation.session_id)
+                .where(VisitorSession.project_id == uuid.UUID(project_id))
+            )
+        ).scalar_one()
+        reply = (
+            await db.execute(
+                select(Message)
+                .where(
+                    Message.conversation_id == conversation.id,
+                    Message.direction == MessageDirection.OUTBOUND,
+                )
+                .order_by(Message.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one()
+        reply.status = MessageStatus.DRAFTED
+        await db.commit()
+
+
+async def seed_statuses(tenant: Tenant, statuses: list[str]) -> None:
+    """Assign statuses to the tenant's conversations, in creation order.
+
+    Built directly because nothing in the runtime writes them yet - the lifecycle columns arrived
+    with 0037 and the approval endpoint has not been written. That is exactly the state this API is
+    being built against, so driving it through the database is honest rather than a shortcut.
+    """
+    from sqlalchemy import select
+
+    from app.core.database import get_session_factory
+    from app.models.conversation import Conversation, ConversationStatus, VisitorSession
+
+    async with get_session_factory()() as db:
+        rows = list(
+            (
+                await db.execute(
+                    select(Conversation)
+                    .join(VisitorSession, VisitorSession.id == Conversation.session_id)
+                    .where(VisitorSession.project_id == uuid.UUID(tenant[2]))
+                    .order_by(Conversation.created_at.asc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(rows) == len(statuses), "the caller must create one conversation per status"
+        for conversation, status in zip(rows, statuses, strict=True):
+            conversation.status = ConversationStatus(status)
+            conversation.lost_reason = "Price" if status == "lost" else None
+        await db.commit()
 
 
 async def set_intents(tenant: Tenant, counts: dict[str, int]) -> None:
@@ -574,6 +660,147 @@ class TestPagination:
 # ============================================================
 # The transcript
 # ============================================================
+
+
+class TestCounts:
+    """The three tab badges.
+
+    Counts are a separate endpoint rather than a length on the list because the list is paginated:
+    a badge computed from the rows on screen would read 25 when the desk holds 4,000.
+    """
+
+    @staticmethod
+    async def counts(client: AsyncClient, tenant: Tenant) -> dict:
+        resp = await client.get(
+            f"/api/v1/organizations/{tenant[1]}/conversations/counts",
+            headers=auth(tenant[0]),
+        )
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    async def test_an_empty_inbox_reports_zeroes(self, client: AsyncClient) -> None:
+        tenant = await make_tenant(client, "Hotel")
+
+        assert await self.counts(client, tenant) == {
+            "logs": 0,
+            "approvals": 0,
+            "followups": 0,
+        }
+
+    async def test_each_tab_counts_the_right_group(self, client: AsyncClient) -> None:
+        """A booked conversation must not appear in follow-ups.
+
+        The reference defines that list as "quotes waiting on a guest reply", and a guest who has
+        booked has converted - there is nobody to chase.
+        """
+        tenant = await make_tenant(client, "Hotel")
+        for _ in range(5):
+            await turn(client, tenant, "Hello")
+        await seed_statuses(tenant, ["booked", "booked", "awaiting_guest", "lost", "answered"])
+
+        counts = await self.counts(client, tenant)
+
+        assert counts["logs"] == 5, "the logs tab is every conversation"
+        assert counts["followups"] == 2, "one quote awaiting a guest, one lost"
+
+    async def test_approvals_are_counted(self, client: AsyncClient) -> None:
+        tenant = await make_tenant(client, "Hotel")
+        for _ in range(3):
+            await turn(client, tenant, "Hello")
+        await seed_statuses(tenant, ["awaiting_approval", "awaiting_approval", "answered"])
+
+        counts = await self.counts(client, tenant)
+
+        assert counts["approvals"] == 2
+        assert counts["logs"] == 3
+
+    async def test_counts_ignore_another_tenants_conversations(
+        self, client: AsyncClient
+    ) -> None:
+        mine = await make_tenant(client, "Mine")
+        theirs = await make_tenant(client, "Theirs")
+        for _ in range(3):
+            await turn(client, theirs, "Hello")
+
+        counts = await self.counts(client, mine)
+
+        assert counts == {"logs": 0, "approvals": 0, "followups": 0}, (
+            "another tenant's conversations are being counted"
+        )
+
+    async def test_counts_is_not_parsed_as_a_conversation_id(
+        self, client: AsyncClient
+    ) -> None:
+        """Route ordering, pinned.
+
+        `/conversations/counts` and `/conversations/{conversation_id}` have the same segment count,
+        so FastAPI matches them in registration order. Declared the other way round this answers
+        422 - and the failure would read as a broken tab rather than a reordered router.
+        """
+        tenant = await make_tenant(client, "Hotel")
+        await turn(client, tenant, "Hello")
+
+        counts = await self.counts(client, tenant)
+
+        assert set(counts) == {"logs", "approvals", "followups"}
+
+
+class TestResponseTimings:
+    """The logs table's two response-time columns, which are different measurements.
+
+    The prototype counts the assistant's holding reply as the *first reply* and a delivered price
+    as the *useful answer*. Collapsing them would report that a guest had a price quote in front of
+    them while it was still sitting in the approval queue.
+    """
+
+    async def test_first_reply_is_the_first_outbound_message(
+        self, client: AsyncClient
+    ) -> None:
+        tenant = await make_tenant(client, "Hotel")
+        await turn(client, tenant, "Pool hours?")
+
+        rows = (await inbox(client, tenant[0], tenant[1])).json()
+
+        assert rows[0]["first_inbound_at"] is not None
+        assert rows[0]["first_reply_at"] is not None
+        assert rows[0]["useful_answer_at"] is not None
+        # Both are measured from the guest's first message, so neither precedes it.
+        assert rows[0]["first_inbound_at"] <= rows[0]["first_reply_at"] <= rows[0]["useful_answer_at"]
+
+    async def test_an_unanswered_conversation_has_no_reply_time(
+        self, client: AsyncClient
+    ) -> None:
+        """Both null rather than zero. Zero would render as "replied instantly"."""
+        tenant = await make_tenant(client, "Hotel")
+        await empty_conversation(tenant[2])
+
+        rows = (await inbox(client, tenant[0], tenant[1])).json()
+        silent = [r for r in rows if r["message_count"] == 0]
+
+        assert len(silent) == 1
+        assert silent[0]["first_reply_at"] is None
+        assert silent[0]["useful_answer_at"] is None
+        assert silent[0]["first_inbound_at"] is None, (
+            "a conversation with no messages has not been received from anybody"
+        )
+
+    async def test_a_drafted_reply_is_not_a_useful_answer(self, client: AsyncClient) -> None:
+        """The distinction that makes the two columns worth having.
+
+        Nothing writes a DRAFTED message yet - the approval endpoint does not exist - so this is
+        constructed directly. It is exactly the state the column exists for, and it would be the
+        easiest thing to get wrong when that endpoint lands.
+        """
+        tenant = await make_tenant(client, "Hotel")
+        await turn(client, tenant, "Room for 2 this Friday?")
+        await mark_reply_as_draft(tenant[2])
+
+        rows = (await inbox(client, tenant[0], tenant[1])).json()
+
+        assert rows[0]["first_reply_at"] is not None, "a holding reply was still sent"
+        assert rows[0]["useful_answer_at"] is None, (
+            "a draft has not reached the guest, so nothing useful has been delivered"
+        )
 
 
 class TestTranscript:

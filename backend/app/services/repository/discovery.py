@@ -11,6 +11,7 @@ from typing import Any
 import yaml
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.read_policy import IGNORED_DIRS as IGNORE_DIR_NAMES
 from app.models.discovery import DiscoveryRun, DiscoveryStatus
 from app.models.repository import Repository
 from app.models.repository_snapshot import RepositorySnapshot, SnapshotStatus
@@ -31,20 +32,9 @@ from app.services.repository.workspace import workspace_manager
 
 logger = logging.getLogger(__name__)
 
-# Files / directories to skip during deep recursive inspection
-IGNORE_DIR_NAMES: set[str] = {
-    ".git",
-    "node_modules",
-    "__pycache__",
-    ".venv",
-    "venv",
-    ".pytest_cache",
-    ".mypy_cache",
-    ".ruff_cache",
-    "dist",
-    "build",
-    ".next",
-}
+# Files / directories to skip during deep recursive inspection. The set itself lives in
+# app/core/read_policy.py and is shared with the analyst's reader and with pre-analysis, so the
+# inventory and the model's view of a repository cannot disagree about what is project source.
 
 # Extension to language mapping
 EXTENSION_LANGUAGE_MAP: dict[str, str] = {

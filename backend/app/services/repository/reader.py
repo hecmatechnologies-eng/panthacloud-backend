@@ -22,29 +22,14 @@ from pathlib import Path
 from typing import Protocol
 
 from app.core.protected_paths import protected_reason
+from app.core.read_policy import IGNORED_DIRS as _IGNORED_DIRS
 from app.services.repository.executor import run_in_io_thread
 from app.services.repository.workspace import SecurityViolationError, WorkspaceManager
 
-# Directories never worth listing, reading or searching: VCS metadata, dependencies and build
-# output. Listing them wastes the analyst's context; reading them leaks secrets.
-_IGNORED_DIRS = frozenset(
-    {
-        ".git",
-        "node_modules",
-        ".next",
-        "dist",
-        "build",
-        "out",
-        "coverage",
-        "__pycache__",
-        ".venv",
-        "venv",
-        ".turbo",
-        ".cache",
-        ".mypy_cache",
-        ".pytest_cache",
-    }
-)
+# Directories never worth listing, reading or searching: VCS metadata, dependencies, build
+# output and tool caches. Listing them wastes the analyst's context; reading them leaks secrets.
+# The set itself lives in app/core/read_policy.py so discovery and pre-analysis cannot drift
+# away from it, and `_EXCLUDE_GLOBS` below is derived from the same object.
 
 # Files that hold credentials and are never readable, in addition to `protected_reason`.
 _DENIED_FILE_NAMES = frozenset(

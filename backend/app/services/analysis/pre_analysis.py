@@ -8,14 +8,17 @@ layout, the ranked candidates, the design tokens — so the expensive path is ne
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from app.core.read_policy import IGNORED_DIRS as _IGNORED_DIRS
 from app.skills.loader import SkillLoader
 
 # Application-shell candidates, in order of framework convention and specificity.
 _ROOT_ENTRY_POINT_CANDIDATES = (
     "app/layout.tsx",
+    "app/layout.ts",
     "app/layout.jsx",
     "app/layout.js",
     "src/app/layout.tsx",
+    "src/app/layout.ts",
     "src/app/layout.jsx",
     "src/app/layout.js",
     "pages/_app.tsx",
@@ -55,24 +58,24 @@ _STYLE_CANDIDATES = (
     "src/App.css",
 )
 
-_IGNORED_DIRS = {
-    ".git",
-    "node_modules",
-    ".next",
-    "dist",
-    "build",
-    "out",
-    ".turbo",
-    ".cache",
-    "coverage",
-    ".output",
-    "vendor",
-    ".venv",
-    "venv",
-    "__pycache__",
-}
+# `_IGNORED_DIRS` is imported from app/core/read_policy.py. Pre-analysis, discovery and the
+# analyst's reader have to agree on what is not project source, or the model can be sent to read
+# trees the deterministic pass already discarded (a vendored tree is the expensive case).
 
 _MANIFESTS = ("package.json", "pnpm-lock.yaml", "yarn.lock", "package-lock.json")
+
+# Files that make a workspace package worth a detection subprocess. Every installed skill's
+# detection test opens one of these before it can match: `nextjs-app-router` needs package.json,
+# `generic-html` needs index.html (and refuses when a package.json is present). A skill introduced
+# with a different root marker must extend this tuple, or its detection will never run inside a
+# workspace package.
+_DETECTION_ROOT_MARKERS = (*_MANIFESTS, "index.html")
+
+# Hard ceiling on the detection sweep, root included. The children of apps/… are customer
+# controlled and each root costs one interpreter spawn per skill, synchronously on the request's
+# event loop, so the fan-out must be bounded regardless of the marker filter. `sorted()` makes the
+# selection deterministic when the cap binds.
+MAX_DETECTION_ROOTS = 12
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,6 +166,41 @@ def _extract_snippets(root: Path, paths: list[str], max_lines: int = 60) -> dict
     return snippets
 
 
+def _detection_roots(root: Path) -> list[Path]:
+    """The repository root plus each first-level workspace package directory.
+
+    Detection used to run against the root alone — the one place a monorepo usually does *not*
+    put its `package.json` — while `_discover_candidates` already walked these directories, so the
+    detector and the candidate scanner disagreed about what a workspace looks like.
+
+    Cost is one interpreter spawn per (skill, root) pair, synchronously, on the request's event
+    loop, and the number of children under `apps/`/`packages/`/… is customer-controlled — a naive
+    walk would turn one monorepo into hundreds of spawns. Two guards keep that bounded: a child is
+    only worth spawning for if it carries a marker file that a detection test can actually read
+    (the manifests every skill's test consults, plus the entry document `generic-html` requires),
+    and `MAX_DETECTION_ROOTS` caps the sweep outright as a backstop. `sorted()` keeps the choice
+    deterministic when the cap binds.
+    """
+    roots = [root]
+    for parent_dir in _MONOREPO_DIRS:
+        parent_path = root / parent_dir
+        if not parent_path.is_dir():
+            continue
+        try:
+            children = sorted(child for child in parent_path.iterdir() if child.is_dir())
+        except OSError:
+            continue
+        for child in children:
+            if child.name in _IGNORED_DIRS:
+                continue
+            if not any((child / marker).is_file() for marker in _DETECTION_ROOT_MARKERS):
+                continue
+            roots.append(child)
+            if len(roots) >= MAX_DETECTION_ROOTS:
+                return roots
+    return roots
+
+
 def pre_analyze(repo_root: Path, loader: SkillLoader | None = None) -> PreAnalysis:
     root = Path(repo_root)
     loader = loader or SkillLoader()
@@ -170,17 +208,30 @@ def pre_analyze(repo_root: Path, loader: SkillLoader | None = None) -> PreAnalys
     matches: list[SkillMatch] = []
     protected: set[str] = set()
     for metadata in loader.index():
-        result = loader.run_detection(metadata.id, root)
-        if result.get("match"):
+        # First match wins, so a skill is recorded once even when both the root and a workspace
+        # package satisfy its detection test.
+        for candidate_root in _detection_roots(root):
+            result = loader.run_detection(metadata.id, candidate_root)
+            if not result.get("match"):
+                continue
+            # detect.py reports paths relative to the root it was handed. When that root is a
+            # workspace package, an unqualified reason would name `app/layout.tsx` for a file that
+            # only exists at `apps/web/app/layout.tsx` — a confidently wrong path in both the
+            # analyst's prompt and the AgentRun record.
+            reason = str(result.get("reason", ""))
+            if candidate_root != root:
+                prefix = candidate_root.relative_to(root).as_posix()
+                reason = f"{reason} (detection root: {prefix}/)"
             matches.append(
                 SkillMatch(
                     skill_id=metadata.id,
                     version=metadata.version,
                     confidence=float(result.get("confidence", 0.0)),
-                    reason=str(result.get("reason", "")),
+                    reason=reason,
                 )
             )
             protected.update(metadata.protected_paths)
+            break
     matches.sort(key=lambda match: match.confidence, reverse=True)
 
     candidates = _discover_candidates(root)

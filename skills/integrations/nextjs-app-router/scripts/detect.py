@@ -9,9 +9,13 @@ from pathlib import Path
 
 _LAYOUTS = (
     "app/layout.tsx",
+    "app/layout.ts",
     "app/layout.jsx",
+    "app/layout.js",
     "src/app/layout.tsx",
+    "src/app/layout.ts",
     "src/app/layout.jsx",
+    "src/app/layout.js",
 )
 
 
