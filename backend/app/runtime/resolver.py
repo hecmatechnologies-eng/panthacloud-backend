@@ -263,12 +263,28 @@ async def resolve_channel_tenant(
     channel: Channel,
     external_id: str,
 ) -> TenantContext:
-    """Resolve the speaker's address to a :class:`TenantContext`, or refuse.
+    """Resolve the **business** address to a :class:`TenantContext`, or refuse.
 
-    The channel counterpart to :func:`resolve_tenant`, and the question a webhook arrives asking: a
-    WhatsApp delivery carries a ``wa_id`` and nothing else identifying, so somebody has to turn that
-    into a tenant before any of the runtime can run. ``AllowedOrigin`` answers the same question for
-    a browser; this answers it for an address somebody dialled.
+    The channel counterpart to :func:`resolve_tenant`, and the question a webhook arrives asking.
+    ``AllowedOrigin`` answers the same question for a browser; this answers it for an address
+    somebody dialled.
+
+    .. warning::
+       ``external_id`` here is the **business's** number - the one the tenant claimed on the
+       ``ChannelRegistration`` row - and **not** the guest's ``wa_id``. This docstring previously
+       said ``wa_id``, which was wrong in a way that would have been invisible: an adapter that
+       followed it would look up every guest's number in ``channel_registrations``, match nothing,
+       and route zero messages while every test stayed green. The confusion is easy to fall into
+       because a WhatsApp webhook carries *both*, and they are different things:
+
+       - ``value.metadata.display_phone_number`` / ``phone_number_id`` - **our** number. Identifies
+         the tenant. This is what belongs in ``external_id``.
+       - ``messages[].from`` (the ``wa_id``) - the **guest's**. Identifies the person, and is what
+         the *session* is keyed by, not the registration.
+
+       The two are kept apart in the adapter: ``WhatsAppInbound.phone_number_id`` /
+       ``display_phone_number`` for this lookup, and ``WhatsAppInbound.wa_id`` for
+       :func:`app.channels.sessions.get_or_create_session`.
 
     Raises the same :class:`TenantResolutionError` as the widget path, and for the same reason: a
     caller must not be able to learn whether an address is registered. "No such number" and "that

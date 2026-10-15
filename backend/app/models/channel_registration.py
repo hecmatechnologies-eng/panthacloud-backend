@@ -8,7 +8,7 @@ which is the question a webhook arrives asking and the one there is no other way
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, text
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import UUID
@@ -53,6 +53,16 @@ class ChannelRegistration(BaseModel):
         # Listing a project's channels, which is how the Studio will show them and how the tests
         # scope. Separate from the unique index because the leading column differs.
         Index("ix_channel_registration_project_channel", "project_id", "channel"),
+        # Meta's numeric id, which is what the webhook actually carries. Partial, because only
+        # WhatsApp has one and a plain unique index would forbid a second NULL-bearing row.
+        Index(
+            "uq_channel_registration_phone_number_id",
+            "channel",
+            "phone_number_id",
+            unique=True,
+            sqlite_where=text("phone_number_id IS NOT NULL"),
+            postgresql_where=text("phone_number_id IS NOT NULL"),
+        ),
     )
 
     organization_id: Mapped[uuid.UUID] = mapped_column(
@@ -77,6 +87,15 @@ class ChannelRegistration(BaseModel):
         String(MAX_EXTERNAL_ID_LENGTH),
         nullable=False,
     )
+    #: Meta's numeric id for this business number, from the webhook's ``metadata`` block. This is
+    #: what the adapter routes on and what the send endpoint needs as ``{PHONE_NUMBER_ID}``; the
+    #: number above is what a tenant claims and a human reads, and Meta never sends it in the
+    #: webhook. Nullable so a registration made before 0037 stays valid on its number alone.
+    phone_number_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: A tenant's own system-user access token, from Embedded Signup, encrypted with
+    #: :class:`app.core.secrets.SecretStore`. Takes precedence over the platform token; NULL means
+    #: this number has not been onboarded individually and sends as the platform.
+    encrypted_access_token: Mapped[str | None] = mapped_column(Text, nullable=True)
     #: How a human recognises this address - "+256 772 123 456", not "256772123456".
     display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     #: An inactive registration still holds its address but answers no traffic, which is how a

@@ -193,6 +193,34 @@ class Settings(BaseSettings):
     # Where the install callback sends the browser back to, after recording the installation.
     FRONTEND_URL: str = "http://localhost:3000"
 
+    # WhatsApp Cloud API (ADR-004). One app for the whole platform, with tenants onboarded onto it
+    # later via Embedded Signup, so this app secret is deliberately NOT per-tenant:
+    #
+    #   WHATSAPP_APP_SECRET   keys the X-Hub-Signature-256 HMAC that authenticates every inbound
+    #                          webhook. It is the *app's* secret in Meta's terms and stays the same
+    #                          however many numbers are registered - a per-tenant value would make
+    #                          it impossible to authenticate a request before knowing which tenant
+    #                          sent it.
+    #   WHATSAPP_ACCESS_TOKEN the platform bearer used to call the Graph API. A tenant's own
+    #                          token, where one has been onboarded, lives encrypted on their
+    #                          channel_registrations row and takes precedence over this.
+    #
+    # With no app secret configured the webhook **refuses** (503) rather than accepting unsigned
+    # payloads. An unauthenticated webhook lets anyone make the assistant answer as a guest,
+    # enumerate which numbers are registered, and spend the tenant's metered quota - so the absent
+    # configuration has to be an outage, never a silent bypass.
+    WHATSAPP_APP_SECRET: str | None = None
+    WHATSAPP_ACCESS_TOKEN: str | None = None
+    # Echoed back during the `hub.mode` verification handshake. Distinct from the app secret on
+    # purpose: this one travels in a query string Meta puts in a browser-facing flow, and it
+    # authenticates nothing.
+    WHATSAPP_VERIFY_TOKEN: str | None = None
+    # Graph API version. A setting, not a literal, because Meta deprecates on a schedule we do not
+    # control and a pinned version rots into an outage. v21.0 is the documented baseline (May 2024)
+    # and is almost certainly stale; confirm before relying on it in production.
+    WHATSAPP_GRAPH_API_VERSION: str = "v21.0"
+    WHATSAPP_GRAPH_BASE_URL: str = "https://graph.facebook.com"
+
     # Where a *customer's browser* reaches this API from (step B8). It is written into the loader
     # Fussion commits, so a wrong value ships a broken widget into a customer's repository.
     # Development falls back to the local API; production must set it (see `widget_script_url`).

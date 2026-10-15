@@ -6,6 +6,7 @@ endpoint stays a thin adapter over the refusal/limit mapping.
 """
 
 import hashlib
+import logging
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -13,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.channels.base import Channel, ChannelIdentity
@@ -20,6 +22,8 @@ from app.channels.sessions import get_or_create_session
 from app.core.config import settings
 from app.core.database import get_session_factory
 from app.core.prompting import fence_untrusted
+
+logger = logging.getLogger("fussion.runtime.chat")
 from app.guardrails import redact_outbound
 from app.guardrails.stream import guard_stream
 from app.llm.base import (
@@ -59,6 +63,50 @@ class ChatReply:
     conversation_id: uuid.UUID
     reply: str
     citations: tuple[dict[str, Any], ...] = ()
+
+
+async def _persist_inbound(
+    db: AsyncSession,
+    *,
+    conversation_id: uuid.UUID,
+    content: str,
+    message_id: str | None,
+) -> None:
+    """Write the guest's turn, absorbing a provider retry.
+
+    Returns silently when ``message_id`` has already been written, because a retry is not an error -
+    it is the same message arriving twice, and the right response is to carry on and let the caller
+    answer as it would have anyway. The webhook acknowledges either way; what must not happen is the
+    guest's transcript gaining a second copy of the same sentence.
+
+    The uniqueness is enforced by ``uq_message_external_id``, and the race is handled with a
+    savepoint for the same reason ``app.channels.sessions`` does: a bare rollback would discard the
+    session and conversation rows this turn just created.
+    """
+    row = Message(
+        conversation_id=conversation_id,
+        role=MessageRole.VISITOR,
+        direction=MessageDirection.INBOUND,
+        # No status: a guest's message has no delivery lifecycle, and writing SENT here would be
+        # a fiction every status query would then have to special-case.
+        content=content,
+        external_message_id=message_id,
+    )
+
+    if message_id is None:
+        db.add(row)
+        # Flush before assembling the prompt, so the history includes the visitor's current turn.
+        await db.flush()
+        return
+
+    try:
+        async with db.begin_nested():
+            db.add(row)
+            await db.flush()
+    except IntegrityError:
+        logger.info(
+            "channel: duplicate delivery %s already answered; not writing it twice", message_id
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +187,18 @@ class ChannelTurn:
 
     ctx: TenantContext
     identity: ChannelIdentity
+    #: The provider's own id for this message (``wamid.XXXX``), when the channel has one.
+    #:
+    #: Written to ``Message.external_message_id``, whose partial unique index is what makes webhook
+    #: delivery idempotent. Every provider retries - a timeout is ambiguous from Meta's side - so
+    #: without this a retried delivery appends a second copy of the same turn to the guest's
+    #: transcript, and the guest sees themselves answered twice.
+    #:
+    #: The duplicate is caught in :func:`_persist_inbound` rather than in the adapter: the index is
+    #: the authority, and an adapter that pre-checked "have I seen this id?" would race with a
+    #: concurrent retry and both would write. Rescoped from "the first adapter" - see the WhatsApp
+    #: webhook.
+    message_id: str | None = None
 
 
 #: Where a turn came from, which decides how it resolves to a session and what it is bounded by.
@@ -190,6 +250,7 @@ async def handle_channel_message(
     identity: ChannelIdentity,
     message: str,
     client_ip: str | None,
+    message_id: str | None = None,
 ) -> ChatReply:
     """One turn from a messaging channel.
 
@@ -210,7 +271,7 @@ async def handle_channel_message(
     await _shed_by_ip(client_ip)
     return await complete_turn(
         db,
-        source=ChannelTurn(ctx=ctx, identity=identity),
+        source=ChannelTurn(ctx=ctx, identity=identity, message_id=message_id),
         message=message,
     )
 
@@ -396,15 +457,11 @@ async def _prepare_turn(
         window,
     )
 
-    db.add(
-        Message(
-            conversation_id=conversation.id,
-            role=MessageRole.VISITOR,
-            direction=MessageDirection.INBOUND,
-            # No status: a guest's message has no delivery lifecycle, and writing SENT here would be
-            # a fiction every status query would then have to special-case.
-            content=message,
-        )
+    await _persist_inbound(
+        db,
+        conversation_id=conversation.id,
+        content=message,
+        message_id=getattr(source, "message_id", None),
     )
     # Flush before assembling the prompt, so the history includes the visitor's current turn.
     await db.flush()
