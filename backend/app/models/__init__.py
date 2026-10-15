@@ -4,6 +4,7 @@ from app.models.allowed_origin import AllowedOrigin
 from app.models.assistant import Assistant, AssistantPosition
 from app.models.audit_event import AuditEvent
 from app.models.base import BaseModel
+from app.models.channel_registration import ChannelRegistration
 from app.models.conversation import Conversation, Message, MessageRole, VisitorSession
 from app.models.discovery import DiscoveryRun, DiscoveryStatus
 from app.models.github_installation import GitHubInstallation
@@ -40,6 +41,7 @@ __all__ = [
     "AssistantPosition",
     "AuditEvent",
     "BaseModel",
+    "ChannelRegistration",
     "Conversation",
     "DiscoveryRun",
     "DiscoveryStatus",

@@ -22,6 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.channels.base import Channel, normalize_external_id
 from app.core.origins import (
     get_origin_aliases,
     is_preview_origin,
@@ -29,6 +30,7 @@ from app.core.origins import (
     normalize_origin,
 )
 from app.models.allowed_origin import AllowedOrigin
+from app.models.channel_registration import ChannelRegistration
 from app.models.project import Project
 from app.models.website_integration import (
     IntegrationRun,
@@ -245,3 +247,58 @@ async def resolve_tenant(
         )
 
     raise TenantResolutionError()
+
+
+#: Channels this module can route. EMAIL is absent deliberately: an inbound email is addressed to a
+#: routing address the tenant controls, but a *reply* comes from whatever address the guest typed,
+#: which matches no registration. Routing replies therefore has to work from the session, not from
+#: the address, and that design is not written. Refusing is honest; accepting the To: header alone
+#: would silently drop every guest who replies from a different address.
+_ROUTABLE_CHANNELS = frozenset({Channel.WHATSAPP, Channel.TELEGRAM, Channel.SMS})
+
+
+async def resolve_channel_tenant(
+    db: AsyncSession,
+    *,
+    channel: Channel,
+    external_id: str,
+) -> TenantContext:
+    """Resolve the speaker's address to a :class:`TenantContext`, or refuse.
+
+    The channel counterpart to :func:`resolve_tenant`, and the question a webhook arrives asking: a
+    WhatsApp delivery carries a ``wa_id`` and nothing else identifying, so somebody has to turn that
+    into a tenant before any of the runtime can run. ``AllowedOrigin`` answers the same question for
+    a browser; this answers it for an address somebody dialled.
+
+    Raises the same :class:`TenantResolutionError` as the widget path, and for the same reason: a
+    caller must not be able to learn whether an address is registered. "No such number" and "that
+    number belongs to someone else" are the same refusal to the outside, and the difference is
+    already recorded by whether a session was opened.
+    """
+    if channel not in _ROUTABLE_CHANNELS:
+        raise TenantResolutionError()
+
+    canonical = normalize_external_id(channel, external_id)
+    if not canonical:
+        # An empty address would find nothing, which is the right outcome - but as a deliberate
+        # refusal rather than as a query that happens to miss for a structural reason.
+        raise TenantResolutionError()
+
+    registration = (
+        await db.execute(
+            select(ChannelRegistration).where(
+                ChannelRegistration.channel == channel,
+                ChannelRegistration.external_identifier == canonical,
+            )
+        )
+    ).scalar_one_or_none()
+
+    # An inactive registration still holds its address, so it still answers here. Refusing is what
+    # stops a retired number from being handed to a different tenant while the row sits around.
+    if registration is None or not registration.is_active:
+        raise TenantResolutionError()
+
+    return channel_context(
+        organization_id=registration.organization_id,
+        project_id=registration.project_id,
+    )

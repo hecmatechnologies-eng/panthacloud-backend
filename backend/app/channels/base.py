@@ -58,16 +58,30 @@ class ChannelIdentity:
     thread_id: str | None = None
 
     def key(self) -> tuple[str, str, str | None]:
-        """The tuple a session is scoped by.
-
-        Normalised defensively: WhatsApp wa_ids arrive with and without a leading '+', and the same
-        person messaging from two numbers must not become two people.
-        """
+        """The tuple a session is scoped by."""
         return (
             self.channel.value,
-            self.external_id.strip().lstrip("+"),
+            normalize_external_id(self.channel, self.external_id),
             self.thread_id.strip() if self.thread_id else None,
         )
+
+
+def normalize_external_id(channel: Channel, raw: str) -> str:
+    """The canonical form of an address, used both to register one and to look one up.
+
+    One function for both sides, because the whole point is that they agree: a number registered as
+    ``+256772123456`` and a ``wa_id`` arriving as ``256772123456`` have to land on one row, and two
+    hand-written normalisers would eventually differ by a character and split a guest in two.
+
+    Email is lower-cased. The local part is case-sensitive by the letter of RFC 5321 and treated as
+    case-insensitive by every provider in practice, so folding is the only reading that matches what
+    a guest experiences when they type ``Guest@Example.com`` after registering as
+    ``guest@example.com``.
+    """
+    value = raw.strip()
+    if channel is Channel.EMAIL:
+        return value.lower()
+    return value.lstrip("+")
 
 
 @dataclass(frozen=True, slots=True)
