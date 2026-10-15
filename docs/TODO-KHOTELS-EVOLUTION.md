@@ -117,48 +117,128 @@ Written as `docs/architecture/ADR-002-no-runtime-agent-loop.md`. Records the dec
 alternatives, and the revisit trigger. Cross-referenced from ADR-001 §4 and `CLAUDE.md` §5,
 both of which are **upheld, not amended** — no import rule was relaxed.
 
-### K3 — Session-outcome state · ~2h
+### K3 — Session-outcome state · ~2h · **SUPERSEDED IN PART — see "Conversation lifecycle" below**
 
-Migration `0031`. Add to `VisitorSession`: last-inbound timestamp, analysed flag, outcome
-(`converted` / `not_converted` / `None`). Prototype rule: `lastSeen` = when inbound stopped;
-at 15 min idle classify. **Done when:** the migration applies and a session can be marked analysed.
-
-### K4 — 15-minute idle analyser · ~1 day
-
-`app/jobs/tasks.py` + a cron job on the existing ARQ worker. Deterministic, no LLM.
-
-> ✅ **The scheduler now exists.** `app/jobs/scheduler.py` plus `cron_jobs` on `WorkerSettings`
-> (registered 2026-10-11, verified live: the worker logs `Starting worker for 3 functions`).
-> The first cron is the knowledge reaper; K4 adds a second alongside it. `unique=True` on each,
-> so several workers never run the same maintenance job concurrently.
+> **Reconciled 2026-10-15.** This item predates the conversation-lifecycle vocabulary and would have
+> defined a *second, competing* outcome model on `VisitorSession`
+> (`converted` / `not_converted` / `None`). Nothing was built under this heading — there is no
+> `outcome` column and no `SessionOutcome` enum anywhere; `0031` is an unrelated tool-call-approval
+> migration. The two concepts are genuinely different and both are needed:
 >
-> Note: **arq 0.28.0 has a bug** — `CronJob` is a dataclass with no field defaults, so all
-> fourteen arguments must be passed explicitly. `worker.py` does that with a comment; a canary
-> test in `tests/test_knowledge_reaper.py` will fail when arq fixes it, at which point the
-> workaround can be collapsed.
+> - **K3's outcome is an inference.** Silence after a quote suggests the guest did not convert.
+> - **`ConversationStatus.BOOKED` / `LOST` are confirmed facts**, set by staff or by the guest's
+>   own reply (the prototype's guest replies "1" → `Price`).
+>
+> Merging them would let a heuristic declare a guest lost, which contradicts the stated policy that
+> *"Booked comes from the desk confirming the booking, never from the AI."* So the 15-minute
+> analyser (K4) sets **`next_follow_up_at` and may flag a conversation for review**, but must never
+> write `BOOKED` or `LOST`. K4's `+ Converted ⇒ Success` mapping is deleted; a conversion is now
+> read from `ConversationStatus`.
 
-Emits the prototype's outcome model: `+ Converted` ⇒ **Success**; `− Not converted` ⇒
-**Follow-up sent**. Feeds the Follow-up list badge (grey when no new, amber when new).
+### K5 — Approval / draft state · ~1 day · **RESCOPED — see "Conversation lifecycle" below**
 
-**Done when:** a session idle past 15 minutes is classified without human action.
+> **Rescoped 2026-10-15.** "New table for outbound actions awaiting staff review" is unnecessary: the
+> storage already exists and is unused. `MessageStatus.DRAFTED` / `AWAITING_APPROVAL` and
+> `MessageRole.HUMAN_OPERATOR` arrived with migration `0034` and **nothing writes them yet**. The
+> draft *is* a `Message` row — which is what makes the transcript complete, because a guest who asks
+> again before staff reply must see the draft the assistant prepared, not a gap.
+>
+> Rejection does not need its own state: it keeps `AWAITING_APPROVAL` and records the outcome on the
+> message. See "Conversation lifecycle" for why `returned` is not a conversation status.
 
-### K5 — Approval / draft state · ~1 day
+### K6 — Staff UI: Approvals + Follow-up tabs · ~2–3 days · **ENTRY POINT DECIDED — org-level nav**
 
-New table for outbound actions awaiting staff review: the drafted reply, its source citation,
-and states (pending → approved → sent / rejected / escalated). Reuse the
-`ApprovedPlan` idea from `app/tools/gateway.py` as the shape, but as a plain state machine.
+> **Decided 2026-10-15.** Conversations are **project-tenanted but reached from the org side nav**,
+> at `/orgs/[orgSlug]/conversations`, added to `NAV_ITEMS` in
+> `src/components/shell/nav-items.ts` (which is the single source for the sidebar, the `<md` topbar
+> and the command palette). Tenancy and navigation are different questions: `project_id` remains the
+> anchor and every row carries it; the org-level route exists because a group operator wants one
+> inbox across all their properties. Consequently the org-level list needs a **property column** —
+> "Guest A" otherwise appears once per property and reads as a bug.
+>
+> Default scope: **all properties**, with a filter chip to narrow. A group operator wants everything;
+> a single-property tenant ignores the chip.
+>
+> Every project-scoped collection here must be **cursor-paginated from birth**, not added later —
+> an inbox is the one collection that grows without bound.
 
-**Done when:** a drafted reply can be held, approved, and sent — with the guest never seeing
-an unapproved message.
+### Membership project scope · **DEFERRED — do not build opportunistically**
 
-### K6 — Staff UI: Approvals + Follow-up tabs · ~2–3 days
+> **Deferred 2026-10-15 (second deferral; the trigger has now fired twice).** The requirement:
+> when an admin invites a desk viewer they choose which properties that person sees, and the
+> conversation list shows only those.
+>
+> Deferral is fine *now* because the default is **admin sees all properties**, so the conversations
+> endpoint can scope by org membership alone and nothing is lost. It is **not** fine to forget, and
+> the reason it keeps getting deferred is that "it works today" and "it is enforced" look identical
+> from the outside.
+>
+> **Settled when this is built** — recorded now so it is not re-litigated:
+>
+> - `membership_projects(membership_id, project_id)`, unique on the pair. Not a column on
+>   `memberships`: that table is unique on `(user_id, organization_id)`, so one person covering three
+>   properties cannot be three membership rows.
+> - **A member with no scope rows sees nothing.** Fail closed. The intuitive default — "nothing
+>   configured means unrestricted" — is exactly backwards: an admin who forgets the property step at
+>   invite time would otherwise hand a front-desk agent every hotel's guest conversations.
+> - Scope is **orthogonal to role**. Role is what you may do (approve a draft); scope is where. A
+>   scoped `MEMBER` must still be able to approve drafts at their own property.
+> - Enforced at **`get_current_project`** in `app/api/deps.py`. Integrations, repositories and the
+>   studio event stream all chain through it, so that is the single deep-path chokepoint; the
+>   project *list* endpoint needs filtering separately.
+> - **Backfill** existing members with all of their org's projects, to avoid a silent lockout. The
+>   uniform rule afterwards: rows present ⇒ exactly those; rows absent ⇒ none.
+> - An empty scope must be *legible*, not silent: an explicit "No properties assigned — ask your
+>   admin" state, not a blank list.
+> - Guest traffic is **unaffected**. A WhatsApp guest resolves to a project through
+>   `resolve_channel_tenant` and has no membership. This is purely about what staff can see.
 
-On existing Studio patterns (`src/components/shell/`, nav items, existing data hooks). Session
-ID first; columns ending **Conversion › Status › Feedback**. Row click opens a right-anchored
-detail modal.
+## Conversation lifecycle — **APPROVED 2026-10-15**
 
-The standalone HTML prototype at `frontend/khotels-prototype/khotels-guest-desk.html` is the
-reference for layout and behaviour.
+The reference prototype is `K Hotels Guest Desk.html`: three tabs (Guest session logs, Approvals,
+Follow-up list) in Panthacloud's own design tokens. Its status column is a **conversation
+lifecycle**, which is a different concept from `MessageStatus` (one message's delivery) and must not
+be merged into it. The prototype's own vocabulary conflates *where the ball is* with *what is
+happening* — `followup` is an activity inside "quote sent", and `returned` is "awaiting approval"
+after a rejection — so it was replaced rather than transcribed.
+
+### `ConversationStatus` — one per conversation, mutually exclusive
+
+Each answers one question: **whose turn is it?**
+
+| Status | Meaning | Reached by |
+|---|---|---|
+| `ANSWERED` | Assistant handled it alone; nothing owed | assistant |
+| `AWAITING_APPROVAL` | Draft ready, needs a human tap | assistant |
+| `ESCALATED` | Handed to a human team | assistant or staff |
+| `AWAITING_GUEST` | Reply is out; ball with the guest | staff (approved send) |
+| `BOOKED` | Desk confirmed | **staff only** |
+| `LOST` | Closed, no booking, reason recorded | **staff only** |
+
+`returned` is **not** a status: rejection leaves the conversation in `AWAITING_APPROVAL` and the
+outcome is recorded on the draft message. Whether the current draft was rejected is therefore
+derivable, and storing it at conversation level too would be duplication.
+
+### Orthogonal attributes — not statuses
+
+- `intent`: `INFORMATIONAL` · `BOOKING` · `EVENT` · `COMPLAINT` · `OTHER`. This is what encodes the
+  rule *"info-only questions are not booking enquiries: no conversion, no follow-up"* — follow-up
+  eligibility keys off `intent`, never off the status.
+- `value`: `STANDARD` · `HIGH` — drives escalation.
+- `lost_reason` — a field, set when the status becomes `LOST`.
+- Follow-up is **not a status**. It is a schedule: `next_follow_up_at` plus rows for what was sent.
+
+### Invariants to encode as tests
+
+1. **The assistant can never reach `BOOKED` or `LOST`.** Only a `HUMAN_OPERATOR` action can. This is
+   currently prose in a comment in the prototype, which is not a constraint.
+2. **`ANSWERED` is terminal only when `intent = INFORMATIONAL`.** A booking enquiry answered but
+   awaiting a reply is `AWAITING_GUEST`.
+
+### Open question
+
+`ESCALATED` may need a destination (which team) rather than being terminal-ish — the prototype's
+"Hand to Events team" implies a target. Left as a single status because the answer is not known.
 
 ### K7 — Runtime evals · ✅ **DONE 2026-10-14**
 

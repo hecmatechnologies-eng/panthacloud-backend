@@ -179,6 +179,62 @@ class VisitorSession(BaseModel):
     )
 
 
+class ConversationStatus(str, enum.Enum):
+    """Where a conversation is up to — one per conversation, and whose turn it is.
+
+    Deliberately **not** ``MessageStatus``. A conversation can be ``AWAITING_GUEST`` while every
+    one of its messages is ``SENT``, so folding the two together would lose a state that cannot be
+    recovered from the messages.
+
+    Only the question "whose turn is it?" belongs here. What the guest wants is ``intent``, how
+    valuable they are is ``value``, and when to chase them is ``next_follow_up_at`` — all orthogonal,
+    all columns on this table rather than members of this enum. The prototype this replaces listed
+    ``followup`` and ``returned`` alongside the real states; the first is an activity inside
+    "quote sent" and the second is a rejected draft, both of which are derivable from elsewhere.
+    """
+
+    #: The assistant answered from the knowledge base and nothing is owed. Terminal - but only
+    #: when the intent is INFORMATIONAL; a booking enquiry answered and awaiting a reply is
+    #: AWAITING_GUEST, not this.
+    ANSWERED = "answered"
+    #: A drafted reply exists and is waiting for a person. Rejection returns here rather than to a
+    #: distinct state, so "the current draft was rejected" is read off the message.
+    AWAITING_APPROVAL = "awaiting_approval"
+    #: Handed to a human team; out of the assistant's hands.
+    ESCALATED = "escalated"
+    #: A reply has gone out and the guest owes the next move. This is where a quote lands, and the
+    #: state from which a follow-up is due.
+    AWAITING_GUEST = "awaiting_guest"
+    #: The desk confirmed a booking. **Only a staff action can reach this** - see the invariant on
+    #: :meth:`Message.can_be_confirmed_by_ai`.
+    BOOKED = "booked"
+    #: Closed without a booking, with the reason captured. Also staff- or guest-confirmed: in the
+    #: prototype the guest replies "1" and the reason is recorded from that.
+    LOST = "lost"
+
+
+class ConversationIntent(str, enum.Enum):
+    """What the guest wants, independent of where the conversation has got to.
+
+    Separate from status because the two answer different questions and the rules key off both:
+    *"info-only questions are not booking enquiries - no conversion, no follow-up"* is a statement
+    about intent, and encoding it as a status would mean an answered booking question could not be
+    told apart from an answered informational one.
+    """
+
+    #: A facilities, dining or policy question. Answered and done; never followed up.
+    INFORMATIONAL = "informational"
+    #: A room, a rate, a reservation.
+    BOOKING = "booking"
+    #: Conferences, weddings, group business. Usually escalated.
+    EVENT = "event"
+    #: A service failure. Never auto-answered.
+    COMPLAINT = "complaint"
+    #: Anything the classifier cannot place. Treated as INFORMATIONAL, because the safe default for
+    #: an unrecognised request is to answer it and chase nobody.
+    OTHER = "other"
+
+
 class Conversation(BaseModel):
     """A visitor chat thread (FR-113, FR-119).
 
@@ -187,6 +243,22 @@ class Conversation(BaseModel):
     """
 
     __tablename__ = "conversations"
+    __table_args__ = (
+        # Supports the follow-up sweep - "what is due, now" - without scanning. Partial, because
+        # almost every conversation has a NULL here and an index over mostly-NULLs is an index over
+        # nothing. Postgres and SQLite both honour the predicate.
+        Index(
+            "ix_conversations_follow_up_due",
+            "next_follow_up_at",
+            sqlite_where=text("next_follow_up_at IS NOT NULL"),
+            postgresql_where=text("next_follow_up_at IS NOT NULL"),
+        ),
+        # Deliberately NOT indexed on (project_id, status): this table has no project_id. The anchor
+        # lives on VisitorSession, one row per session, so the inbox filters by joining to it.
+        # Copying the column down here would be denormalisation for the index's sake and would create
+        # two columns that can silently disagree about which project owns a conversation.
+        # `status` carries its own single-column index above.
+    )
 
     session_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -199,6 +271,45 @@ class Conversation(BaseModel):
         DateTime(timezone=True),
         nullable=False,
         index=True,
+    )
+    # Lifecycle. Denormalised onto the conversation rather than reached through the session: the
+    # inbox filters and sorts on it, and one join per row to derive "whose turn is it" is the wrong
+    # shape for a list that is read constantly.
+    status: Mapped[ConversationStatus] = mapped_column(
+        SQLEnum(
+            ConversationStatus,
+            name="conversation_status",
+            values_callable=lambda e: [m.value for m in e],
+        ),
+        # Every conversation is somewhere. A conversation that has not been classified yet is
+        # AWAITING_APPROVAL rather than NULL, because an unclassified guest message is the one case
+        # that must not be assumed safe to answer.
+        default=ConversationStatus.AWAITING_APPROVAL,
+        nullable=False,
+        index=True,
+    )
+    intent: Mapped[ConversationIntent | None] = mapped_column(
+        SQLEnum(
+            ConversationIntent,
+            name="conversation_intent",
+            values_callable=lambda e: [m.value for m in e],
+        ),
+        # Nullable, unlike status: intent is an inference and an honest "not classified yet" is more
+        # useful than a default that silently becomes an eligibility decision for follow-ups.
+        nullable=True,
+    )
+    #: STANDARD / HIGH. Drives escalation, and is a staff judgement as much as a classifier's.
+    value: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    #: Why the guest did not book. Set only when the status becomes LOST, and the reason is always
+    #: one a person recorded or a guest stated - never one inferred from silence, which is what
+    #: would make this field a guess dressed as a fact.
+    lost_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: When a follow-up is next due, or NULL if none is scheduled. A schedule, not a status: the
+    #: prototype's "follow-up running" was a phase, but chasing someone is an activity that can
+    #: overlap any status.
+    next_follow_up_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
     )
 
     session: Mapped["VisitorSession"] = relationship(
