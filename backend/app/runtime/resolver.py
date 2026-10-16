@@ -250,12 +250,22 @@ async def resolve_tenant(
     raise TenantResolutionError()
 
 
-#: Channels this module can route. EMAIL is absent deliberately: an inbound email is addressed to a
-#: routing address the tenant controls, but a *reply* comes from whatever address the guest typed,
-#: which matches no registration. Routing replies therefore has to work from the session, not from
-#: the address, and that design is not written. Refusing is honest; accepting the To: header alone
-#: would silently drop every guest who replies from a different address.
-_ROUTABLE_CHANNELS = frozenset({Channel.WHATSAPP, Channel.TELEGRAM, Channel.SMS})
+#: Channels this module can route.
+#:
+#: EMAIL was excluded for a long time, on the grounds that an inbound email is addressed to a routing
+#: address the tenant controls while a *reply* comes from whatever address the guest typed, which
+#: matches no registration - so routing a reply had no answer. That reasoning confused the two
+#: addresses. Routing keys on **the address the mail was sent to**, which is stable across the whole
+#: conversation because a reply is sent to us again. The guest's address is what identifies the
+#: *guest* and keys the session; it never has to match a registration. So the original objection was
+#: real but misdirected, and email now routes exactly like WhatsApp.
+#:
+#: The cost of the approach is that a guest who replies from an address nobody has seen is treated as
+#: a new guest rather than the same one continuing. That is the safer error: merging strangers is
+#: worse than splitting a conversation.
+_ROUTABLE_CHANNELS = frozenset(
+    {Channel.WHATSAPP, Channel.TELEGRAM, Channel.SMS, Channel.EMAIL}
+)
 
 
 async def resolve_channel_tenant(

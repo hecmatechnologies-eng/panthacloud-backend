@@ -351,22 +351,54 @@ class TestRefusals:
                 db_session, channel=Channel.WEB, external_id="pk_live_123"
             )
 
-    async def test_email_is_refused_rather_than_half_supported(
+    async def test_email_resolves_on_the_address_it_was_sent_to(
         self, db_session: AsyncSession, project_id: tuple[str, str]
     ) -> None:
-        """Email routing is genuinely different and is not written.
+        """Email routes on the recipient, which is what made it possible.
 
-        An inbound email is addressed to a routing address the tenant controls, but a *reply* comes
-        from whatever address the guest typed, which matches no registration. Answering on the To:
-        header alone would silently drop every guest who replies from a different address - so this
-        refuses until that design exists, rather than appearing to work for the first message of a
-        thread and then going quiet.
+        This replaced a test asserting email was refused, on the reasoning that a reply comes from an
+        address the tenant never registered. That reasoning confused the two addresses: routing keys
+        on the address the mail was sent *to*, which is stable across a whole conversation because a
+        reply is sent to us again. The guest's address identifies the guest and keys the session; it
+        never has to match a registration.
+        """
+        await claim(db_session, project_id, channel=Channel.EMAIL, raw="guest-desk@hotel.com")
+
+        ctx = await resolve_channel_tenant(
+            db_session, channel=Channel.EMAIL, external_id="guest-desk@hotel.com"
+        )
+
+        assert ctx.project_id == uuid.UUID(project_id[1])
+
+    async def test_an_email_address_is_case_insensitive(
+        self, db_session: AsyncSession, project_id: tuple[str, str]
+    ) -> None:
+        """A hotel writes "Reservations@Hotel.com"; mail arrives as "reservations@hotel.com".
+
+        Same address, and it has to be the same row - a guest who splits their history because of
+        capitalisation is invisible.
+        """
+        await claim(db_session, project_id, channel=Channel.EMAIL, raw="Guest-Desk@Hotel.com")
+
+        ctx = await resolve_channel_tenant(
+            db_session, channel=Channel.EMAIL, external_id="guest-desk@hotel.com"
+        )
+
+        assert ctx.project_id == uuid.UUID(project_id[1])
+
+    async def test_an_email_on_a_domain_nobody_connected_is_refused(
+        self, db_session: AsyncSession, project_id: tuple[str, str]
+    ) -> None:
+        """Our domain is catch-all, so mail arrives for addresses nobody has connected.
+
+        It must refuse rather than guess - and identically to any other unknown address, or the
+        endpoint becomes a directory of which hotels are set up.
         """
         await claim(db_session, project_id, channel=Channel.EMAIL, raw="guest-desk@hotel.com")
 
         with pytest.raises(TenantResolutionError):
             await resolve_channel_tenant(
-                db_session, channel=Channel.EMAIL, external_id="guest-desk@hotel.com"
+                db_session, channel=Channel.EMAIL, external_id="someone-else@ai-mwalimu.com"
             )
 
     async def test_every_refusal_says_the_same_thing(

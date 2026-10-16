@@ -1,11 +1,11 @@
 from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
-    channels,
     agent_runs,
     allowed_origins,
     assistant,
     auth,
+    channels,
     conversations,
     discovery,
     github_app,
@@ -22,6 +22,7 @@ from app.api.v1.endpoints import (
     snapshots,
     studio_events,
     webhooks,
+    webhooks_email,
     webhooks_whatsapp,
     website_integrations,
     workspace,
@@ -67,6 +68,7 @@ api_v1_router.include_router(
 # GitHub and third-party webhooks
 api_v1_router.include_router(webhooks.router, prefix="/webhooks")
 api_v1_router.include_router(webhooks_whatsapp.router, prefix="/webhooks")
+api_v1_router.include_router(webhooks_email.router, prefix="/webhooks")
 # Runtime plane: unauthenticated, tenanted by public key + Origin (B4).
 api_v1_router.include_router(public_chat.router, prefix="/public")
 # The widget bundle itself is public and unauthenticated (B8); it is a classic script, not an API.

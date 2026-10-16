@@ -162,6 +162,21 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "gemini-embedding-001"
     EMBEDDING_DIMENSION: int = 768
     RETRIEVAL_TOP_K: int = 5
+    #: How many separate questions one guest message may contain for retrieval purposes.
+    #:
+    #: A guest writing on email or WhatsApp routinely stacks several distinct questions into one
+    #: message. Searching once with the whole message returns passages for whichever topic dominates
+    #: it, so the quieter questions get no context at all and the assistant reports ignorance it does
+    #: not have. One search per question fixes that; the cap bounds the number of embedding calls,
+    #: which is the part that costs money and latency.
+    RETRIEVAL_MAX_QUERIES: int = 4
+    #: Ceiling on passages handed to the model after per-question results are merged.
+    #:
+    #: Deliberately larger than RETRIEVAL_TOP_K. The per-question limit is what each search returns;
+    #: this is the total, and holding the total to the same number would let the loudest question's
+    #: passages push out the other questions' - reintroducing the problem one step later. Bounds
+    #: prompt size without deciding which question matters more.
+    RETRIEVAL_MAX_CHUNKS: int = 12
     RETRIEVAL_SCORE_THRESHOLD: float = 0.0
 
     # Object storage plane (Cloudflare R2 / S3-compatible).
@@ -220,6 +235,32 @@ class Settings(BaseSettings):
     # and is almost certainly stale; confirm before relying on it in production.
     WHATSAPP_GRAPH_API_VERSION: str = "v21.0"
     WHATSAPP_GRAPH_BASE_URL: str = "https://graph.facebook.com"
+
+    # Email (Resend). Separate from the WhatsApp block above because the credentials are genuinely
+    # different in kind: the WhatsApp app secret is the HMAC key for inbound webhooks, while this
+    # key both authenticates Resend's API calls and is *not* what authenticates the webhook. That
+    # is the Svix signing secret below, and conflating the two is how an endpoint ends up either
+    # open or unverifyable.
+    RESEND_API_KEY: str | None = None
+    #: The Svix signing secret from the webhook's details page. Webhooks carry no signature without
+    #: it and are refused rather than accepted - see app.channels.email.provider.verify_webhook.
+    RESEND_WEBHOOK_SECRET: str | None = None
+    #: The domain receiving mail, e.g. "ai-mwalimu.com". Catch-all: Resend delivers *any* address
+    #: on it, and the part before the @ is what identifies the tenant - the same job a phone number
+    #: does for WhatsApp. Used to reject mail addressed to this domain but to nobody we serve.
+    RESEND_RECEIVING_DOMAIN: str | None = None
+    #: How long to wait before sending an email reply, in seconds.
+    #:
+    #: This is a deliverability measure with a real rationale, not a trick. A reply that lands two
+    #: seconds after the guest wrote, from a domain they have never heard of, with no prior
+    #: relationship, is one of the strongest spam signals there is - and no amount of correct SPF,
+    #: DKIM and DMARC compensates for it, because those records stop a message being *rejected*
+    #: rather than making its content look wanted. A human does not answer in two seconds.
+    #:
+    #: 0 disables it, which is what tests want. The wait happens *after* the webhook has been
+    #: acknowledged, never inside it: the provider's own timeout is well under this, so blocking the
+    #: request would invite a retry storm rather than a reply.
+    EMAIL_REPLY_DELAY_SECONDS: int = 90
 
     # Where a *customer's browser* reaches this API from (step B8). It is written into the loader
     # Fussion commits, so a wrong value ships a broken widget into a customer's repository.

@@ -7,6 +7,7 @@ endpoint stays a thin adapter over the refusal/limit mapping.
 
 import hashlib
 import logging
+import re
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -63,6 +64,11 @@ class ChatReply:
     conversation_id: uuid.UUID
     reply: str
     citations: tuple[dict[str, Any], ...] = ()
+    #: True when this turn's inbound message was a provider redelivery of one already written.
+    #: The transcript is not duplicated either way, but a caller with an outward-facing side effect
+    #: - sending a reply - must check this, or a provider retrying three times sends the guest three
+    #: identical emails.
+    is_replay: bool = False
 
 
 async def _persist_inbound(
@@ -71,13 +77,16 @@ async def _persist_inbound(
     conversation_id: uuid.UUID,
     content: str,
     message_id: str | None,
-) -> None:
-    """Write the guest's turn, absorbing a provider retry.
+) -> bool:
+    """Write the guest's turn, absorbing a provider retry. Returns ``False`` if it was a replay.
 
-    Returns silently when ``message_id`` has already been written, because a retry is not an error -
-    it is the same message arriving twice, and the right response is to carry on and let the caller
-    answer as it would have anyway. The webhook acknowledges either way; what must not happen is the
-    guest's transcript gaining a second copy of the same sentence.
+    The return value is load-bearing and was added after watching it be wrong: absorbing the
+    duplicate here stops the *transcript* gaining a second copy, but the turn still ran and the
+    caller still sent a reply - so a provider that redelivered three times got the guest three
+    identical emails. Deduplication has to reach the side effect, not just the row.
+
+    A retry is not an error; it is the same message arriving twice. The webhook acknowledges either
+    way, and a caller that sees ``False`` should not send.
 
     The uniqueness is enforced by ``uq_message_external_id``, and the race is handled with a
     savepoint for the same reason ``app.channels.sessions`` does: a bare rollback would discard the
@@ -97,7 +106,7 @@ async def _persist_inbound(
         db.add(row)
         # Flush before assembling the prompt, so the history includes the visitor's current turn.
         await db.flush()
-        return
+        return True
 
     try:
         async with db.begin_nested():
@@ -107,6 +116,8 @@ async def _persist_inbound(
         logger.info(
             "channel: duplicate delivery %s already answered; not writing it twice", message_id
         )
+        return False
+    return True
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +141,10 @@ class PreparedTurn:
     # the business edits its instructions later (B9).
     assistant_version: str
     prompt_hash: str
+
+    #: True when the inbound turn was a provider redelivery of one already written. Carried to
+    #: ``ChatReply.is_replay`` so a caller can skip an outward-facing side effect - see there.
+    is_replay: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -290,6 +305,26 @@ async def complete_turn(
     """
     prepared = await _prepare_turn(db, source=source, message=message)
 
+    if prepared.is_replay:
+        # A provider redelivery is not a turn. Returning here rather than only flagging it further
+        # down stops three things at once: the model being called again for a message already
+        # answered, a second assistant row appearing in the transcript, and the caller sending the
+        # guest the same reply twice. The transcript stays truthful - one question, one answer -
+        # because the alternative looks correct right up until staff read the thread and find the
+        # assistant talking to itself.
+        logger.info(
+            "channel: replay on conversation %s; not running a second turn",
+            prepared.conversation_id,
+        )
+        return ChatReply(
+            session_id=prepared.session_id,
+            conversation_id=prepared.conversation_id,
+            reply="",
+            citations=prepared.citations,
+            is_replay=True,
+        )
+
+
     gateway = get_model_gateway()
     response = await gateway.complete(
         db,
@@ -310,6 +345,7 @@ async def complete_turn(
         conversation_id=prepared.conversation_id,
         reply=reply,
         citations=prepared.citations,
+        is_replay=prepared.is_replay,
     )
 
 
@@ -457,7 +493,7 @@ async def _prepare_turn(
         window,
     )
 
-    await _persist_inbound(
+    is_replay = not await _persist_inbound(
         db,
         conversation_id=conversation.id,
         content=message,
@@ -468,6 +504,7 @@ async def _prepare_turn(
 
     request, citations, assistant = await _assemble_request(db, ctx, conversation)
     return PreparedTurn(
+        is_replay=is_replay,
         session_id=session.id,
         conversation_id=conversation.id,
         organization_id=ctx.organization_id,
@@ -673,6 +710,111 @@ def _split_question(history: list[Message]) -> tuple[str, list[Message]]:
     return history[-1].content, history[:-1]
 
 
+#: The vocabulary of a greeting or a sign-off. A fragment built entirely from these words is not a
+#: question, and searching the knowledge base for one returns passages ranked by how much a greeting
+#: resembles the hotel's prose rather than by relevance. Those passages then compete for the merged
+#: result slots, so "Hello," can displace the answer to a real question asked three lines later.
+#:
+#: Matched word-by-word rather than as whole phrases, so "Hello there, thanks!" and "Thank you so
+#: much" are recognised without enumerating every variant a guest might type. A fragment is only
+#: treated as social when *every* word is in here, which is what keeps a real question containing
+#: "good morning" or "thank you" intact.
+_SOCIAL_WORDS = frozenset(
+    {
+        "a",
+        "afternoon",
+        "and",
+        "best",
+        "cheers",
+        "day",
+        "dear",
+        "evening",
+        "for",
+        "from",
+        "guest",
+        "good",
+        "hallo",
+        "hello",
+        "hey",
+        "hi",
+        "kind",
+        "morning",
+        "much",
+        "my",
+        "name",
+        "ok",
+        "okay",
+        "regards",
+        "sincerely",
+        "so",
+        "team",
+        "thank",
+        "thanks",
+        "that",
+        "the",
+        "there",
+        "to",
+        "very",
+        "welcome",
+        "you",
+        "your",
+    }
+)
+
+#: Sentence and blank-line boundaries. The lookbehind keeps the punctuation with the sentence it
+#: belongs to, so the text handed to the embedder is the text the guest actually wrote - splitting
+#: on a consuming delimiter silently deleted every question mark.
+_FRAGMENT_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")
+
+#: Words used to decide whether a fragment is only greetings.
+_WORD = re.compile(r"[a-z']+")
+
+
+def _is_social(fragment: str) -> bool:
+    """True when a fragment is nothing but greetings, sign-offs and filler."""
+    words = _WORD.findall(fragment.lower())
+    return bool(words) and all(word in _SOCIAL_WORDS for word in words)
+
+
+def _query_variants(question: str) -> list[str]:
+    """Split one guest message into the separate questions it actually contains.
+
+    **Why this exists.** A message is embedded as a single vector, so when it contains three
+    questions the vector lands wherever the *whole* message points - which is dominated by the
+    longest or most repeated topic. Verified in practice: "room types and rates, what time is
+    check-out, and is there a swimming pool" returned five passages, all of them room types and
+    check-in policy, and no facilities passage at all. The assistant then correctly reported that it
+    had no information about the pool, because no pool text had ever reached it.
+
+    Retrieving per question fixes that without a second model call to decompose the message, so the
+    split is deliberately plain text rather than anything clever. It cannot misunderstand nuance, and
+    when it is wrong the only cost is one extra embedding against the same corpus.
+
+    Returns a single-element list for an ordinary one-question message, which keeps the common case
+    identical to the previous behaviour.
+    """
+    fragments = [
+        fragment.strip(" -*\u2022\t;,")
+        for fragment in _FRAGMENT_SPLIT.split(question.strip())
+    ]
+    kept = [fragment for fragment in fragments if len(fragment) > 2 and not _is_social(fragment)]
+    if not kept:
+        # Purely a greeting. Retrieve nothing rather than searching for "Hello", and let the model
+        # answer from its instructions.
+        return []
+    # Order preserved and deduplicated, because a message often repeats itself and re-embedding a
+    # fragment buys no new context.
+    seen: set[str] = set()
+    variants: list[str] = []
+    for fragment in kept:
+        key = fragment.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        variants.append(fragment)
+    return variants[: settings.RETRIEVAL_MAX_QUERIES]
+
+
 async def _retrieve(
     db: AsyncSession, project_id: uuid.UUID, question: str
 ) -> list[KnowledgeQueryResultItem]:
@@ -682,16 +824,39 @@ async def _retrieve(
     ).scalar_one_or_none()
     if kb is None or not question.strip():
         return []
-    response = await query_knowledge_base(
-        db,
-        kb,
-        KnowledgeQueryRequest(
-            query=question,
-            top_k=settings.RETRIEVAL_TOP_K,
-            score_threshold=settings.RETRIEVAL_SCORE_THRESHOLD,
-        ),
-    )
-    return list(response.results)
+
+    variants = _query_variants(question)
+    if not variants:
+        return []
+
+    # One search per question, then merged. Kept as separate calls rather than one batched call so
+    # that each question's own similarity scores stay comparable within their own result set - the
+    # merge below is by score, and scores from a union query are not on one scale.
+    found: dict[tuple[uuid.UUID, int], KnowledgeQueryResultItem] = {}
+    for variant in variants:
+        response = await query_knowledge_base(
+            db,
+            kb,
+            KnowledgeQueryRequest(
+                query=variant,
+                top_k=settings.RETRIEVAL_TOP_K,
+                score_threshold=settings.RETRIEVAL_SCORE_THRESHOLD,
+            ),
+        )
+        for item in response.results:
+            key = (item.document_id, item.chunk_index)
+            existing = found.get(key)
+            # The same passage can answer two of the guest's questions; keep its strongest showing
+            # rather than listing it twice and spending prompt budget on a duplicate.
+            if existing is None or item.score > existing.score:
+                found[key] = item
+
+    merged = sorted(found.values(), key=lambda item: item.score, reverse=True)
+    # Truncated to the *combined* cap, not to `RETRIEVAL_TOP_K`. Capping the merge at the per-query
+    # limit would let the loudest question's results evict the quieter questions' results - the
+    # original bug, reintroduced one step later. Each question contributes its best passages and the
+    # cap only bounds how much text reaches the model.
+    return merged[: settings.RETRIEVAL_MAX_CHUNKS]
 
 
 def _citation(item: KnowledgeQueryResultItem) -> dict[str, Any]:

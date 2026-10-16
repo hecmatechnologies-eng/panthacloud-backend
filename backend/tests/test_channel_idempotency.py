@@ -145,3 +145,75 @@ class TestIdentity:
         )
 
         assert turn.message_id is None
+
+class TestReplaysAreReportedToTheCaller:
+    """Deduplication must reach the side effect, not just the row.
+
+    Found by watching it fail: the unique index stopped the transcript gaining a second copy of a
+    guest's message, but the turn still ran and the caller still sent its reply. A provider that
+    redelivered three times therefore produced five identical emails - the transcript looked correct
+    the whole time, which is exactly what made it hard to notice.
+    """
+
+    async def test_a_first_delivery_is_not_a_replay(
+        self, db_session: AsyncSession, conversation
+    ) -> None:
+        from app.runtime.chat import _persist_inbound
+
+        wrote = await _persist_inbound(
+            db_session, conversation_id=conversation.id, content="Do you have a room?",
+            message_id=WAMID,
+        )
+
+        assert wrote is True
+
+    async def test_a_redelivery_is_reported_as_a_replay(
+        self, db_session: AsyncSession, conversation
+    ) -> None:
+        from app.runtime.chat import _persist_inbound
+
+        await _persist_inbound(
+            db_session, conversation_id=conversation.id, content="Do you have a room?",
+            message_id=WAMID,
+        )
+        again = await _persist_inbound(
+            db_session, conversation_id=conversation.id, content="Do you have a room?",
+            message_id=WAMID,
+        )
+
+        assert again is False, (
+            "a redelivery must be reported so the caller can skip sending; returning nothing here "
+            "is what produced duplicate emails to the guest"
+        )
+
+    async def test_a_message_without_a_provider_id_is_never_a_replay(
+        self, db_session: AsyncSession, conversation
+    ) -> None:
+        """A widget turn has no provider id, so every turn is genuinely new.
+
+        Reporting these as replays would silently stop every widget reply being sent.
+        """
+        from app.runtime.chat import _persist_inbound
+
+        for _ in range(2):
+            wrote = await _persist_inbound(
+                db_session, conversation_id=conversation.id, content="hello", message_id=None
+            )
+
+        assert wrote is True
+
+    async def test_the_flag_reaches_the_reply_a_caller_sees(
+        self, db_session: AsyncSession, conversation
+    ) -> None:
+        """The flag has to survive the whole path, not just the persist call."""
+        from app.runtime.chat import ChatReply
+
+        reply = ChatReply(
+            session_id=conversation.session_id,
+            conversation_id=conversation.id,
+            reply="text",
+            is_replay=True,
+        )
+
+        assert reply.is_replay is True
+

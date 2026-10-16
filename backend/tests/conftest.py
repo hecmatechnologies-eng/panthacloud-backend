@@ -34,6 +34,13 @@ os.environ["SECRET_ENCRYPTION_KEY"] = Fernet.generate_key().decode("ascii")
 os.environ["EMBEDDING_PROVIDER"] = "deterministic"
 os.environ["EMBEDDING_DIMENSION"] = "384"
 
+# The email reply delay exists so that an automated reply does not look machine-generated. That is
+# a question about a real mailbox's spam filter and has no meaning in a test, but the wait is real
+# wall-clock time: left at the shipped default of 90 seconds, every email webhook test sleeps for a
+# minute and a half and the suite appears to hang. Set for the whole run rather than per-test so a
+# future test cannot reintroduce it by omission.
+os.environ["EMAIL_REPLY_DELAY_SECONDS"] = "0"
+
 # The autonomous coding agent is off by default in the suite. It was previously disabled by an
 # `APP_ENV != "test"` check buried in the pipeline, which also meant the wiring around it was
 # never executed. Tests that need it force it on explicitly with a stubbed runner.
