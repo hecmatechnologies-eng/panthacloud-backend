@@ -32,6 +32,7 @@ from app.core.origins import (
 from app.models.allowed_origin import AllowedOrigin
 from app.models.channel_registration import ChannelRegistration
 from app.models.project import Project
+from app.models.project_channel import ProjectChannel
 from app.models.website_integration import (
     IntegrationRun,
     WebsiteIntegration,
@@ -300,21 +301,39 @@ async def resolve_channel_tenant(
         # refusal rather than as a query that happens to miss for a structural reason.
         raise TenantResolutionError()
 
-    registration = (
+    # Joined through ProjectChannel rather than read off the registration, because a connected
+    # number is not in front of anybody until a project selects it. The inner join is the
+    # fail-closed behaviour: a registration with no selection matches no row, which refuses.
+    #
+    # That distinction matters at exactly the moment somebody connects a number by hand during
+    # setup and assumes it is live because the Settings page says "Connected". It is not answering
+    # guests until a project is pointed at it.
+    row = (
         await db.execute(
-            select(ChannelRegistration).where(
+            select(ChannelRegistration, ProjectChannel.project_id)
+            .join(
+                ProjectChannel,
+                ProjectChannel.channel_registration_id == ChannelRegistration.id,
+            )
+            .where(
                 ChannelRegistration.channel == channel,
                 ChannelRegistration.external_identifier == canonical,
+                ProjectChannel.channel == channel,
             )
         )
-    ).scalar_one_or_none()
+    ).first()
+
+    if row is None:
+        raise TenantResolutionError()
+
+    registration, project_id = row
 
     # An inactive registration still holds its address, so it still answers here. Refusing is what
     # stops a retired number from being handed to a different tenant while the row sits around.
-    if registration is None or not registration.is_active:
+    if not registration.is_active:
         raise TenantResolutionError()
 
     return channel_context(
         organization_id=registration.organization_id,
-        project_id=registration.project_id,
+        project_id=project_id,
     )

@@ -1,7 +1,12 @@
 """Resolving a messaging address to a tenant (ADR-004).
 
 The table is the channel counterpart to ``allowed_origals``, and this is the question a webhook
-arrives asking: a WhatsApp delivery carries a ``wa_id`` and nothing else identifying.
+arrives asking: a WhatsApp delivery carries the *business* number and nothing else identifying.
+
+Resolution reads through ``ProjectChannel``, so it answers a slightly different question than the
+table name suggests: not "is this number connected?" but "which project is this connected number
+pointed at?". A registration with no selection refuses - see
+``test_a_connected_number_nobody_selected_refuses``.
 
 The tests that matter most are the boring ones - a number registered with a '+' and the same number
 arriving without one, an address that is not registered, a registration that has been retired. The
@@ -13,14 +18,17 @@ number is someone else's" are indistinguishable from outside - there is a test f
 """
 
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.channels.base import Channel, normalize_external_id
 from app.models.channel_registration import ChannelRegistration
+from app.models.project_channel import ProjectChannel
 from app.runtime.resolver import TenantResolutionError, channel_context, resolve_channel_tenant
 
 NUMBER = "256772123456"
@@ -59,22 +67,44 @@ async def project_id(client: AsyncClient) -> tuple[str, str]:
     return await make_project(client)
 
 
-async def claim(db: AsyncSession, owner: tuple[str, str], **kwargs) -> ChannelRegistration:
-    """Register an address for a project, stored in canonical form as the application would.
+async def claim(
+    db: AsyncSession,
+    owner: tuple[str, str],
+    *,
+    select_for_project: bool = True,
+    **kwargs,
+) -> ChannelRegistration:
+    """Connect an address for the organisation, stored in canonical form as the application would.
 
     ``raw`` is the address as the tenant typed it; ``channel`` defaults to WhatsApp.
+
+    ``select_for_project`` creates the ``ProjectChannel`` row that puts the number in front of that
+    project. It defaults to True because a connected-but-unassigned number resolves to no tenant and
+    refusing that is its own test (``test_a_connected_number_nobody_selected_refuses``); every other
+    test here is about resolution, and resolution requires a selection.
     """
     org_id, proj_id = owner
     channel = kwargs.pop("channel", Channel.WHATSAPP)
     raw = kwargs.pop("raw", NUMBER)
     row = ChannelRegistration(
         organization_id=uuid.UUID(org_id),
-        project_id=uuid.UUID(proj_id),
+        project_id=None,
         channel=channel,
         external_identifier=normalize_external_id(channel, raw),
         **kwargs,
     )
     db.add(row)
+    await db.flush()
+
+    if select_for_project:
+        db.add(
+            ProjectChannel(
+                project_id=uuid.UUID(proj_id),
+                channel=channel,
+                channel_registration_id=row.id,
+                selected_at=datetime.now(UTC),
+            )
+        )
     await db.commit()
     return row
 
@@ -82,6 +112,119 @@ async def claim(db: AsyncSession, owner: tuple[str, str], **kwargs) -> ChannelRe
 # ============================================================
 # Resolution
 # ============================================================
+
+
+class TestUnselectedNumbers:
+    """A connected number is not a live number.
+
+    The Settings page shows "Connected" the moment the registration exists, which makes it easy to
+    assume a manually-connected number is answering guests. It is not: resolution joins through
+    ``ProjectChannel``, so until a project is pointed at it the number routes to nobody.
+
+    These are the fail-closed tests, and they are the reason ``ProjectChannel`` is an inner join
+    rather than a lookup.
+    """
+
+    async def test_a_connected_number_nobody_selected_refuses(
+        self, db_session: AsyncSession, project_id: tuple[str, str]
+    ) -> None:
+        """Connecting a number must not by itself put it in front of guests."""
+        await claim(db_session, project_id, select_for_project=False)
+
+        with pytest.raises(TenantResolutionError):
+            await resolve_channel_tenant(
+                db_session, channel=Channel.WHATSAPP, external_id=NUMBER
+            )
+
+    async def test_it_starts_refusing_once_a_project_selects_it(
+        self, db_session: AsyncSession, project_id: tuple[str, str]
+    ) -> None:
+        """The same row, now selected, resolves - so the refusal above is about the selection and
+        nothing else."""
+        _org_id, proj_id = project_id
+        row = await claim(db_session, project_id, select_for_project=False)
+
+        db_session.add(
+            ProjectChannel(
+                project_id=uuid.UUID(proj_id),
+                channel=Channel.WHATSAPP,
+                channel_registration_id=row.id,
+                selected_at=datetime.now(UTC),
+            )
+        )
+        await db_session.commit()
+
+        ctx = await resolve_channel_tenant(
+            db_session, channel=Channel.WHATSAPP, external_id=NUMBER
+        )
+        assert ctx.project_id == uuid.UUID(proj_id)
+
+    async def test_an_account_cannot_be_selected_by_two_projects(
+        self, db_session: AsyncSession, client: AsyncClient, project_id: tuple[str, str]
+    ) -> None:
+        """The constraint that inbound routing forces.
+
+        A webhook names the business number and nothing else, so two projects on one number would
+        leave the resolver choosing arbitrarily between two correct answers - silently stealing one
+        project's guests. It is refused at the database rather than left to application review.
+        """
+        from sqlalchemy.exc import IntegrityError as _IE
+
+        # First project already has this account selected - that is the row the second must collide
+        # with. Creating it unselected would leave nothing to collide against and the test would
+        # pass for the wrong reason.
+        row = await claim(db_session, project_id)
+
+        _other_org, other_proj = await make_project(client)
+        db_session.add(
+            ProjectChannel(
+                project_id=uuid.UUID(other_proj),
+                channel=Channel.WHATSAPP,
+                channel_registration_id=row.id,
+                selected_at=datetime.now(UTC),
+            )
+        )
+        with pytest.raises(_IE):
+            await db_session.commit()
+        await db_session.rollback()
+
+    async def test_a_project_cannot_select_two_accounts_on_one_channel(
+        self, db_session: AsyncSession, project_id: tuple[str, str]
+    ) -> None:
+        """The product rule: one number per project, because "where do replies go?" needs an
+        answer."""
+        from sqlalchemy.exc import IntegrityError as _IE
+
+        _org_id, proj_id = project_id
+        first = await claim(db_session, project_id, select_for_project=False, raw="256772000001")
+        await claim(db_session, project_id, select_for_project=False, raw="256772000002")
+
+        db_session.add(
+            ProjectChannel(
+                project_id=uuid.UUID(proj_id),
+                channel=Channel.WHATSAPP,
+                channel_registration_id=first.id,
+                selected_at=datetime.now(UTC),
+            )
+        )
+        second = (
+            await db_session.execute(
+                select(ChannelRegistration).where(
+                    ChannelRegistration.external_identifier == "256772000002"
+                )
+            )
+        ).scalar_one()
+        db_session.add(
+            ProjectChannel(
+                project_id=uuid.UUID(proj_id),
+                channel=Channel.WHATSAPP,
+                channel_registration_id=second.id,
+                selected_at=datetime.now(UTC),
+            )
+        )
+        with pytest.raises(_IE):
+            await db_session.commit()
+        await db_session.rollback()
 
 
 class TestResolution:

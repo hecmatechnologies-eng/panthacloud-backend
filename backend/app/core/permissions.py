@@ -45,6 +45,16 @@ class Permission(str, enum.Enum):
     # permission when the approval endpoint lands - a read-only role must not be able to send a
     # guest a price.
     CONVERSATION_VIEW = "conversation:view"
+    # A connected channel account holds a provider access token and a business phone number, so
+    # reading it is already more than project:view - and connecting one is an organisation-admin
+    # act, not a per-project one. The split matters most for the refusal direction: a MEMBER must be
+    # able to see *which* number their assistant answers on (to explain it to a guest) without being
+    # able to add another one or read its token.
+    CHANNEL_VIEW = "channel:view"
+    CHANNEL_MANAGE = "channel:manage"
+    # Which connected account a project's assistant answers on. Separate from CHANNEL_MANAGE because
+    # it is a project-scoped choice: a project lead picks the account, an org admin connects it.
+    PROJECT_CHANNEL_MODIFY = "project_channel:modify"
 
 
 ROLE_PERMISSIONS: dict[RoleEnum, set[Permission]] = {
@@ -83,6 +93,9 @@ ROLE_PERMISSIONS: dict[RoleEnum, set[Permission]] = {
         Permission.ASSISTANT_UPDATE,
         Permission.ASSISTANT_DELETE,
         Permission.CONVERSATION_VIEW,
+        Permission.CHANNEL_VIEW,
+        Permission.CHANNEL_MANAGE,
+        Permission.PROJECT_CHANNEL_MODIFY,
     },
     RoleEnum.ADMIN: {
         Permission.ORG_VIEW,
@@ -117,6 +130,9 @@ ROLE_PERMISSIONS: dict[RoleEnum, set[Permission]] = {
         Permission.ASSISTANT_UPDATE,
         Permission.ASSISTANT_DELETE,
         Permission.CONVERSATION_VIEW,
+        Permission.CHANNEL_VIEW,
+        Permission.CHANNEL_MANAGE,
+        Permission.PROJECT_CHANNEL_MODIFY,
     },
     RoleEnum.MEMBER: {
         Permission.ORG_VIEW,
@@ -151,6 +167,10 @@ ROLE_PERMISSIONS: dict[RoleEnum, set[Permission]] = {
         # conversations is exactly their job. Sending still needs the approval permission, which
         # does not exist yet.
         Permission.CONVERSATION_VIEW,
+        # Knowing which number the assistant answers on is part of answering a guest, so a member
+        # gets VIEW. Neither MANAGE nor PROJECT_CHANNEL_MODIFY: a member does not connect a number
+        # and does not retarget a project onto another one.
+        Permission.CHANNEL_VIEW,
     },
     RoleEnum.VIEWER: {
         Permission.ORG_VIEW,
@@ -165,6 +185,9 @@ ROLE_PERMISSIONS: dict[RoleEnum, set[Permission]] = {
         # Read-only, which is what viewing a conversation is. A viewer sees a guest's messages and
         # cannot act on them; approving a draft is a separate permission that does not exist yet.
         Permission.CONVERSATION_VIEW,
+        # View only, for the same reason: a read-only role sees which number is connected. There is
+        # deliberately no MANAGE here - connecting a number stores a provider access token.
+        Permission.CHANNEL_VIEW,
     },
 }
 

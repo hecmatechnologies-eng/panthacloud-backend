@@ -22,22 +22,32 @@ MAX_EXTERNAL_ID_LENGTH = 255
 
 
 class ChannelRegistration(BaseModel):
-    """One address, on one channel, belonging to one project.
+    """One address, on one channel, **connected by the organisation**.
+
+    An organisation connects as many numbers as it likes - a group with an Entebbe property and a
+    Kampala one has two WhatsApp numbers - and then points individual projects at one of them
+    (:class:`app.models.project_channel.ProjectChannel`). So ``project_id`` is **nullable**:
+    claiming a number is an organisation-wide act in Settings, not something a project owns.
 
     ``external_identifier`` is stored in the canonical form of
     :func:`app.channels.base.normalize_external_id`, so registering ``+256772123456`` and receiving
-    ``256772123456`` land on the same row. It is opaque and never parsed - a Telegram chat id is not
-    a phone number and neither is a Slack user id.
+    ``256772123456`` land on the same row. It is opaque and never parsed - a Telegram chat id is not a
+    phone number and neither is a Slack user id.
 
-    **One address claims exactly one project.** That is a decision, not a simplification: a shared
-    number has no way to decide which project an unknown guest wanted, so it would have to refuse
-    first contact or route on something else - a keyword, or a link. Letting several projects claim
-    the same number would mean building that, and quietly. If it is ever wanted, it is the
-    ``ChannelRoute`` table this deliberately does not have: a number per organisation, a route per
-    project.
+    **One address is connected exactly once, organisation-wide.** That is a decision, not a
+    simplification: a shared number has no way to decide which project an unknown guest wanted, so it
+    would have to refuse first contact or route on something else - a keyword, or a link. Letting
+    two organisations claim one number would mean building that, and quietly. If it is ever wanted
+    it is a ``ChannelRoute`` table this deliberately does not have: a number per organisation, a
+    route per project.
 
     The uniqueness spans ``is_active``: a deactivated registration still holds its address, so
     reactivation cannot collide with a number somebody else has since been given.
+
+    **A connected number answers for nobody until a project selects it.** Routing reads through
+    :class:`~app.models.project_channel.ProjectChannel`, so a number nobody has pointed a project at
+    resolves to no tenant and the webhook refuses. Connecting a number must not by itself put it in
+    front of guests.
     """
 
     __tablename__ = "channel_registrations"
@@ -71,10 +81,14 @@ class ChannelRegistration(BaseModel):
         nullable=False,
         index=True,
     )
-    project_id: Mapped[uuid.UUID] = mapped_column(
+    #: Nullable, and that is the point: an organisation connects numbers without every one of them
+    #: being in front of a project. Which project answers on this number is
+    #: ``ProjectChannel.registration_id``, not this column - keeping both would be two sources of
+    #: truth for one routing decision, and the loser would silently be ignored.
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("projects.id", ondelete="CASCADE"),
-        nullable=False,
+        ForeignKey("projects.id", ondelete="SET NULL"),
+        nullable=True,
         index=True,
     )
     channel: Mapped[Channel] = mapped_column(
