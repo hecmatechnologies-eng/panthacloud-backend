@@ -98,8 +98,8 @@ async def _send_reply_after_delay(
             from_address=email.to_address,
             to_address=email.from_address,
             subject=inbound_rules.reply_subject(email.subject),
-            text=render_text(reply.reply, branding),
-            html=render_html(reply.reply, branding),
+            text=render_text(reply.reply, branding, len(reply.citations)),
+            html=render_html(reply.reply, branding, len(reply.citations)),
             reply_to_message_id=email.message_id,
             unsubscribe_url=unsub_url,
         )

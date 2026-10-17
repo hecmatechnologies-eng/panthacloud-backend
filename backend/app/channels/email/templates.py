@@ -35,11 +35,11 @@ newlines in the body become ``<br>`` - so the only transformation is whitespace,
 survive it.
 """
 
-import base64
 import html
 import re
 from dataclasses import dataclass, field
 
+from app.channels.email.icons import contact_glyph, render_glyph, social_glyph
 from app.models.project_branding import SOCIAL_PLATFORMS, ProjectBranding
 
 #: The content well. Narrow enough to read comfortably in Outlook, wide enough not to wrap a rate.
@@ -54,8 +54,7 @@ MUTED = "#5F6368"
 
 _HEX_COLOUR = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
-#: Platform -> the label a reader sees. Text rather than icon glyphs on purpose: a social icon is
-#: either an image (blocked by default in many clients) or a font a client does not have.
+#: Platform -> the label a reader sees in the plain-text version, where an image cannot help.
 _SOCIAL_LABELS = {
     "facebook": "Facebook",
     "instagram": "Instagram",
@@ -64,6 +63,29 @@ _SOCIAL_LABELS = {
     "youtube": "YouTube",
     "tiktok": "TikTok",
 }
+
+def _icon_img(uri: str, size: int, title: str | None = None) -> str:
+    """Any glyph as an inline image, so it needs no network request to render.
+
+    Shared by the social marks and the contact-detail icons because the hard parts are identical: a
+    data URI rather than a hosted file, so a client that blocks remote images still shows them, and
+    ``alt=""`` so nothing lands in the message snippet. The name rides on ``title``, which a screen
+    reader and a hover both pick up - ``alt`` is deliberately left empty because these glyphs are
+    decorative next to the visible value they sit beside.
+    """
+    title_attr = f' title="{escape(title)}"' if title else ""
+    return (
+        f'<img src="{uri}" alt=""{title_attr} width="{size}" height="{size}" '
+        f'style="display:inline-block;border:0;width:{size}px;height:{size}px;" />'
+    )
+
+
+def _social_icon(platform: str, colour: str) -> str:
+    """One social mark, wearing the brand colour because it *is* the brand."""
+    return _icon_img(render_glyph(social_glyph(platform), 36, colour), 18, _SOCIAL_LABELS[platform])
+
+
+_CONTACT_ICON_SIZE = 14
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,6 +184,42 @@ def escape(text: str) -> str:
     return html.escape(text, quote=True)
 
 
+#: A citation marker: a bracketed number.
+#:
+#: Stripped from anything a guest sees. The numbers are stored on the message for audit and so the
+#: staff inbox can cross-check a claim, but a guest cannot look up "[10]" and it reads as either a
+#: mistake or a leaked internal id - exactly the impression a branded, professional email is meant
+#: to avoid.
+_CITATION = re.compile(r"\s*\[(\d{1,3})\]")
+
+#: Assumed number of sources when the caller does not say.
+#:
+#: Deliberately small, because the fallback has to be *too narrow* rather than too wide: a marker
+#: above this survives and reaches a guest, which is a cosmetic flaw, whereas a rule wide enough to
+#: swallow a year would silently edit a sentence the assistant actually wrote. Real citations are
+#: bounded by ``RETRIEVAL_MAX_CHUNKS``.
+_ASSUMED_SOURCE_COUNT = 32
+
+
+def strip_citations(text: str, source_count: int | None = None) -> str:
+    """Remove provenance markers from guest-facing text, leaving the stored record intact.
+
+    ``source_count`` is how many numbered sources were actually handed to the model, and it is what
+    makes this precise rather than a guess. The numbers in "[1]" are positions in the context we
+    built, not dates or measurements, so a marker is only a citation if it is within range.
+
+    Getting that wrong is not hypothetical. A first attempt stripped any ``[digits]``, which ate
+    ``Rates for [2024] were higher`` - a perfectly ordinary sentence about a hotel - and would have
+    quietly rewritten the assistant's answer. Range-checking is what separates the two.
+    """
+    limit = _ASSUMED_SOURCE_COUNT if source_count is None else source_count
+
+    def replace(match: re.Match[str]) -> str:
+        return "" if 1 <= int(match.group(1)) <= limit else match.group(0)
+
+    return _CITATION.sub(replace, text).strip()
+
+
 def body_to_html(text: str) -> str:
     """Escape a reply body, then turn its newlines into line breaks.
 
@@ -174,23 +232,79 @@ def body_to_html(text: str) -> str:
     return escaped.replace("\n", "<br>")
 
 
+#: The model's text comes back as Markdown whether or not anything asks it to, and prose with a
+#: literal "**Standard King Room**" or "* " in front of it is the single most visible flaw a guest
+#: can see. Observed in a real inbox, 2026-10-17.
+#:
+#: A small subset is rendered rather than a full parser, and the reason is injection: the text is
+#: escaped *first*, so ``<`` and ``>`` are already inert, and only these four patterns are then
+#: reintroduced as tags. A full Markdown parser would have to reason about code spans, links and
+#: HTML blocks - all of which are ways to smuggle markup back in after escaping.
+_BOLD = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
+_ITALIC = re.compile(r"(?<![\*\w])\*(?!\s)(.+?)(?<!\s)\*(?![\*\w])", re.DOTALL)
+_HEADING = re.compile(r"^\s{0,3}#{1,4}\s+(.+?)\s*#*\s*$")
+_BULLET = re.compile(r"^\s*(?:[-*+•])\s+(.+?)\s*$")
+#: A lone "*" followed by two spaces, which is how the model emits a bullet when it puts the marker
+#: in its own token: "*   **Standard King Room**: ...".
+_LOOSE_BULLET = re.compile(r"^\s*\*\s{2,}(.+?)\s*$")
+
+
+def _inline(text: str) -> str:
+    """Markdown emphasis, applied to text that has already been escaped."""
+    out = _BOLD.sub(r"<strong>\1</strong>", text)
+    out = _ITALIC.sub(r"<em>\1</em>", out)
+    return out
+
+
 def _paragraphs(text: str) -> str:
-    """The body, split into paragraphs."""
-    chunks = [c.strip() for c in re.split(r"\n\s*\n", text.strip()) if c.strip()]
-    return "".join(
-        f'<p style="margin:0 0 14px 0;font-size:16px;line-height:26px;color:#202124;">'
-        f"{body_to_html(chunk)}</p>"
-        for chunk in chunks
-    )
+    """The body: paragraphs, headings and bullet lists, all as inline-styled elements.
+
+    Bullets are indented paragraphs with a literal "•" rather than ``<ul>``/``<li>``, because
+    Outlook's Word renderer handles list markup badly enough that indentation and spacing routinely
+    come out wrong. A character bullet is the approach that survives it.
+    """
+    out: list[str] = []
+    for block in re.split(r"\n\s*\n", text.strip()):
+        if not block.strip():
+            continue
+        lines = [line for line in block.split("\n") if line.strip()]
+        heading = _HEADING.match(lines[0]) if len(lines) == 1 else None
+        if heading:
+            out.append(
+                '<p style="margin:0 0 12px 0;font-size:17px;line-height:26px;font-weight:700;'
+                f'color:#202124;">{_inline(body_to_html(heading.group(1)))}</p>'
+            )
+            continue
+
+        bullets = [_BULLET.match(line) or _LOOSE_BULLET.match(line) for line in lines]
+        if any(bullets):
+            for line, match in zip(lines, bullets, strict=True):
+                inner = body_to_html(match.group(1)) if match else body_to_html(line)
+                out.append(
+                    '<p style="margin:0 0 8px 0;padding-left:16px;font-size:16px;line-height:26px;'
+                    f'color:#202124;">&bull;&nbsp;&nbsp;{_inline(inner)}</p>'
+                )
+            continue
+
+        joined = "<br>".join(body_to_html(line) for line in lines)
+        out.append(
+            '<p style="margin:0 0 14px 0;font-size:16px;line-height:26px;color:#202124;">'
+            f"{_inline(joined)}</p>"
+        )
+    return "".join(out)
 
 
 def _social_row(branding: Branding) -> str:
+    """The footer social row: glyphs inline, each linking to the profile.
+
+    Inline-block images with a fixed height rather than a table cell per icon, so the row holds
+    together on a narrow phone screen instead of wrapping one mark per line.
+    """
     if not branding.social_links:
         return ""
-    links = " &nbsp; ".join(
-        f'<a href="{escape(url)}" style="color:{escape(branding.accent_colour)};'
-        f'text-decoration:none;font-size:13px;font-weight:600;">'
-        f"{escape(_SOCIAL_LABELS[platform])}</a>"
+    links = "&nbsp;&nbsp;".join(
+        f'<a href="{escape(url)}" style="text-decoration:none;display:inline-block;" '
+        f'title="{escape(_SOCIAL_LABELS[platform])}">{_social_icon(platform, branding.accent_colour)}</a>'
         for platform, url in branding.social_links.items()
     )
     return (
@@ -199,52 +313,93 @@ def _social_row(branding: Branding) -> str:
 
 
 def _contact_block(branding: Branding) -> str:
-    lines: list[str] = []
+    """Website, email and telephone, each behind its own glyph. Address on its own line.
+
+    A two-column table rather than ``<br>``-separated spans, because a glyph sitting on a text
+    baseline drops a pixel or two in some clients and the row reads as broken. Table cells put the
+    icon and its value on a shared middle line everywhere, which is why this is a table and the
+    social row is not - that one is a single line of marks with no text to align against.
+    """
+    rows: list[tuple[str, str]] = []
     if branding.website:
-        lines.append(
+        link = (
             f'<a href="{escape(branding.website)}" '
-            f'style="color:{escape(MUTED)};text-decoration:none;">{escape(branding.website)}</a>'
+            f'style="color:{MUTED};text-decoration:none;">'
+            f"{escape(branding.website)}</a>"
         )
+        rows.append(("website", link))
     if branding.contact_email:
-        lines.append(escape(branding.contact_email))
+        rows.append(("email", escape(branding.contact_email)))
     if branding.phone:
-        lines.append(escape(branding.phone))
-    if branding.postal_address:
-        lines.append(escape(branding.postal_address))
-    if not lines:
+        rows.append(("phone", escape(branding.phone)))
+    if not rows:
         return ""
-    body = "<br>".join(lines)
-    return f'<p style="margin:0 0 12px 0;font-size:13px;line-height:20px;color:{MUTED};">{body}</p>'
+
+    # `font-size:0` on the icon cell removes the gap an inline image leaves beside it. Ignored by
+    # some clients, which costs a couple of pixels of gutter - a far better failure than a
+    # misaligned row.
+    lines = "".join(
+        "<tr>"
+        f'<td width="{_CONTACT_ICON_SIZE + 10}" valign="middle" '
+        f'style="padding:0;font-size:0;line-height:0;">'
+        f"{_icon_img(render_glyph(contact_glyph(kind), 28, MUTED), _CONTACT_ICON_SIZE)}</td>"
+        f'<td valign="middle" style="padding:0 0 0 6px;font-size:13px;line-height:20px;'
+        f'color:{MUTED};">{value}</td>'
+        "</tr>"
+        for kind, value in rows
+    )
+    block = (
+        f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
+        f'style="margin:0 0 12px 0;">{lines}</table>'
+    )
+
+    if branding.postal_address:
+        block += (
+            f'<p style="margin:0 0 12px 0;font-size:13px;line-height:20px;color:{MUTED};">'
+            f"{escape(branding.postal_address)}</p>"
+        )
+    return block
+
+
+def _badge_shapes(initials: str, colour: str) -> list:
+    """The badge: a rounded square in the brand colour with the initials reversed out of it.
+
+    The initials are drawn as a *hole* rather than white text, so the mark keeps working if the
+    accent is a light colour - white-on-pale-yellow is invisible where reversed-out is not.
+    """
+    from app.channels.email.icons import _circle, _rounded_rect, _union
+
+    plate = _rounded_rect(0.0, 0.0, 24.0, 24.0, 4.0)
+    # Two letters side by side, centred as a pair; one letter is centred on its own.
+    letters = _union(*[_circle(x, 12.0, 5.2) for x in _letter_positions(initials)])
+    return [plate, lambda px, py: 0.0 if letters(px, py) else 1.0]
+
+
+def _letter_positions(initials: str) -> list[float]:
+    letters = list(initials)[:2]
+    if len(letters) == 1:
+        return [12.0]
+    return [8.4, 15.6]
 
 
 def _initials_badge(branding: Branding) -> str:
-    """The initials mark, as an inline image rather than text.
+    """The initials mark, as a small image rather than text.
 
     **Why an image and not styled text.** Observed in a real Gmail inbox, 2026-10-17: the list-view
-    preview read ``KH K Hotels Entebbe · Uganda Yes, there is a Family Suite...`` - Gmail builds its
-    snippet from the first *text* in the document, so a text badge becomes the summary. A guest
-    skimming their inbox saw two letters instead of the answer, and the message read like a
-    newsletter partly because of it.
+    preview read ``KH K Hotels Entebbe - Uganda Yes, there is a Family Suite available...`` - Gmail
+    builds its snippet from the first *text* in the document, so a text badge became the summary. A
+    guest skimming their inbox saw two letters instead of the answer.
 
-    An ``<img>`` contributes only its ``alt`` text, so ``alt=""`` keeps the badge out of the snippet
-    entirely. That also makes failure safe: if a client refuses the image, the worst case is an
-    empty space, never "KH" printed in the message list.
-
-    A data URI rather than a hosted file, so there is still no request to a third party. Base64
-    rather than percent-encoding because Outlook handles the former reliably.
+    **Why PNG and not SVG.** This was SVG in a data URI first, and it rendered as an empty box in
+    every message. The reasoning that a data URI is not a network request and therefore cannot be
+    blocked was wrong: Gmail strips SVG because it is a script-capable format, and most clients follow
+    its lead. PNG is what mail clients actually render. See :mod:`app.channels.email.icons`.
     """
-    svg = (
-        '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">'
-        f'<rect width="64" height="64" rx="6" fill="{escape(branding.accent_colour)}"/>'
-        '<text x="32" y="33" fill="#FFFFFF" font-family="Arial,Helvetica,sans-serif" '
-        f'font-size="26" font-weight="700" text-anchor="middle">{escape(branding.initials)}</text>'
-        "</svg>"
+    return _icon_img(
+        render_glyph(_badge_shapes(branding.initials, branding.accent_colour), 128, branding.accent_colour),
+        64,
     )
-    uri = "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("ascii")
-    return (
-        f'<img src="{uri}" alt="" width="64" height="64" '
-        f'style="display:block;border:0;width:64px;height:64px;" />'
-    )
+
 
 
 def _header(branding: Branding) -> str:
@@ -288,7 +443,8 @@ def _footer(branding: Branding) -> str:
     )
 
 
-def render_html(body: str, branding: Branding | None) -> str:
+def render_html(body: str, branding: Branding | None, source_count: int | None = None) -> str:
+    body = strip_citations(body, source_count)
     """One reply as a complete HTML document, or an empty string when there is no branding.
 
     Returning ``""`` rather than an unstyled document is deliberate: an unbranded project should send
@@ -326,7 +482,29 @@ def render_html(body: str, branding: Branding | None) -> str:
 </html>"""
 
 
-def render_text(body: str, branding: Branding | None) -> str:
+def plainify(text: str) -> str:
+    """Strip Markdown markers, for the plain-text twin.
+
+    The HTML renderer *interprets* ``**bold**``; this has to *remove* it. That distinction matters
+    because the text part is not a lesser fallback - it is what a client with images blocked, a
+    screen reader, or a decade-old phone actually reads. Leaving asterisks in it means the two
+    versions of the same email disagree, and the worse one is the one more people see.
+    """
+    out: list[str] = []
+    for line in text.split("\n"):
+        heading = _HEADING.match(line)
+        if heading:
+            out.append(heading.group(1).strip())
+            continue
+        bullet = _BULLET.match(line) or _LOOSE_BULLET.match(line)
+        out.append(f"• {bullet.group(1).strip()}" if bullet else line.strip())
+    # Emphasis markers are removed last, over the whole text, so a bold span cannot straddle the
+    # line breaks that bullet handling just introduced.
+    out = [_BOLD.sub(r"\1", line) for line in out]
+    return _ITALIC.sub(r"\1", "\n".join(out))
+
+
+def render_text(body: str, branding: Branding | None, source_count: int | None = None) -> str:
     """The plain-text twin, with a signature block appended.
 
     This is the version that decides whether a reply reads as a desk or as a robot, because it is
@@ -334,8 +512,10 @@ def render_text(body: str, branding: Branding | None) -> str:
     separator is ``-- ``, the RFC 3676 signature marker, because that is what tells a mail client
     where the human-written part ends.
     """
+    body = plainify(body)
+
     if branding is None:
-        return body
+        return strip_citations(body, source_count)
 
     lines: list[str] = []
     if branding.has_contact_details or branding.footer_note:
@@ -353,7 +533,7 @@ def render_text(body: str, branding: Branding | None) -> str:
                     f"{_SOCIAL_LABELS[p]}: {u}" for p, u in branding.social_links.items()
                 )
             )
-    return body + "\n".join(lines)
+    return strip_citations(body, source_count) + "\n".join(lines)
 
 
 __all__ = [

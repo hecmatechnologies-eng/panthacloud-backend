@@ -99,6 +99,124 @@ class TestEscaping:
         assert body_to_html("<em>") == "&lt;em&gt;"
 
 
+class TestMarkdown:
+    """The model writes Markdown whether or not anything asks it to.
+
+    Observed in a real inbox: a reply arrived containing `*   **Standard King Room**: A king-size
+    bed...` and the guest saw every asterisk. Nothing about a prose email makes the formatting stop,
+    so the renderer handles a small subset instead of hoping the model cooperates.
+    """
+
+    def test_bold_is_rendered_not_shown(self) -> None:
+        html = render_html("We have the **Family Suite** available.", _brand())
+        assert "<strong>Family Suite</strong>" in html
+        assert "**" not in html
+
+    def test_italics_are_rendered_not_shown(self) -> None:
+        html = render_html("The *only* family room.", _brand())
+        assert "<em>only</em>" in html
+
+    def test_a_tight_bullet_is_rendered(self) -> None:
+        html = render_html("* Deluxe King\n* Family Suite", _brand())
+        assert html.count("&bull;") == 2
+        assert "Deluxe King" in html
+
+    def test_the_loose_bullet_the_model_actually_emitted_is_rendered(self) -> None:
+        """`*   **Standard King Room**: ...` - a marker in its own token, with several spaces.
+
+        This is the exact shape seen in the inbox. A pattern matching only ``* text`` leaves it
+        alone, and the guest sees the asterisks again.
+        """
+        html = render_html(
+            "Here are the rates:\n*   **Standard King Room**: from USD 120.", _brand()
+        )
+        assert "&bull;" in html
+        assert "<strong>Standard King Room</strong>" in html
+        assert "**" not in html
+
+    def test_a_heading_is_rendered(self) -> None:
+        # Asserted against the source text, not "#" generally: every inline style in this document
+        # carries a hex colour, so a bare "#" check would fail on the template rather than the bug.
+        html = render_html("## Rooms and rates", _brand())
+        assert "font-weight:700" in html
+        assert "##" not in html
+        assert "Rooms and rates" in html
+
+    def test_markup_in_the_body_cannot_survive_as_markup(self) -> None:
+        """Emphasis is reintroduced *after* escaping, so only these four patterns can become tags."""
+        html = render_html("**<script>alert(1)</script>**", _brand())
+        assert "<script>" not in html
+        assert "<strong>" in html
+
+    def test_the_plain_text_twin_is_clean_too(self) -> None:
+        """The two versions must not disagree.
+
+        Markdown was interpreted in the HTML and left literal in the text part, which is the worse
+        half of the problem: the text version is what a client with images blocked, a screen reader,
+        or a decade-old phone actually reads. That asymmetry is not obvious from the HTML, which is
+        how it survived the first fix.
+        """
+        body = "Here are the rates:\n*   **Standard King Room**: USD 120 [5]."
+        text = render_text(body, _brand(), source_count=12)
+        assert "**" not in text
+        assert "*   " not in text
+        assert "[5]" not in text
+        assert "• Standard King Room: USD 120." in text
+
+    def test_a_bullet_is_a_character_not_a_list_element(self) -> None:
+        """Outlook's Word renderer mishandles ``<ul>`` badly enough that indentation comes out wrong."""
+        html = render_html("* One\n* Two", _brand())
+        assert "<ul>" not in html
+        assert "<li>" not in html
+
+
+class TestCitationStripping:
+    """Provenance markers are ours, not the guest's.
+
+    The model is instructed to cite by bracketed number, and those numbers are stored on the message
+    for audit and cross-checking. None of that is meaningful to someone asking about room rates, and
+    a stray "[10]" reads as a leaked internal id.
+    """
+
+    def test_a_marker_never_reaches_the_plain_text_version(self) -> None:
+        text = render_text("Check-out is by 11:00 [3]. The Deluxe King is USD 180 [2][7].", _brand())
+        assert "[3]" not in text
+        assert "[2]" not in text
+        assert text.startswith("Check-out is by 11:00.")
+
+    def test_a_marker_never_reaches_the_html(self) -> None:
+        html = render_html("Check-out is by 11:00 [3].", _brand())
+        assert "[3]" not in html
+
+    def test_markers_are_stripped_when_there_is_no_branding(self) -> None:
+        assert render_text("The pool is open [6].", None) == "The pool is open."
+
+    def test_bracketed_text_that_is_not_a_citation_is_kept(self) -> None:
+        """The bug a first attempt caused, kept as a test.
+
+        Stripping any ``[digits]`` ate ``Rates for [2024] were higher`` - an ordinary sentence about
+        a hotel - which would have silently rewritten the assistant's answer. A year is far outside
+        any possible citation range, so range-checking is what separates the two.
+        """
+        for keep in ("Rates for [2024] were higher.", "Breakfast is [included] daily."):
+            assert keep in render_text(keep, _brand())
+
+    def test_only_markers_within_the_supplied_range_are_stripped(self) -> None:
+        """The count is what makes it precise rather than a guess.
+
+        Five passages were given, so [3] is a citation and [7] is the model reaching past what it
+        was shown. The first is ours to clean up; the second is a different problem and silently
+        deleting it would hide it.
+        """
+        text = "The pool is open [3] and the gym closes [7]."
+        assert render_text(text, _brand(), source_count=5) == "The pool is open and the gym closes [7]."
+
+    def test_the_body_is_still_never_altered_beyond_citations(self) -> None:
+        """Stripping must not become a general-purpose rewrite."""
+        body = "Yes, we have a pool [1]. It is open 07:00 to 20:00 [2]."
+        assert render_text(body, None) == "Yes, we have a pool. It is open 07:00 to 20:00."
+
+
 class TestNoBranding:
     def test_html_is_omitted_entirely(self) -> None:
         """An empty string rather than an unstyled white page, which reads as a broken template."""
@@ -156,17 +274,41 @@ class TestLogoFallback:
     def test_the_badge_makes_no_third_party_request(self) -> None:
         """A data URI, so blocking images costs appearance and nothing else."""
         html = render_html(BODY, _brand())
-        assert "data:image/svg+xml;base64," in html
+        assert "data:image/png;base64," in html
         assert "cdn.example" not in html
 
-    def test_the_badge_carries_the_accent_colour(self) -> None:
+    def test_the_badge_is_a_png_and_never_an_svg(self) -> None:
+        """The regression this whole module exists to prevent.
+
+        The badge was inline SVG in a data URI, on the reasoning that a data URI is not a network
+        request and therefore cannot be blocked. That was wrong: every message rendered as an empty
+        box, because Gmail strips SVG as a script-capable format. Asserted positively so the format
+        cannot be quietly changed back.
+        """
+        html = render_html(BODY, _brand())
+        assert "data:image/svg" not in html
+        assert "data:image/png;base64," in html
+        # A real PNG: the eight-byte signature, base64-encoded.
         import base64 as b64
         import re as _re
 
-        html = render_html(BODY, _brand(accent_colour="#123456"))
-        encoded = _re.search(r"data:image/svg\+xml;base64,([A-Za-z0-9+/=]+)", html)
+        encoded = _re.search(r"data:image/png;base64,([A-Za-z0-9+/=]+)", html)
         assert encoded is not None
-        assert "#123456" in b64.b64decode(encoded.group(1)).decode("utf-8")
+        assert b64.b64decode(encoded.group(1)).startswith(b"\x89PNG\r\n\x1a\n")
+
+    def test_the_badge_carries_the_accent_colour(self) -> None:
+        """The PNG's pixels are the accent, so a tenant's colour reaches the mark too."""
+        import re as _re
+
+        from app.channels.email.icons import _parse_hex, render_glyph, social_glyph
+
+        html = render_html(BODY, _brand(accent_colour="#123456"))
+        encoded = _re.search(r"data:image/png;base64,([A-Za-z0-9+/=]+)", html)
+        assert encoded is not None
+        assert render_glyph(social_glyph("x"), 8, "#123456") != render_glyph(
+            social_glyph("x"), 8, "#654321"
+        )
+        assert _parse_hex("#123456") == (0x12, 0x34, 0x56)
 
     def test_with_a_logo_the_image_is_used(self) -> None:
         html = render_html(BODY, _brand(logo_url="https://cdn.example/logo.png"))
@@ -194,13 +336,39 @@ class TestFooter:
         assert "Plot 7 Lugard Road" in html
         assert "https://ai-mwalimu.com" in html
 
-    def test_social_links_are_labelled_not_raw(self) -> None:
-        """Raw URLs in a footer are ugly and, as naked text, hard to recognise as destinations."""
+    def test_social_marks_are_icons_that_link_out(self) -> None:
+        """Glyphs, not raw URLs and not a wall of text labels.
+
+        The plain-text twin still names them, but in HTML a row of six words reads as a link dump;
+        glyphs are the convention for a footer row.
+        """
         html = render_html(
             BODY, _brand(social_links={"facebook": "https://facebook.com/khotels"})
         )
-        assert ">Facebook<" in html
         assert 'href="https://facebook.com/khotels"' in html
+        assert "data:image/png;base64," in html
+        assert "data:image/svg" not in html
+        # alt stays empty so neither the mark nor a filename reaches the message snippet; the name
+        # is carried by `title`, which a screen reader and a hover both use.
+        assert 'alt=""' in html
+        assert 'title="Facebook"' in html
+
+    def test_the_marks_take_the_accent_colour(self) -> None:
+        """Arriving in a fixed black would not match the rest of the mail."""
+        import base64 as b64
+        import re as _re
+
+        html = render_html(
+            BODY, _brand(accent_colour="#123456", social_links={"x": "https://x.com/khotels"})
+        )
+        encoded = _re.search(r"data:image/png;base64,([A-Za-z0-9+/=]+)", html)
+        assert encoded is not None
+        assert b64.b64decode(encoded.group(1)).startswith(b"\x89PNG\r\n\x1a\n")
+
+    def test_social_names_appear_in_the_plain_text_version(self) -> None:
+        """Where there is no image to speak for itself, the name has to be spelled out."""
+        text = render_text(BODY, _brand(social_links={"facebook": "https://facebook.com/khotels"}))
+        assert "Facebook: https://facebook.com/khotels" in text
 
     def test_unknown_platforms_are_dropped_at_normalisation(self) -> None:
         """The label set is closed; an unlabelled URL would print as a bare link."""
