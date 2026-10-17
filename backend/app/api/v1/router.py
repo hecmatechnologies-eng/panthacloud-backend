@@ -16,6 +16,7 @@ from app.api.v1.endpoints import (
     memberships,
     model_settings,
     organizations,
+    overview,
     projects,
     public_chat,
     public_widget,
@@ -49,6 +50,7 @@ api_v1_router.include_router(assistant.router)
 api_v1_router.include_router(conversations.router)
 api_v1_router.include_router(channels.router)
 api_v1_router.include_router(branding.router)
+api_v1_router.include_router(overview.router)
 api_v1_router.include_router(github_app.router)
 # The two callbacks live here as well as at the application root. GitHub's redirect URI is
 # fixed by the GitHub App's settings and cannot be version-prefixed, so main.py mounts them

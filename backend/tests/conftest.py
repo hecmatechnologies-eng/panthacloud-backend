@@ -17,10 +17,23 @@ os.environ["APP_ENV"] = "test"
 # other run's users mid-test — surfacing as baffling 401s from a token that had worked one request
 # earlier. Both variables are set so the file is used whether or not the developer's `.env` names a
 # SQLite database of its own (config.effective_database_url prefers DATABASE_URL when it is SQLite).
+# SQLite by default: fast, hermetic, and it needs nothing running. But it is not the engine
+# production uses, and the gap is not theoretical. Writing `date_trunc` in a query passed on SQLite
+# and failed on Postgres, because SQLite has no such function - and the only place that could have
+# been caught was the database we never test against.
+#
+# So: `TEST_DATABASE_URL=postgres://... pytest` runs the same suite on the real engine. Slow enough
+# to be worth not doing on every save, fast enough to do before a release. The rule that follows is
+# that any endpoint writing raw SQL needs to pass on both, because that is the only way a dialect
+# difference can surface before a tenant hits it.
 _TEST_DB_PATH = Path(tempfile.gettempdir()) / f"fussion-test-{os.getpid()}.db"
-_TEST_DB_URL = f"sqlite+aiosqlite:///{_TEST_DB_PATH.as_posix()}"
+_SQLITE_URL = f"sqlite+aiosqlite:///{_TEST_DB_PATH.as_posix()}"
+_POSTGRES_URL = os.environ.get("TEST_DATABASE_URL")
+_ENGINE = "postgres" if _POSTGRES_URL else "sqlite"
+
+_TEST_DB_URL = _POSTGRES_URL or _SQLITE_URL
 os.environ["DATABASE_URL"] = _TEST_DB_URL
-os.environ["FALLBACK_SQLITE_URL"] = _TEST_DB_URL
+os.environ["FALLBACK_SQLITE_URL"] = _SQLITE_URL
 
 # Supply the test run's own keys, so no test reads or writes a developer's generated
 # .dev-secrets.json (app/core/dev_secrets.py). Fresh per run, and never a value from source.
