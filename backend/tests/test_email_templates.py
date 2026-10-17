@@ -140,15 +140,39 @@ class TestLayout:
 
 
 class TestLogoFallback:
-    def test_without_a_logo_the_badge_is_drawn_as_text(self) -> None:
-        """No request to a third party, nothing to be blocked, and it still looks deliberate."""
+    def test_the_badge_is_an_image_so_it_cannot_lead_the_snippet(self) -> None:
+        """The defect this replaced, found in a real inbox.
+
+        Gmail builds its list-view preview from the first *text* in the document. The badge was a
+        styled `<div>`, so the preview read ``KH K Hotels Entebbe · Uganda Yes, there is a Family
+        Suite...`` - two letters standing in for the answer. An `<img>` contributes only its `alt`,
+        so `alt=""` keeps it out entirely, and a client that refuses the image leaves a blank space
+        rather than printing "KH" in the message list.
+        """
         html = render_html(BODY, _brand())
-        assert "<img" not in html
-        assert ">KH<" in html
+        assert 'alt=""' in html
+        assert ">KH<" not in html
+
+    def test_the_badge_makes_no_third_party_request(self) -> None:
+        """A data URI, so blocking images costs appearance and nothing else."""
+        html = render_html(BODY, _brand())
+        assert "data:image/svg+xml;base64," in html
+        assert "cdn.example" not in html
+
+    def test_the_badge_carries_the_accent_colour(self) -> None:
+        import base64 as b64
+        import re as _re
+
+        html = render_html(BODY, _brand(accent_colour="#123456"))
+        encoded = _re.search(r"data:image/svg\+xml;base64,([A-Za-z0-9+/=]+)", html)
+        assert encoded is not None
+        assert "#123456" in b64.b64decode(encoded.group(1)).decode("utf-8")
 
     def test_with_a_logo_the_image_is_used(self) -> None:
         html = render_html(BODY, _brand(logo_url="https://cdn.example/logo.png"))
         assert '<img src="https://cdn.example/logo.png"' in html
+        # A real logo is meaningful, so unlike the decorative badge it keeps its alt text.
+        assert 'alt="K Hotels"' in html
 
 
 class TestFooter:

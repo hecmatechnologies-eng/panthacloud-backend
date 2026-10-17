@@ -35,6 +35,7 @@ newlines in the body become ``<br>`` - so the only transformation is whitespace,
 survive it.
 """
 
+import base64
 import html
 import re
 from dataclasses import dataclass, field
@@ -216,6 +217,36 @@ def _contact_block(branding: Branding) -> str:
     return f'<p style="margin:0 0 12px 0;font-size:13px;line-height:20px;color:{MUTED};">{body}</p>'
 
 
+def _initials_badge(branding: Branding) -> str:
+    """The initials mark, as an inline image rather than text.
+
+    **Why an image and not styled text.** Observed in a real Gmail inbox, 2026-10-17: the list-view
+    preview read ``KH K Hotels Entebbe · Uganda Yes, there is a Family Suite...`` - Gmail builds its
+    snippet from the first *text* in the document, so a text badge becomes the summary. A guest
+    skimming their inbox saw two letters instead of the answer, and the message read like a
+    newsletter partly because of it.
+
+    An ``<img>`` contributes only its ``alt`` text, so ``alt=""`` keeps the badge out of the snippet
+    entirely. That also makes failure safe: if a client refuses the image, the worst case is an
+    empty space, never "KH" printed in the message list.
+
+    A data URI rather than a hosted file, so there is still no request to a third party. Base64
+    rather than percent-encoding because Outlook handles the former reliably.
+    """
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">'
+        f'<rect width="64" height="64" rx="6" fill="{escape(branding.accent_colour)}"/>'
+        '<text x="32" y="33" fill="#FFFFFF" font-family="Arial,Helvetica,sans-serif" '
+        f'font-size="26" font-weight="700" text-anchor="middle">{escape(branding.initials)}</text>'
+        "</svg>"
+    )
+    uri = "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("ascii")
+    return (
+        f'<img src="{uri}" alt="" width="64" height="64" '
+        f'style="display:block;border:0;width:64px;height:64px;" />'
+    )
+
+
 def _header(branding: Branding) -> str:
     if branding.logo_url:
         mark = (
@@ -223,13 +254,7 @@ def _header(branding: Branding) -> str:
             f'width="64" height="64" style="display:block;border:0;width:64px;height:64px;" />'
         )
     else:
-        # A text badge rather than an image: no request to a third party, nothing to block, and it
-        # still looks deliberate in a client that strips images.
-        mark = (
-            f'<div style="font-size:26px;font-weight:700;color:#FFFFFF;'
-            f'background-color:{escape(branding.accent_colour)};width:64px;height:64px;'
-            f'line-height:64px;text-align:center;">{escape(branding.initials)}</div>'
-        )
+        mark = _initials_badge(branding)
 
     tagline = (
         f'<p style="margin:4px 0 0 0;font-size:14px;line-height:20px;color:{MUTED};">'

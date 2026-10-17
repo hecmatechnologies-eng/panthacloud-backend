@@ -71,14 +71,19 @@ class BrandingUpdate(BaseModel):
             )
         return value
 
-    @field_validator("website", "logo_url", "contact_email")
+    @field_validator("website", "logo_url")
     @classmethod
     def _http_only(cls, value: str | None) -> str | None:
         """Reject anything that is not http(s).
 
-        These are interpolated into ``href``/``src`` attributes in the rendered mail. Escaping stops
-        them breaking out of the attribute; requiring a scheme stops a ``javascript:`` URL from
+        These two are interpolated into ``href``/``src`` attributes in the rendered mail. Escaping
+        stops them breaking out of the attribute; requiring a scheme stops a ``javascript:`` URL from
         being one click away in a guest's mail client.
+
+        ``contact_email`` is deliberately **not** in this list. It is printed as plain text, not a
+        link, and an address is not a URL - requiring ``http://`` of it made every save fail for any
+        tenant that had a contact email, which is most of them. Found by saving a real brand rather
+        than by reading the validator, which is the argument for doing exactly that.
         """
         if value is None:
             return None
@@ -87,6 +92,25 @@ class BrandingUpdate(BaseModel):
             return None
         if not candidate.lower().startswith(("http://", "https://")):
             raise ValueError("must be an http:// or https:// URL")
+        return candidate
+
+    @field_validator("contact_email")
+    @classmethod
+    def _looks_like_an_email(cls, value: str | None) -> str | None:
+        """Shape only - one ``@``, something either side, no spaces.
+
+        Deliberately looser than RFC 5322, which is famously permissive and would reject addresses
+        that work. The address is only ever printed, so there is no injection surface; requiring it
+        to *look* like an address is enough to catch a tenant pasting their website here by mistake.
+        """
+        if value is None:
+            return None
+        candidate = value.strip()
+        if not candidate:
+            return None
+        local, _, domain = candidate.partition("@")
+        if " " in candidate or not local or not domain or "@" in domain:
+            raise ValueError("must be an email address")
         return candidate
 
 
