@@ -235,3 +235,59 @@ class TestStripQuotedReply:
         """
         assert looks_like_reply("Yes\n\nOn 3 Nov, desk@example.com wrote:\n> Hello") is True
         assert looks_like_reply("Do you have a room for Friday?") is False
+
+class TestOutboundHeaders:
+    """Headers on a reply we send.
+
+    Asserted on the built payload rather than on a live message's raw source, because a missing
+    opt-out header is not an error - it is simply a lower score, and would otherwise be found only
+    in a delivery statistic weeks later.
+    """
+
+    def _payload(self, **overrides):
+        from app.channels.email.provider import build_payload
+
+        kwargs = {
+            "from_address": "reservations@ai-mwalimu.com",
+            "to_address": "guest@example.com",
+            "subject": "Re: Rooms",
+            "text": "Here are our room rates.",
+        }
+        kwargs.update(overrides)
+        return build_payload(**kwargs)
+
+    def test_a_reply_offers_a_one_click_opt_out(self) -> None:
+        """The header Gmail now requires from senders of automated mail."""
+        payload = self._payload(unsubscribe_url="https://api.example.com/u/token123")
+        headers = payload["headers"]
+        assert headers["List-Unsubscribe"] == "<https://api.example.com/u/token123>"
+        assert headers["List-Unsubscribe-Post"] == "List-Unsubscribe=One-Click"
+
+    def test_one_click_is_never_announced_without_a_url(self) -> None:
+        """Announcing one-click with no one-click URL makes clients try and fail."""
+        payload = self._payload()
+        assert "headers" not in payload
+
+    def test_threading_headers_are_both_present(self) -> None:
+        """In-Reply-To names the parent, References the chain; clients read different ones."""
+        payload = self._payload(reply_to_message_id="<abc@mail.example.com>")
+        headers = payload["headers"]
+        assert headers["In-Reply-To"] == "<abc@mail.example.com>"
+        assert headers["References"] == "<abc@mail.example.com>"
+
+    def test_threading_and_opt_out_coexist(self) -> None:
+        """The common real case: a threaded reply that also carries the opt-out."""
+        payload = self._payload(
+            reply_to_message_id="<abc@mail.example.com>",
+            unsubscribe_url="https://api.example.com/u/token123",
+        )
+        assert set(payload["headers"]) == {
+            "In-Reply-To",
+            "References",
+            "List-Unsubscribe",
+            "List-Unsubscribe-Post",
+        }
+
+    def test_the_recipient_is_a_list(self) -> None:
+        """Resend rejects a bare string here, and the failure would only show on the first send."""
+        assert self._payload()["to"] == ["guest@example.com"]

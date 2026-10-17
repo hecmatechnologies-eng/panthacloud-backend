@@ -309,19 +309,25 @@ def _html_to_text(html: str) -> str:
     return re.sub(r"[ \t]{2,}", " ", text)
 
 
-async def send_reply(
+def build_payload(
     *,
     from_address: str,
     to_address: str,
     subject: str,
     text: str,
     reply_to_message_id: str | None = None,
-) -> str | None:
-    """Send one reply. Returns the provider's message id.
+    unsubscribe_url: str | None = None,
+) -> dict[str, Any]:
+    """The JSON body for one reply, separated from the HTTP call so the headers are testable.
 
-    ``reply_to_message_id`` is what keeps the exchange in one thread, which is what a guest expects
-    when they press Reply - and it is also what lets us recognise their next reply as a continuation
-    rather than a fresh conversation.
+    The opt-out headers are the reason this is a function. They are the only thing standing between
+    an automated guest assistant and being indistinguishable from spam, and the only way they fail
+    is silently - a missing header is not an error, it is just a lower score. Building them here
+    means they can be asserted directly instead of by reading a live email's raw source.
+
+    HTTPS only, no ``mailto:`` fallback. RFC 2369 allows either, but a mailto only works if a human
+    reads that mailbox, and nothing reads ``unsubscribe@`` on a single-tenant platform. Offering a
+    route that goes nowhere is worse than offering the one that works.
     """
     payload: dict[str, Any] = {
         "from": from_address,
@@ -329,8 +335,49 @@ async def send_reply(
         "subject": subject,
         "text": text,
     }
+    headers: dict[str, str] = {}
     if reply_to_message_id:
-        payload["headers"] = {"In-Reply-To": reply_to_message_id, "References": reply_to_message_id}
+        # Both are required for threading, not one or the other: In-Reply-To names the parent,
+        # References the whole chain. Clients differ in which they read.
+        headers["In-Reply-To"] = reply_to_message_id
+        headers["References"] = reply_to_message_id
+    if unsubscribe_url:
+        headers["List-Unsubscribe"] = f"<{unsubscribe_url}>"
+        # Only meaningful alongside an HTTPS URL, which is why it is not set independently: announcing
+        # one-click with nothing to click invites clients to try and fail.
+        headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+    if headers:
+        payload["headers"] = headers
+    return payload
+
+
+async def send_reply(
+    *,
+    from_address: str,
+    to_address: str,
+    subject: str,
+    text: str,
+    reply_to_message_id: str | None = None,
+    unsubscribe_url: str | None = None,
+) -> str | None:
+    """Send one reply. Returns the provider's message id.
+
+    ``reply_to_message_id`` is what keeps the exchange in one thread, which is what a guest expects
+    when they press Reply - and it is also what lets us recognise their next reply as a continuation
+    rather than a fresh conversation.
+
+    ``unsubscribe_url`` produces the RFC 2369/8058 opt-out headers. These are not a filter trick:
+    they are the only honest way to offer a guest who does not want this mail a way to stop it, and
+    Gmail now requires one from senders of automated mail.
+    """
+    payload = build_payload(
+        from_address=from_address,
+        to_address=to_address,
+        subject=subject,
+        text=text,
+        reply_to_message_id=reply_to_message_id,
+        unsubscribe_url=unsubscribe_url,
+    )
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         response = await client.post(f"{RESEND_API_BASE}/emails", headers=_headers(), json=payload)

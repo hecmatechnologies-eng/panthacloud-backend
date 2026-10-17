@@ -45,8 +45,11 @@ from app.channels.email.provider import (
     send_reply,
     verify_webhook,
 )
+from app.channels.email.unsubscribe import apply_one_click, ensure_token
+from app.channels.email.unsubscribe import unsubscribe_url as unsubscribe_url_for
 from app.core.config import settings
 from app.core.database import get_db
+from app.models.conversation import VisitorSession
 from app.runtime.chat import ChatReply, handle_channel_message
 from app.runtime.resolver import TenantResolutionError, resolve_channel_tenant
 
@@ -60,7 +63,10 @@ MAX_BODY_BYTES = 1 * 1024 * 1024
 
 
 async def _send_reply_after_delay(
-    email: InboundEmail, reply: ChatReply, delay_seconds: int
+    email: InboundEmail,
+    reply: ChatReply,
+    delay_seconds: int,
+    unsub_url: str | None,
 ) -> None:
     """Send the reply once the provider has already been told everything went fine.
 
@@ -85,6 +91,7 @@ async def _send_reply_after_delay(
             subject=inbound_rules.reply_subject(email.subject),
             text=reply.reply,
             reply_to_message_id=email.message_id,
+            unsubscribe_url=unsub_url,
         )
     except (EmailProviderError, httpx.HTTPError):
         # Broader than just the provider's own error, because a transport failure is exactly as
@@ -102,6 +109,34 @@ async def _send_reply_after_delay(
             reply.conversation_id,
             sent_id,
         )
+
+
+@router.post(
+    "/email/unsubscribe/{token}",
+    summary="One-click unsubscribe (RFC 8058)",
+    response_class=Response,
+)
+async def email_one_click_unsubscribe(
+    token: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> Response:
+    """Stop automated email to one guest, at the link in their mail client.
+
+    **Deliberately unauthenticated.** RFC 8058 requires it: the request is made by the guest's mail
+    client following a link, and that client has no session, cookie or key with us. Requiring any
+    credential would mean the header never works, which is the same as not offering one.
+
+    **Deliberately always 200.** A 404 would be an oracle for "which tokens are real", and a real
+    token is a real customer's address. Returning success for unknown tokens costs a retry on a
+    click that did nothing, and reveals nothing.
+    """
+    try:
+        await apply_one_click(db, token)
+    except SQLAlchemyError:
+        # Even here the answer is 200. A database fault must not become a 5xx that the client
+        # retries, and the guest's stated wish should be recorded even if we struggle to confirm it.
+        logger.exception("email: one-click unsubscribe failed to apply")
+    return Response(status_code=status.HTTP_200_OK)
 
 
 @router.post(
@@ -199,6 +234,36 @@ async def email_webhook(
         logger.info("email: %s already answered; not replying again", email.email_id)
         return Response(status_code=status.HTTP_200_OK)
 
+    # Resolve the opt-out state and mint the unsubscribe token here, in the request, rather than in
+    # the background task: that task runs after this session is closed, and both answers are needed
+    # as plain values rather than as database reads.
+    unsub_url: str | None = None
+    try:
+        guest_session = await db.get(VisitorSession, reply.session_id)
+    except SQLAlchemyError:
+        await db.rollback()
+        guest_session = None
+
+    if guest_session is not None and guest_session.unsubscribed_at is not None:
+        # The turn is kept and stays visible to staff - it is the hotel's record of what was asked -
+        # but no automated mail goes out. Not auto-resubscribed on the strength of their writing in:
+        # someone may have declined a list while still expecting an answer to the message they sent.
+        logger.info(
+            "email: guest %s unsubscribed; answer recorded but not sent",
+            guest_session.external_id,
+        )
+        return Response(status_code=status.HTTP_200_OK)
+
+    if guest_session is not None:
+        try:
+            unsub_url = unsubscribe_url_for(await ensure_token(db, guest_session))
+            await db.commit()
+        except SQLAlchemyError:
+            # A reply without the opt-out link is still worth sending; losing the token is not a
+            # reason to lose the answer.
+            await db.rollback()
+            logger.exception("email: could not record an unsubscribe token")
+
     # Hand the send to a background task so the wait cannot hold the webhook open. See
     # `_send_reply_after_delay` for why that ordering is the only one that works.
     background.add_task(
@@ -206,6 +271,7 @@ async def email_webhook(
         email,
         reply,
         settings.EMAIL_REPLY_DELAY_SECONDS,
+        unsub_url,
     )
 
     return Response(status_code=status.HTTP_200_OK)

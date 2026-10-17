@@ -168,6 +168,56 @@ Two bounds, both in `app/core/config.py`:
 
 A single ordinary question still produces exactly one search, so the common case is unchanged.
 
+## One-click unsubscribe
+
+VERIFIED 2026-10-17 end to end through the live provider: a token minted on the first reply, the
+link honoured by a real unauthenticated POST, and the next email answered-but-not-sent.
+
+Every reply carries `List-Unsubscribe` and `List-Unsubscribe-Post: List-Unsubscribe=One-Click`.
+
+This is not a filter trick, and it is worth separating from the deliverability work above because
+the two fail for opposite reasons. A spam folder placement is Gmail's judgement about a shared
+sending pool and cannot be configured away. A missing opt-out header is simply an omission, and it
+is one Gmail now requires from senders of automated mail.
+
+The awkward constraint is RFC 8058: the endpoint **must** work without authentication, because the
+request comes from the guest's mail client following a link, and that client has no session with us.
+Two consequences, both deliberate:
+
+- The token is 32 bytes from `secrets.token_urlsafe`, never derived from a row id or an address. On
+  an unauthenticated endpoint the token is the only thing standing between "a guest asked to stop"
+  and "anyone can stop anyone".
+- Every response is 200, including for a token that matches nothing. A 404 would be an oracle telling
+  an attacker which tokens are real customers, and a real token is a real guest address.
+
+What opting out does, and does not:
+
+- Stops automated sends to that guest.
+- **Keeps** the transcript. It is the hotel's record of what was asked; suppressing sends does not
+  require erasing the history that produced them.
+- **Does not** auto-resubscribe someone who writes in again. They may have declined a list while
+  still expecting an answer to the message they sent, and reversing a stated wish on the strength of
+  one email is worse than making staff aware. Inbound is still recorded and still visible to staff.
+- **Does not** cross channels. Withdrawing consent for email is a decision about email; applying it
+  silently to a WhatsApp session would be a second decision taken on the guest's behalf.
+
+HTTPS only, no `mailto:` fallback, because a mailto only works if a human reads that mailbox and
+nothing reads `unsubscribe@` on a single-tenant platform. Offering a route that goes nowhere is
+worse than offering the one that works.
+
+## What is left on deliverability
+
+The opt-out header is in. It is not a fix for junk placement, and it would be dishonest to present
+it as one. What governs that is the shared Amazon SES pool the replies leave from — see the SES
+`Message-ID` evidence above — and no header changes it.
+
+Two things would, neither of which is code:
+
+- **A dedicated IP.** Isolates us from the pool's reputation. A new dedicated IP also starts at
+  zero, so it needs warming before it beats the pool. Costs money.
+- **Time and volume to guests who wrote in.** This product already has the shape that helps most —
+  a reply to someone who just emailed you — but it only pays off at real volume.
+
 ## Not built yet
 
 - Attachments and HTML-only rendering (`_html_to_text` is a deliberate fallback, not a parser)
@@ -175,3 +225,5 @@ A single ordinary question still produces exactly one search, so the common case
 - Bounce and complaint handling — a bounce should mark the address unreachable
 - A guard on creating a knowledge base with the default `embedding_model`, so the silent failure in
   the section above cannot recur
+- Staff-facing visibility of who has unsubscribed; the flag is recorded but not yet surfaced in the
+  inbox UI, so it only shows in logs and the database

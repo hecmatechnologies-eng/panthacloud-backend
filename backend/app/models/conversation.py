@@ -128,6 +128,23 @@ class VisitorSession(BaseModel):
         index=True,
     )
 
+    # --- Email opt-out (RFC 8058 one-click) -------------------------------------------------
+    #
+    # Only email populates these. A reply goes to an address that never asked to hear from us, and
+    # Gmail requires an automated sender to offer a one-click opt-out. Retaining a transcript is not
+    # affected: this suppresses sends, it does not erase the hotel's record of what was asked.
+
+    #: When the guest opted out of automated mail, or NULL. Retention only.
+    unsubscribed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    #: Opaque random value the mail client POSTs to unsubscribe. Random rather than derived from
+    #: the row id or the address, because the endpoint is unauthenticated by specification - RFC 8058
+    #: requires the request to work without credentials, since the sending client has no session
+    #: with us. Populated lazily, only when an email reply actually needs a link.
+    unsubscribe_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     integration: Mapped["WebsiteIntegration | None"] = relationship(
         "WebsiteIntegration",
         back_populates="visitor_sessions",
