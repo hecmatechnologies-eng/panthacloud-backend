@@ -5,6 +5,7 @@ from app.api.v1.endpoints import (
     allowed_origins,
     assistant,
     auth,
+    branding,
     channels,
     conversations,
     discovery,
@@ -47,6 +48,7 @@ api_v1_router.include_router(assistant.router)
 # two endpoints answer questions about the same conversations from opposite ends.
 api_v1_router.include_router(conversations.router)
 api_v1_router.include_router(channels.router)
+api_v1_router.include_router(branding.router)
 api_v1_router.include_router(github_app.router)
 # The two callbacks live here as well as at the application root. GitHub's redirect URI is
 # fixed by the GitHub App's settings and cannot be version-prefixed, so main.py mounts them

@@ -315,6 +315,7 @@ def build_payload(
     to_address: str,
     subject: str,
     text: str,
+    html: str | None = None,
     reply_to_message_id: str | None = None,
     unsubscribe_url: str | None = None,
 ) -> dict[str, Any]:
@@ -328,6 +329,11 @@ def build_payload(
     HTTPS only, no ``mailto:`` fallback. RFC 2369 allows either, but a mailto only works if a human
     reads that mailbox, and nothing reads ``unsubscribe@`` on a single-tenant platform. Offering a
     route that goes nowhere is worse than offering the one that works.
+
+    ``html`` is an addition and never a replacement: ``text`` is always present. A client with images
+    blocked, a screen reader, or a decade-old phone reads the text version, and some filters score
+    plain text more favourably. ``html`` is omitted entirely when empty, so an unbranded project
+    sends no empty HTML part.
     """
     payload: dict[str, Any] = {
         "from": from_address,
@@ -335,6 +341,8 @@ def build_payload(
         "subject": subject,
         "text": text,
     }
+    if html:
+        payload["html"] = html
     headers: dict[str, str] = {}
     if reply_to_message_id:
         # Both are required for threading, not one or the other: In-Reply-To names the parent,
@@ -357,6 +365,7 @@ async def send_reply(
     to_address: str,
     subject: str,
     text: str,
+    html: str | None = None,
     reply_to_message_id: str | None = None,
     unsubscribe_url: str | None = None,
 ) -> str | None:
@@ -375,6 +384,7 @@ async def send_reply(
         to_address=to_address,
         subject=subject,
         text=text,
+        html=html,
         reply_to_message_id=reply_to_message_id,
         unsubscribe_url=unsubscribe_url,
     )

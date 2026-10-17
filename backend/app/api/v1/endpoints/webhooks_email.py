@@ -32,6 +32,7 @@ from typing import Annotated, Any
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response, status
 from fastapi.responses import PlainTextResponse
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,11 +46,18 @@ from app.channels.email.provider import (
     send_reply,
     verify_webhook,
 )
+from app.channels.email.templates import (
+    Branding,
+    branding_from_row,
+    render_html,
+    render_text,
+)
 from app.channels.email.unsubscribe import apply_one_click, ensure_token
 from app.channels.email.unsubscribe import unsubscribe_url as unsubscribe_url_for
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.conversation import VisitorSession
+from app.models.project_branding import ProjectBranding
 from app.runtime.chat import ChatReply, handle_channel_message
 from app.runtime.resolver import TenantResolutionError, resolve_channel_tenant
 
@@ -67,6 +75,7 @@ async def _send_reply_after_delay(
     reply: ChatReply,
     delay_seconds: int,
     unsub_url: str | None,
+    branding: Branding | None,
 ) -> None:
     """Send the reply once the provider has already been told everything went fine.
 
@@ -89,7 +98,8 @@ async def _send_reply_after_delay(
             from_address=email.to_address,
             to_address=email.from_address,
             subject=inbound_rules.reply_subject(email.subject),
-            text=reply.reply,
+            text=render_text(reply.reply, branding),
+            html=render_html(reply.reply, branding),
             reply_to_message_id=email.message_id,
             unsubscribe_url=unsub_url,
         )
@@ -264,6 +274,20 @@ async def email_webhook(
             await db.rollback()
             logger.exception("email: could not record an unsubscribe token")
 
+    # Branding is resolved in the request, not the background task, for the same reason the token
+    # is: the task runs after this session closes. A failure here costs presentation, not the
+    # answer, so it degrades to plain text rather than dropping the reply.
+    branding: Branding | None = None
+    try:
+        branding = branding_from_row(
+            await db.scalar(
+                select(ProjectBranding).where(ProjectBranding.project_id == ctx.project_id)
+            )
+        )
+    except SQLAlchemyError:
+        await db.rollback()
+        logger.exception("email: could not load branding; sending plain text")
+
     # Hand the send to a background task so the wait cannot hold the webhook open. See
     # `_send_reply_after_delay` for why that ordering is the only one that works.
     background.add_task(
@@ -272,6 +296,7 @@ async def email_webhook(
         reply,
         settings.EMAIL_REPLY_DELAY_SECONDS,
         unsub_url,
+        branding,
     )
 
     return Response(status_code=status.HTTP_200_OK)

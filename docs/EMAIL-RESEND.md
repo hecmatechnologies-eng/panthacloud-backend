@@ -168,6 +168,82 @@ Two bounds, both in `app/core/config.py`:
 
 A single ordinary question still produces exactly one search, so the common case is unchanged.
 
+## Result, observed in a real inbox
+
+VERIFIED 2026-10-17, from the recipient's own Gmail — screenshot, not inference.
+
+With hotel content, `EMAIL_REPLY_DELAY_SECONDS`, the one-click opt-out header and the branded template
+all in place at once, a reply to a guest's enquiry:
+
+- arrived in the **Inbox**, not Junk and not Promotions
+- was **threaded** into the guest's existing conversation, so `In-Reply-To`/`References` are correct
+- rendered the branding correctly through Gmail's sanitiser, which is the part a local preview cannot
+  prove
+- took **under a minute** end to end, with the delay applied
+- caused Gmail to list the sender under *Manage subscriptions*, which is the `List-Unsubscribe`
+  header doing its job
+
+This is one message to one recipient on a one-day-old domain. It is evidence that the machinery is
+correct, not a prediction that every message will land there. Two earlier attempts from the same setup
+went to Junk, which is why the progression above is written as a sequence rather than a conclusion.
+
+The useful negative finding: **branding and the opt-out header did not, together, push this message
+into Promotions.** That was a real worry when both were added — a logo, social links and an
+unsubscribe line are the visual signature of a newsletter, and Gmail reads one-click opt-out as a
+bulk-sender marker. It did not happen here. Whether that holds at volume is untested.
+
+## Branded mail
+
+VERIFIED 2026-10-17: a real reply sent through the provider carried both parts — a 3,310-character
+HTML body containing the hotel name, initials badge, postal address, telephone and social links, and
+the plain-text twin with the same signature block.
+
+Every reply is sent with **both** `text` and `html`. Never one or the other. Text-only scores
+marginally better with some filters, and it is what a guest with images blocked, a screen reader, or
+a decade-old phone actually reads. HTML is an addition, never a replacement. An unbranded project
+sends text alone — `render_html` returns `""` rather than a bare white page, which reads as a broken
+template.
+
+**This does not change spam placement, and the docstring says so too.** Whether a message reaches
+the inbox is decided by the sending pool's reputation. What the message looks like is a separate and
+much smaller input. Branding was built because a hotel should send mail that looks like it came from
+a hotel, not because it would clear a junk folder — anyone reaching for a template expecting that
+will be disappointed.
+
+**Layout is written for Outlook, not for a browser.** Its Word rendering engine ignores `<style>`
+blocks and handles padding inconsistently, so:
+
+- every style is an inline attribute; there is no `<style>` block at all
+- layout is `<table>` with `cellpadding`/`cellspacing`/`border` attributes, which are presentational
+  and still honoured everywhere
+- the outer width is a fixed `560px` with a `max-width`, never a percentage, which would render
+  anywhere from 300px to 1600px depending on the client
+- no external CSS, no web fonts, no `<script>`, no SVG — the message must look right when all of
+  them are stripped
+
+**Escaping is the security boundary.** Two different parties write into the same document: the model
+produces the body, the tenant supplies the name, tagline, address and footer note. Both are escaped
+independently with `quote=True`, so a tagline containing a double quote cannot close an attribute
+early and neither can inject a tag. The single permitted transformation is newline to `<br>`, and it
+is applied *after* escaping so it cannot become a general escape hatch. URLs are additionally
+required to be `http(s)`, which is what stops a `javascript:` URL sitting one click away in a guest's
+mail client.
+
+**No logo is a supported state.** Without `logo_url` the header renders a two-letter badge as text —
+no request to a third party, nothing for a client to block, and it still looks deliberate. `K Hotels`
+renders as `KH`.
+
+**One row per project, and absence is normal.** A tenant who has not branded themselves still gets
+replies, unstyled. Hardcoding a default hotel would put one tenant's identity in platform code where
+the next tenant would inherit it. The API is `GET`/`PUT`/`DELETE` on
+`/organizations/{org_id}/projects/{project_id}/branding`; `PUT` replaces the whole object rather
+than patching, because a partial update cannot express "the guest removed the phone number" —
+omitting a field would be indistinguishable from forgetting it.
+
+`footer_note` is not decoration. Unsolicited-looking mail scores worse than mail that plainly says
+"you wrote to us, here is our address", and several jurisdictions require unsolicited commercial
+mail to carry a postal address and a way to opt out.
+
 ## One-click unsubscribe
 
 VERIFIED 2026-10-17 end to end through the live provider: a token minted on the first reply, the

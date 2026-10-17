@@ -5,7 +5,6 @@ from app.models.assistant import Assistant, AssistantPosition
 from app.models.audit_event import AuditEvent
 from app.models.base import BaseModel
 from app.models.channel_registration import ChannelRegistration
-from app.models.project_channel import ProjectChannel
 from app.models.conversation import Conversation, Message, MessageRole, VisitorSession
 from app.models.discovery import DiscoveryRun, DiscoveryStatus
 from app.models.github_installation import GitHubInstallation
@@ -21,6 +20,8 @@ from app.models.model_usage import ModelUsage
 from app.models.organization import Organization
 from app.models.organization_model_settings import OrganizationModelSettings
 from app.models.project import Project
+from app.models.project_branding import ProjectBranding
+from app.models.project_channel import ProjectChannel
 from app.models.repository import Repository, RepositoryProvider, RepositoryStatus
 from app.models.repository_snapshot import RepositorySnapshot, SnapshotStatus
 from app.models.user import User
@@ -43,7 +44,6 @@ __all__ = [
     "AuditEvent",
     "BaseModel",
     "ChannelRegistration",
-    "ProjectChannel",
     "Conversation",
     "DiscoveryRun",
     "DiscoveryStatus",
@@ -65,6 +65,8 @@ __all__ = [
     "Organization",
     "OrganizationModelSettings",
     "Project",
+    "ProjectBranding",
+    "ProjectChannel",
     "Repository",
     "RepositoryProvider",
     "RepositorySnapshot",
